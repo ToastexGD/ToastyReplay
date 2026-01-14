@@ -80,8 +80,7 @@ Your feedback drives development! Reach out through:
 
 ##  Version Information
 
-**Current Version:** 1.0.0-beta  
-**Geode Version:** 4.10.0  
+**Current Version:** v1.0.0-beta.1
 **Update Schedule:** Bi-monthly releases  
 
 ---
