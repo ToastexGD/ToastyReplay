@@ -12,7 +12,7 @@ Experience frame-perfect recording and playback with the most precise replay sys
 ### 🎥 Advanced Recording System
 - **Frame-perfect input capture** - Every click, hold, and release recorded with 100% Accuracy!
 - **Automatic session recording** - Your runs are captured seamlessly in the background.
-- **Lightweight performance** - Minimal impact on gameplay, designed for a seameless experience.
+- **Lightweight performance** - Minimal impact on gameplay, designed for a seamless experience.
 
 ### ▶️ Replay Playback
 - **Flawless reproduction** - Watch your runs exactly as you played them.
@@ -77,4 +77,4 @@ Your feedback drives development! Reach out through:
 ---
 
 **Thank you for using ToastyReplay!** 🍞✨
-*Yes, some of this was generated using AI. No im not a skid.*
+*Yes, some of this was generated using AI. No, I'm not a skid.*
