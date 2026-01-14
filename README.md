@@ -14,7 +14,7 @@
 
 Experience frame-perfect recording and playback with the most precise replay system available for Geometry Dash.
 
-*Direct baseport and updated system from XDBot and ybot functionalities.*
+*Inspired by XDBot and y/zbot functionalities.*
 ---
 
 ##  Key Features
