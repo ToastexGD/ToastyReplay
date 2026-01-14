@@ -97,11 +97,11 @@ class $modify(PlayLayer) {
         // Setup the new recording from the start
         if (mgr->state == RECORD && mgr->currentReplay) {
             mgr->currentReplay->levelInfo.id = m_level->m_levelID;
-            mgr->currentReplay->addInput(m_gameState.m_currentProgress, as<int>(PlayerButton::Jump), false, false);
+            mgr->currentReplay->addInput(m_gameState.m_currentProgress, static_cast<int>(PlayerButton::Jump), false, false);
             m_player1->m_isDashing = false;
 
             if (m_gameState.m_isDualMode && m_levelSettings->m_twoPlayerMode) {
-                mgr->currentReplay->addInput(m_gameState.m_currentProgress, as<int>(PlayerButton::Jump), true, false);
+                mgr->currentReplay->addInput(m_gameState.m_currentProgress, static_cast<int>(PlayerButton::Jump), false, false);
                 m_player2->m_isDashing = false;
             }
         }
