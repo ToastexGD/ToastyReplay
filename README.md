@@ -60,11 +60,9 @@ This means im super busy, Yes I don't have time to update the about.me every day
 ##  Planned Features
 
 Coming in future updates:
-- 💾 Cloud replay storage and sharing
-- 📊 Replay analysis tools and statistics
-- 🎞️ Multi-replay comparison view
-- 🔧 Advanced playback controls (speed, frame-stepping)
-- 🌐 Online replay leaderboards
+-  Cloud replay storage and sharing
+-  Replay analysis tools and statistics
+-  Online replay leaderboards
 
 ---
 
