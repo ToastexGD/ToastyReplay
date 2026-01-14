@@ -1,4 +1,4 @@
-#   ![Logo](./assets/Screenshot 2026-01-14 094252.png) ToastyReplay
+# ToastyReplay
 
 **Geometry Dash's Most Accurate Replay Bot**
 
