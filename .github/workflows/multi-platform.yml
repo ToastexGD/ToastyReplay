@@ -10,12 +10,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      
+      - name: Remove old bindings submodule
+        run: |
+          git rm -rf bindings
+          git submodule add https://github.com/geode-sdk/bindings bindings
+          
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
           combine: true
+          
       - uses: actions/upload-artifact@v4
         with:
           name: Build Output
