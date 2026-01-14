@@ -1,5 +1,11 @@
 # ToastyReplay
 
+<p align="center">
+  <img src="./logo.png" width="200"/>
+</p>
+
+---
+
 **Geometry Dash's Most Accurate Replay Bot**
 
 Experience frame-perfect recording and playback with the most precise replay system available for Geometry Dash.
