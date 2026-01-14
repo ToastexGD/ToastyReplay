@@ -87,4 +87,3 @@ Your feedback drives development! Reach out through:
 ---
 
 **Thank you for using ToastyReplay!** 🍞✨
-*Yes, some of this was generated using AI. No, I'm not a skid.*
