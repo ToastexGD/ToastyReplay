@@ -78,7 +78,7 @@ Your feedback drives development! Reach out through:
 
 ##  Version Information
 
-**Current Version:** v1.0.0-beta.1
+**Current Version:** v1.0.0-beta
 **Update Schedule:** Bi-monthly releases  
 
 ---
