@@ -584,6 +584,9 @@ void GUI::renderer() {
         mgr->handleKeybinds();
     }
 
+    // Always render watermark in PlayLayer regardless of visible state
+    renderWatermarkOverlay();
+
     if (!visible) {
         if (lastVisible && mgr) {
             mgr->refreshReplays();
@@ -591,6 +594,8 @@ void GUI::renderer() {
         lastVisible = false;
         return;
     }
+
+    log::info("GUI::renderer() - visible is true, rendering panels");
 
     if (!lastVisible && mgr) {
         mgr->refreshReplays();
@@ -720,14 +725,13 @@ void GUI::setup() {
     }
 }
 
-class $modify(LoadingLayer) {
-    bool init(bool fromReload) {
-        ImGuiCocos::get().setup([] {
-            GUI::get()->setup();
-        }).draw([] {
-            GUI::get()->renderer();
-        });
-
-        return LoadingLayer::init(fromReload);
-    }
-};
+$on_mod(Loaded) {
+    log::info("ToastyReplay: Setting up ImGuiCocos from $on_mod(Loaded)");
+    
+    ImGuiCocos::get().setup([] {
+        log::info("ToastyReplay: ImGuiCocos setup callback running");
+        GUI::get()->setup();
+    }).draw([] {
+        GUI::get()->renderer();
+    });
+}
