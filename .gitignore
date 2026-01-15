@@ -72,7 +72,7 @@ build/
 .zenflow/
 
 # Dependencies (if vendored)
-bindings/
+# bindings/
 
 # OS junk
 Thumbs.db
