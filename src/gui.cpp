@@ -305,17 +305,27 @@ void RenderHackPanel() {
         
         ImGui::Checkbox("Seed", &mgr->seedEnabled);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Use a fixed seed for consistent RNG (enables Safe Mode)");
+            ImGui::SetTooltip("Use a fixed seed for consistent RNG");
         }
         
         if (mgr->seedEnabled) {
             ImGui::Indent();
             
-            static int tempSeed = static_cast<int>(mgr->seedValue);
+            static char seedBuffer[32] = "1";
+            static bool seedBufferInit = false;
+            if (!seedBufferInit) {
+                snprintf(seedBuffer, sizeof(seedBuffer), "%u", mgr->seedValue);
+                seedBufferInit = true;
+            }
+            
             ImGui::Text("Seed Value:");
-            if (ImGui::InputInt("##seedValue", &tempSeed)) {
-                if (tempSeed < 1) tempSeed = 1;
-                mgr->seedValue = static_cast<unsigned int>(tempSeed);
+            if (ImGui::InputText("##seedValue", seedBuffer, sizeof(seedBuffer), ImGuiInputTextFlags_CharsDecimal)) {
+                try {
+                    unsigned long long ull = std::stoull(seedBuffer);
+                    mgr->seedValue = static_cast<unsigned int>(ull);
+                } catch (...) {
+                    mgr->seedValue = 1;
+                }
             }
             
             ImGui::Unindent();
@@ -329,71 +339,6 @@ void RenderHackPanel() {
     ImGui::End();
 }
 
-void RenderKeybindsPanel() {
-    GUI* gui = GUI::get();
-    ToastyReplay* mgr = ToastyReplay::get();
-    
-    ImGui::SetNextWindowSize(gui->keybindsPanelSize, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(1060, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(250, 300), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::Begin("keybinds", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-    
-    // Store the current window size
-    gui->keybindsPanelSize = ImGui::GetWindowSize();
-    
-    // Cap font size at 1.3 to prevent text overflow
-    float cappedScale = gui->fontSize;
-    if (cappedScale > 1.3f) cappedScale = 1.3f;
-    ImGui::SetWindowFontScale(cappedScale);
-    
-    if (gui->s_font) ImGui::PushFont(gui->s_font);
-
-    if (ImGui::BeginChild("KeybindsContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.17f, 1.0f), "Keybinds");
-        ImGui::Separator();
-        ImGui::NewLine();
-        
-        // Helper lambda to render keybind button
-        auto renderKeybindButton = [&](const char* label, int& keybind, const char* id) {
-            ImGui::Text("%s", label);
-            ImGui::SameLine(ImGui::GetWindowWidth() - 80);
-            
-            std::string buttonText = keybind == 0 ? "None" : std::string(1, (char)keybind);
-            if (gui->isCapturingKeybind && gui->capturingKeybind == id) {
-                buttonText = "...";
-            }
-            
-            ImGui::PushID(id);
-            if (ImGui::Button(buttonText.c_str(), ImVec2(60, 0))) {
-                gui->isCapturingKeybind = true;
-                gui->capturingKeybind = id;
-            }
-            ImGui::PopID();
-            
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Click to set keybind");
-            }
-        };
-        
-        renderKeybindButton("Frame Advance", mgr->keybind_frameAdvance, "kb_frameadvance");
-        renderKeybindButton("Speedhack Audio", mgr->keybind_speedhackAudio, "kb_speedhackaudio");
-        renderKeybindButton("Safe Mode", mgr->keybind_safeMode, "kb_safemode");
-        renderKeybindButton("Trajectory", mgr->keybind_trajectory, "kb_trajectory");
-        renderKeybindButton("Noclip", mgr->keybind_noclip, "kb_noclip");
-        renderKeybindButton("Seed", mgr->keybind_seed, "kb_seed");
-        
-        ImGui::NewLine();
-        ImGui::Separator();
-        ImGui::TextWrapped("Click a button and press any key to bind it. Press ESC to clear.");
-        
-        ImGui::EndChild();
-    }
-    
-    if (gui->s_font) ImGui::PopFont();
-    
-    ImGui::End();
-}
-
 void RenderThemePanel() {
     GUI* gui = GUI::get();
     
@@ -402,10 +347,8 @@ void RenderThemePanel() {
     ImGui::SetNextWindowSizeConstraints(ImVec2(220, 250), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("theme", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
     
-    // Store the current window size
     gui->themePanelSize = ImGui::GetWindowSize();
     
-    // Cap font size at 1.3 to prevent text overflow in this compact window
     float cappedScale = gui->fontSize;
     if (cappedScale > 1.3f) cappedScale = 1.3f;
     ImGui::SetWindowFontScale(cappedScale);
@@ -454,13 +397,11 @@ void RenderThemePanel() {
         gui->rgbSpeed = 1.0f;
         gui->themeResetRequested = true;
         
-        // Reset panel sizes too
         gui->mainPanelSize = ImVec2(350, 525);
         gui->infoPanelSize = ImVec2(200, 320);
         gui->hackPanelSize = ImVec2(200, 380);
         gui->themePanelSize = ImVec2(200, 320);
         
-        // Immediately apply the reset
         ImGuiStyle* style = &ImGui::GetStyle();
         style->Colors[ImGuiCol_Text] = gui->textColor;
         style->Colors[ImGuiCol_WindowBg] = ImVec4(gui->backgroundColor.x, gui->backgroundColor.y, gui->backgroundColor.z, gui->menuOpacity);
@@ -491,7 +432,7 @@ void GUI::renderMainPanel() {
     if (l_font) ImGui::PushFont(l_font);
     ImGui::TextColored(ImVec4(1.f, 0.78f, 0.17f, 1.f), "ToastyReplay");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.f), "v" MOD_VERSION);
+    ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.f), "v1.0.0-Beta.3");
     if (l_font) ImGui::PopFont();
 
     if (s_font) ImGui::PushFont(s_font);
@@ -609,37 +550,59 @@ void GUI::renderMainPanel() {
     ImGui::End();
 }
 
+void GUI::renderWatermarkOverlay() {
+    ToastyReplay* mgr = ToastyReplay::get();
+    
+    // Only show watermark when in a level
+    if (!PlayLayer::get()) return;
+    
+    ImGuiIO& io = ImGui::GetIO();
+    
+    // Set up a transparent window at the bottom center
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 30), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    ImGui::Begin("##watermark", nullptr, 
+        ImGuiWindowFlags_NoDecoration | 
+        ImGuiWindowFlags_NoInputs | 
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav);
+    
+    if (s_font) ImGui::PushFont(s_font);
+    
+    ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.17f, 0.8f), "ToastyReplay v1.0.0-Beta.3");
+    
+    if (s_font) ImGui::PopFont();
+    
+    ImGui::End();
+}
 
 void GUI::renderer() {
+    ToastyReplay* mgr = ToastyReplay::get();
+    if (mgr) {
+        mgr->handleKeybinds();
+    }
+
     if (!visible) {
-        if (lastVisible) {
-             ToastyReplay::get()->refreshReplays();
+        if (lastVisible && mgr) {
+            mgr->refreshReplays();
         }
         lastVisible = false;
         return;
     }
 
-    ToastyReplay* mgr = ToastyReplay::get();
-
-    if (!lastVisible) {
+    if (!lastVisible && mgr) {
         mgr->refreshReplays();
         lastVisible = true;
     }
 
-
-    // Handle custom keybinds
-    mgr->handleKeybinds();
-
-    // Update colors dynamically every frame
+    // Apply style colors
     ImGuiStyle* style = &ImGui::GetStyle();
-
     ImVec4 currentTextColor = textColor;
-
     if (rgbTextColor) {
-        ImVec4 rgb = getRainbowColor(rgbSpeed);
-        currentTextColor = ImVec4(rgb.x, rgb.y, rgb.z, textColor.w);
+        currentTextColor = getRainbowColor(rgbSpeed);
     }
-
     style->Colors[ImGuiCol_Text] = currentTextColor;
     style->Colors[ImGuiCol_WindowBg] = ImVec4(backgroundColor.x, backgroundColor.y, backgroundColor.z, menuOpacity);
     style->Colors[ImGuiCol_PopupBg] = ImVec4(backgroundColor.x * 1.1f, backgroundColor.y * 1.1f, backgroundColor.z * 1.1f, menuOpacity);
@@ -650,8 +613,8 @@ void GUI::renderer() {
     RenderInfoPanel();
     RenderHackPanel();
     RenderThemePanel();
+    // RenderKeybindsPanel(); // REMOVED - keybinds panel
 
-    // Render watermark overlay
     renderWatermarkOverlay();
 
     if (keyCheckFailed) {
@@ -740,13 +703,11 @@ void GUI::setup() {
     style->Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.25f, 1.00f, 0.00f, 0.43f);
     style->Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(1.00f, 0.98f, 0.95f, 0.73f);
 
-
     ImGuiIO& io = ImGui::GetIO();
 
     auto resourceDir = Mod::get()->getResourcesDir();
     auto path = (resourceDir / "font.ttf").string();
     
-    // Only load custom font if the file exists
     if (std::filesystem::exists(path)) {
         s_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f);
         l_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 28.0f);

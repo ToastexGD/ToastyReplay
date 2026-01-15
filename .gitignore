@@ -62,3 +62,18 @@ build-*/
 # CLion
 .idea/
 /cmake-build-*/
+
+# Build output
+build/
+.cache/
+
+# Editor / tooling
+.vscode/
+.zenflow/
+
+# Dependencies (if vendored)
+bindings/
+
+# OS junk
+Thumbs.db
+.DS_Store

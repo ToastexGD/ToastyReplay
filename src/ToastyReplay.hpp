@@ -56,8 +56,11 @@ public:
     // Seed feature
     bool seedEnabled = false;
     unsigned int seedValue = 1;
+    uintptr_t macroSeed = 0; // Add this line - stores seed from macro for playback
 
     int trajectoryLength = 312;
+    
+    bool keepRecordingOnReset = false; // ADD THIS LINE
     
     double speed = 1;
     double tps = 240.f;
@@ -96,6 +99,7 @@ public:
 
     void startRecording(GJGameLevel* level) {
         state = RECORD;
+        keepRecordingOnReset = true; // Set flag when starting recording
         createNewReplay(level);
     }
 

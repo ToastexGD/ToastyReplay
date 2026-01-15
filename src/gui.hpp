@@ -48,10 +48,14 @@ public:
     std::string capturingKeybind = "";
     bool isCapturingKeybind = false;
 
+    // Frame stepping variables
+    bool frameStepper = false;
+    bool shouldStep = false;
+
     void renderReplayInfo();
     void renderStateSwitcher();
     void renderMainPanel();
-
+    void renderWatermarkOverlay();
     void renderer();
     void setup();
 };

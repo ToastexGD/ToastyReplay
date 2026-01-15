@@ -10,37 +10,45 @@ using namespace geode::prelude;
 
 // Seed address for Windows
 #ifdef GEODE_IS_WINDOWS
-const int seedAddr = 0x6a4e20;
+const uintptr_t seedAddr = 0x6a4e20;
 #endif
 
-void updateSeed() {
+void updateSeed(bool isRestart = false) {
     ToastyReplay* mgr = ToastyReplay::get();
-    
-    if (!mgr->seedEnabled) return;
-    
     PlayLayer* pl = PlayLayer::get();
     if (!pl) return;
-    
-    int finalSeed;
-    
-    if (!pl->m_player1->m_isDead) {
-        std::mt19937 generator(mgr->seedValue + pl->m_gameState.m_currentProgress);
-        std::uniform_int_distribution<int> distribution(10000, 999999999);
-        finalSeed = distribution(generator);
-    } else {
-        std::random_device rd;
-        std::mt19937 generator(rd());
-        std::uniform_int_distribution<int> distribution(1000, 999999999);
-        finalSeed = distribution(generator);
-    }
-    
+
+    if (mgr->seedEnabled) {
+        int finalSeed;
+
+        if (!pl->m_player1->m_isDead) {
+            std::mt19937 generator(mgr->seedValue + pl->m_gameState.m_currentProgress);
+            std::uniform_int_distribution<int> distribution(10000, 999999999);
+            finalSeed = distribution(generator);
+        } else {
+            std::random_device rd;
+            std::mt19937 generator(rd());
+            std::uniform_int_distribution<int> distribution(1000, 999999999);
+            finalSeed = distribution(generator);
+        }
+
 #ifdef GEODE_IS_WINDOWS
-    *(uintptr_t*)((char*)geode::base::get() + seedAddr) = finalSeed;
+        *(uintptr_t*)((char*)geode::base::get() + seedAddr) = finalSeed;
 #else
-    GameToolbox::fast_srand(finalSeed);
+        GameToolbox::fast_srand(finalSeed);
 #endif
-    
-    // mgr->safeMode = true;  // Commented out to prevent crash
+
+        // REMOVED: mgr->safeMode = true; - Safe Mode is now independent
+    }
+
+    // Store seed when recording starts/restarts
+    if (isRestart && mgr->state == RECORD) {
+#ifdef GEODE_IS_WINDOWS
+        mgr->macroSeed = *(uintptr_t*)((char*)geode::base::get() + seedAddr);
+#else
+        mgr->macroSeed = 0;
+#endif
+    }
 }
 
 class $modify(GJBaseGameLayer) {
@@ -80,7 +88,6 @@ class $modify(PlayLayer) {
             if (mgr->currentReplay) {
                 mgr->currentReplay->inputs.clear();
             } else {
-                // Get level from PlayLayer instead of passing null
                 mgr->createNewReplay(m_level);
             }
         }
@@ -89,8 +96,8 @@ class $modify(PlayLayer) {
         mgr->noclipDeaths = 0;
         mgr->noclipTotalFrames = 0;
         
-        // Update seed for consistent RNG
-        updateSeed();
+        // Update seed for consistent RNG (pass true for restart)
+        updateSeed(true);
 
         PlayLayer::resetLevel();
 
@@ -177,11 +184,10 @@ class $modify(PlayLayer) {
                 if (mgr->lastUnsavedReplay) delete mgr->lastUnsavedReplay;
                 mgr->lastUnsavedReplay = mgr->currentReplay;
                 mgr->currentReplay = nullptr;
-            } else {
-                delete mgr->currentReplay;
-                mgr->currentReplay = nullptr;
+                mgr->state = NONE;
             }
-            mgr->state = NONE;  // Reset recording state to prevent UI glitch
+            // If no clicks, do nothing - let resetLevel handle clearing inputs
+            // Recording state stays active, replay stays active
         }
 
         PlayLayer::destroyPlayer(p0, p1);
