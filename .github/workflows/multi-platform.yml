@@ -20,6 +20,7 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           combine: true
+          bindings-ref: main
           
       - uses: actions/upload-artifact@v4
         with:
