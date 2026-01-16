@@ -104,10 +104,8 @@ public:
         
         state = PLAYBACK;
         
-        // Trigger level reset when starting playback
         PlayLayer* pl = PlayLayer::get();
         if (pl) {
-            // If in practice mode, exit it first to reset from start
             if (pl->m_isPracticeMode) {
                 pl->togglePracticeMode(false);
             }

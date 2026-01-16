@@ -6,7 +6,6 @@
 #include <random>
 using namespace geode::prelude;
 
-// Seed address for Windows
 #ifdef GEODE_IS_WINDOWS
 const uintptr_t seedAddr = 0x6a4e20;
 #endif
@@ -37,7 +36,6 @@ void updateSeed(bool isRestart = false) {
 #endif
     }
 
-    // Store seed when recording starts/restarts
     if (isRestart && mgr->state == RECORD) {
 #ifdef GEODE_IS_WINDOWS
         mgr->macroSeed = *(uintptr_t*)((char*)geode::base::get() + seedAddr);  // Reverted to get()
@@ -51,7 +49,6 @@ class $modify(GJBaseGameLayer) {
     void handleButton(bool down, int button, bool p1) {
         ToastyReplay* mgr = ToastyReplay::get();
 
-        // Only ignore manual input, not replay input
         if (mgr->state == PLAYBACK && mgr->ignoreManualInput && !mgr->isReplayInput) {
             return;
         }
@@ -79,23 +76,19 @@ class $modify(PlayLayer) {
     void resetLevel() {
         ToastyReplay* mgr = ToastyReplay::get();
         
-        // Store if we're in practice mode before reset
         bool inPractice = m_isPracticeMode;
         
         PlayLayer::resetLevel();
         
-        // If NOT in practice mode and recording, clear all inputs (fresh start)
         if (!inPractice && mgr->state == RECORD && mgr->currentReplay) {
             mgr->currentReplay->inputs.clear();
         }
-        // Note: In practice mode, input purging is handled by practicemode.cpp
     }
 
     void levelComplete() {
         ToastyReplay* mgr = ToastyReplay::get();
         mgr->safeMode = false;
         
-        // On level complete, update the replay name
         if (mgr->state == RECORD && mgr->currentReplay) {
             mgr->currentReplay->name = fmt::format("{} - 100%", mgr->currentReplay->levelInfo.name);
         }

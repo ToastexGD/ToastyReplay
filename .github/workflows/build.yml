@@ -26,6 +26,6 @@ jobs:
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: v3.8.1  # Pin to stable version
+          sdk: v3.8.1
           bindings: geode-sdk/bindings
           bindings-ref: v3.8.1

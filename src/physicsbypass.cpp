@@ -7,7 +7,6 @@ using namespace geode::prelude;
 
 class $modify(PlayLayer) {
     void update(float dt) {
-        // Handle keybinds in the PlayLayer update
         ToastyReplay::get()->handleKeybinds();
 
         PlayLayer::update(dt);
@@ -37,11 +36,10 @@ class $modify(GJBaseGameLayer) {
 
         if (mgr->frameAdvance) {
             mgr->extraTPS = 0;
-            if (!mgr->stepFrame) return; // Freeze when frame advance is on but stepFrame is false
-            mgr->stepFrame = false;      // Set stepFrame to false after processing
-            // Track frames for noclip accuracy
+            if (!mgr->stepFrame) return;
+            mgr->stepFrame = false;
             if (mgr->noclip) mgr->noclipTotalFrames++;
-            return GJBaseGameLayer::update(newDelta); // Advance one frame
+            return GJBaseGameLayer::update(newDelta);
         }
 
         if (mgr->extraTPS >= newDelta) {
@@ -50,13 +48,11 @@ class $modify(GJBaseGameLayer) {
 
             mgr->disableRender = true;
             for (int i = 0; i < times - 1; i++) {
-                // Track frames for noclip accuracy
                 if (mgr->noclip) mgr->noclipTotalFrames++;
                 GJBaseGameLayer::update(newDelta);
             }
 
             mgr->disableRender = false;
-            // Track frames for noclip accuracy
             if (mgr->noclip) mgr->noclipTotalFrames++;
             return GJBaseGameLayer::update(newDelta);
         }

@@ -5,14 +5,13 @@
 
 class GUI {
 public:
-    // Font pointers
     ImFont* s_font = nullptr;
     ImFont* l_font = nullptr;
     ImFont* vl_font = nullptr;
 
 private:
     char tempReplayName[256] = {0};
-    bool tempReplayNameInitialized = false;  // Track if we need to initialize the name buffer
+    bool tempReplayNameInitialized = false;
     
 public:
     static auto* get() {
@@ -29,7 +28,6 @@ public:
     bool keyCheckFailed = false;
     bool callbackInit = false;
 
-    // Theme customization settings
     ImVec4 textColor = ImVec4(0.80f, 0.80f, 0.83f, 1.00f);
     ImVec4 backgroundColor = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
     float menuOpacity = 1.0f;
@@ -38,18 +36,15 @@ public:
     float rgbSpeed = 1.0f;
     bool themeResetRequested = false;
     
-    // Store default and current panel sizes
     ImVec2 mainPanelSize = ImVec2(350, 525);
     ImVec2 infoPanelSize = ImVec2(200, 320);
     ImVec2 hackPanelSize = ImVec2(200, 380);
     ImVec2 themePanelSize = ImVec2(200, 320);
     ImVec2 keybindsPanelSize = ImVec2(250, 400);
 
-    // Keybind capture state
     std::string capturingKeybind = "";
     bool isCapturingKeybind = false;
 
-    // Frame stepping variables
     bool frameStepper = false;
     bool shouldStep = false;
 
@@ -61,7 +56,6 @@ public:
     void setup();
 };
 
-// Watermark rendering function
 void renderWatermarkOverlay();
 
 #endif

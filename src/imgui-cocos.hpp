@@ -8,10 +8,7 @@
 class ImGuiCocos {
 public:
 	enum class InputMode {
-		// This is the default behavior, which will let clicks go through to gd,
-		// and keyboard inputs too as long as imgui isn't using it.
 		Default,
-		// This mode blocks any input from going through as long as imgui is toggled on.
 		Blocking,
 	};
 private:
@@ -28,16 +25,14 @@ private:
 
 	void newFrame();
 	void renderFrame() const;
-	void legacyRenderFrame() const; // uses OpenGL 2.0 for rendering, for compatibility with older devices
+	void legacyRenderFrame() const;
 public:
 	ImGuiCocos(const ImGuiCocos&) = delete;
 	ImGuiCocos(ImGuiCocos&&) = delete;
 
 	static ImGuiCocos& get();
 
-	// called on mod unloaded
 	void destroy();
-	// called on swapBuffers
 	void drawFrame();
 
 	ImGuiCocos& setup(std::function<void()> fun);
@@ -45,7 +40,6 @@ public:
 
 	ImGuiCocos& draw(std::function<void()> fun);
 
-	// used to reinitialize imgui context
 	void reload();
 
 	void toggle();

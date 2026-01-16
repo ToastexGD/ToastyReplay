@@ -11,7 +11,6 @@
 
 ShowTrajectory& t = ShowTrajectory::get();
 
-// Helper to convert ccColor3B to ccColor4F
 cocos2d::ccColor4F ccc4FFromccc3B(cocos2d::ccColor3B color) {
     return ccc4f(color.r / 255.f, color.g / 255.f, color.b / 255.f, 1.f);
 }
@@ -346,7 +345,6 @@ class $modify(TrajectoryGJBaseGameLayer, GJBaseGameLayer) {
             for (const auto& obj : *objects) {
                 if (!obj) continue;
 
-                // xdBot logic: disable objects that are NOT in objectTypes AND NOT portals, OR are collectibles
                 if ((!objectTypes.contains(static_cast<int>(obj->m_objectType)) && !portalIDs.contains(obj->m_objectID)) || collectibleIDs.contains(obj->m_objectID)) {
                     if (obj->m_isDisabled || obj->m_isDisabled2) continue;
 
@@ -382,7 +380,6 @@ class $modify(TrajectoryGJBaseGameLayer, GJBaseGameLayer) {
         return GJBaseGameLayer::canBeActivatedByPlayer(p0, p1);
     }
 
-    // xdBot blocks playerTouchedRing during trajectory - rings are handled via collision
     void playerTouchedRing(PlayerObject* p0, RingObject* p1) {
         if (!t.creatingTrajectory)
             GJBaseGameLayer::playerTouchedRing(p0, p1);
@@ -428,7 +425,6 @@ class $modify(TrajectoryPlayerObject, PlayerObject) {
             PlayerObject::incrementJumps();
     }
 
-    // xdBot blocks ringJump during trajectory creation
     void ringJump(RingObject* p0, bool p1) {
         if (!t.creatingTrajectory)
             PlayerObject::ringJump(p0, p1);

@@ -18,93 +18,90 @@ public:
     }
 };
 
-// Object IDs that should be interacted with during trajectory
 const std::set<int> gamemodePortalIDs = {
-    12,   // Cube portal
-    13,   // Ship portal
-    47,   // Ball portal
-    111,  // UFO portal
-    660,  // Wave portal
-    745,  // Robot portal
-    1331, // Spider portal
-    1933  // Swing portal
+    12,
+    13,
+    47,
+    111,
+    660,
+    745,
+    1331,
+    1933
 };
 
 const std::set<int> gravityPortalIDs = {
-    10,   // Blue gravity portal (normal)
-    11,   // Yellow gravity portal (flipped)
-    2926  // Toggle gravity portal
+    10,
+    11,
+    2926
 };
 
 const std::set<int> speedPortalIDs = {
-    200,  // Half speed
-    201,  // Normal speed
-    202,  // Double speed
-    203,  // Triple speed
-    1334  // Quadruple speed
+    200,
+    201,
+    202,
+    203,
+    1334
 };
 
 const std::set<int> sizePortalIDs = {
-    99,   // Mini portal
-    101   // Big portal
+    99,
+    101
 };
 
 const std::set<int> mirrorPortalIDs = {
-    45,   // Mirror portal on
-    46    // Mirror portal off
+    45,
+    46
 };
 
 const std::set<int> dualPortalIDs = {
-    286,  // Dual portal on
-    287   // Dual portal off
+    286,
+    287
 };
 
 const std::set<int> teleportPortalIDs = {
-    747   // Teleport portal
+    747
 };
 
 const std::set<int> ringIDs = {
-    36,   // Yellow jump ring
-    84,   // Pink jump ring
-    141,  // Red jump ring
-    1022, // Green ring
-    1330, // Black ring (dash)
-    1704, // Purple ring (spider)
-    1751, // Rebound ring
-    3004, // Green dash ring
-    3005, // Pink dash ring
-    3027  // Blue dash ring
+    36,
+    84,
+    141,
+    1022,
+    1330,
+    1704,
+    1751,
+    3004,
+    3005,
+    3027
 };
 
 const std::set<int> padIDs = {
-    35,   // Yellow pad
-    67,   // Pink pad
-    140,  // Red pad
-    1332, // Black pad (spider)
-    1333, // Purple pad
-    3016  // Blue pad
+    35,
+    67,
+    140,
+    1332,
+    1333,
+    3016
 };
 
 const std::set<int> dashOrbIDs = {
-    1704, // Dash orb
-    3005, // Pink dash ring
-    3004  // Green dash ring
+    1704,
+    3005,
+    3004
 };
 
-// Object types that should allow collision during trajectory
 const std::set<int> trajectoryObjectTypes = {
-    0,  // Solid
-    5,  // Slope
-    7,  // Hazard (for death detection)
+    0,
+    5,
+    7,
 };
 
-// Collectibles to ignore
 const std::set<int> collectibleIDs = {
-    1329, // User coin
-    142,  // Secret coin
-    1614, // Custom orb
-    1587, // Item trigger
-    1275  // Pickup trigger
+    1329,
+    142,
+    1614,
+    1587,
+    1275
 };
 
 class ShowTrajectory {
@@ -131,7 +128,6 @@ public:
     cocos2d::CCPoint player1Trajectory[2000];
     cocos2d::CCPoint player2Trajectory[2000];
     
-    // Track what objects have been activated during trajectory
     std::set<GameObject*> activatedObjects;
     
     static void trajectoryOff();

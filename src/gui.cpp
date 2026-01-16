@@ -12,48 +12,38 @@ void ToastyReplay::handleKeybinds() {
     bool keyIsPressed = (keybind_frameAdvance != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_frameAdvance, false));
     bool keyIsHeld = (keybind_frameAdvance != 0 && ImGui::IsKeyDown((ImGuiKey)keybind_frameAdvance));
 
-    // Check for frame advance keybind
     if (keyIsPressed) {
         if (!frameAdvanceKeyPressed) {
             frameAdvanceKeyPressed = true;
 
             if (!frameAdvance) {
-                // First time pressing: enable frame advance mode
                 frameAdvance = true;
             } else {
-                // Already in frame advance mode: step a frame
                 stepFrame = true;
             }
         }
     } else if (keyIsHeld && frameAdvance) {
-        // Key is held down while in frame advance mode: continuously step frames
         stepFrame = true;
     } else {
-        // Key is not pressed, reset the tracking
         frameAdvanceKeyPressed = false;
     }
 
-    // Check for speedhack audio keybind
     if (keybind_speedhackAudio != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_speedhackAudio, false)) {
         speedHackAudio = !speedHackAudio;
     }
 
-    // Check for safe mode keybind
     if (keybind_safeMode != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_safeMode, false)) {
         safeMode = !safeMode;
     }
 
-    // Check for trajectory keybind
     if (keybind_trajectory != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_trajectory, false)) {
         showTrajectory = !showTrajectory;
     }
 
-    // Check for noclip keybind
     if (keybind_noclip != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_noclip, false)) {
         noclip = !noclip;
     }
 
-    // Check for seed keybind
     if (keybind_seed != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_seed, false)) {
         seedEnabled = !seedEnabled;
     }
@@ -137,10 +127,8 @@ void RenderInfoPanel() {
     ImGui::SetNextWindowSizeConstraints(ImVec2(220, 300), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("utilities", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
     
-    // Store the current window size
     GUI::get()->infoPanelSize = ImGui::GetWindowSize();
     
-    // Cap font size at 1.3 to prevent text overflow in this compact window
     float cappedScale = GUI::get()->fontSize;
     if (cappedScale > 1.3f) cappedScale = 1.3f;
     ImGui::SetWindowFontScale(cappedScale);
@@ -197,10 +185,8 @@ void RenderHackPanel() {
     ImGui::SetNextWindowSizeConstraints(ImVec2(220, 200), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("hacks", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
     
-    // Store the current window size
     GUI::get()->hackPanelSize = ImGui::GetWindowSize();
     
-    // Cap font size at 1.3 to prevent text overflow in this compact window
     float cappedScale = GUI::get()->fontSize;
     if (cappedScale > 1.3f) cappedScale = 1.3f;
     ImGui::SetWindowFontScale(cappedScale);
@@ -248,13 +234,11 @@ void RenderHackPanel() {
         if (mgr->noclip) {
             ImGui::Indent();
             
-            // Display current accuracy
             float accuracy = 100.0f;
             if (mgr->noclipTotalFrames > 0) {
                 accuracy = 100.0f * (1.0f - (float)mgr->noclipDeaths / (float)mgr->noclipTotalFrames);
             }
             
-            // Color based on accuracy
             ImVec4 accuracyColor;
             if (accuracy >= 90.0f) {
                 accuracyColor = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); // Green
@@ -278,11 +262,9 @@ void RenderHackPanel() {
             if (mgr->noclipAccuracyEnabled) {
                 ImGui::Text("Min Accuracy:");
                 
-                // Dropdown for common accuracy limits
                 const char* accuracyOptions[] = { "Disabled", "50%", "60%", "70%", "75%", "80%", "85%", "90%", "95%", "99%" };
                 float accuracyValues[] = { 0.0f, 50.0f, 60.0f, 70.0f, 75.0f, 80.0f, 85.0f, 90.0f, 95.0f, 99.0f };
                 
-                // Find current selection
                 int currentSelection = 0;
                 for (int i = 0; i < 10; i++) {
                     if (std::abs(mgr->noclipAccuracyLimit - accuracyValues[i]) < 0.1f) {
@@ -417,12 +399,10 @@ void GUI::renderMainPanel() {
     ImGui::SetNextWindowSizeConstraints(ImVec2(350, 500), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("info", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
-    // Cap font size at 1.2 for main panel to prevent text from going off screen
     float cappedScale = fontSize;
     if (cappedScale > 1.2f) cappedScale = 1.2f;
     ImGui::SetWindowFontScale(cappedScale);
 
-    // Store the current window size
     mainPanelSize = ImGui::GetWindowSize();
 
     if (l_font) ImGui::PushFont(l_font);
@@ -437,7 +417,6 @@ void GUI::renderMainPanel() {
 
     if (ImGui::BeginChild("MainContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
         
-        // Show playback status when playing
         if (mgr->state == PLAYBACK && mgr->currentReplay) {
             ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "PLAYING");
             ImGui::SameLine();
@@ -456,27 +435,22 @@ void GUI::renderMainPanel() {
             ImGui::NewLine();
         }
         
-        // Show recording status and controls when recording
         if (mgr->state == RECORD && mgr->currentReplay) {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "RECORDING");
             ImGui::SameLine();
             ImGui::Text("| Inputs: %zu", mgr->currentReplay->inputs.size());
             
-            // Initialize the name buffer with current replay name if not done yet
             if (!tempReplayNameInitialized) {
                 strncpy(tempReplayName, mgr->currentReplay->name.c_str(), sizeof(tempReplayName) - 1);
                 tempReplayName[sizeof(tempReplayName) - 1] = '\0';
                 tempReplayNameInitialized = true;
             }
             
-            // Rename input
             ImGui::Text("Macro Name:");
             if (ImGui::InputText("##recordingName", tempReplayName, sizeof(tempReplayName))) {
-                // Update replay name as user types
                 mgr->currentReplay->name = tempReplayName;
             }
             
-            // Save and Stop buttons
             if (ImGui::Button("Save Macro", ImVec2(150, 0))) {
                 if (!mgr->currentReplay->inputs.empty()) {
                     mgr->currentReplay->save();
@@ -502,7 +476,6 @@ void GUI::renderMainPanel() {
             ImGui::Separator();
             ImGui::NewLine();
         } else {
-            // Reset when not recording so next recording starts fresh
             tempReplayNameInitialized = false;
         }
 
@@ -520,7 +493,7 @@ void GUI::renderMainPanel() {
 
                 ImGui::PushID(replayName.c_str());
                 if (ImGui::Selectable(replayName.c_str(), isSelected, 0, ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
-                    // Don't load if currently recording
+                
                     if (mgr->state != RECORD) {
                         zReplay* rec = zReplay::fromFile(replayName);
                         if (rec) {
@@ -560,7 +533,6 @@ void GUI::renderMainPanel() {
             }
         }
 
-        // Only show these options when NOT recording and a replay is loaded
         if (mgr->currentReplay && mgr->state != RECORD) {
             ImGui::NewLine();
             ImGui::Text("Loaded: %s", mgr->currentReplay->name.c_str());
@@ -582,14 +554,12 @@ void GUI::renderMainPanel() {
 void GUI::renderWatermarkOverlay() {
     ToastyReplay* mgr = ToastyReplay::get();
     
-    // Show watermark when menu is visible OR when in playback mode (in a level)
     bool shouldShowWatermark = visible || (PlayLayer::get() && mgr && mgr->state == PLAYBACK);
     
     if (!shouldShowWatermark) return;
     
     ImGuiIO& io = ImGui::GetIO();
     
-    // Set up a transparent window at the bottom center
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 30), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::Begin("##watermark", nullptr, 
@@ -739,7 +709,6 @@ void GUI::setup() {
 
     auto path = (Mod::get()->getResourcesDir() / "Roboto-Bold.ttf").string();
     
-    // Check if file exists, fallback to default font if not
     if (std::filesystem::exists(path)) {
         s_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f);
         l_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 28.0f);

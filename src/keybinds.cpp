@@ -13,7 +13,6 @@ $on_mod(Loaded) {
 class $modify(ToastyKeyboardDispatcher, CCKeyboardDispatcher) {
     bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat) {
         if (down && !repeat) {
-            // B key - toggle GUI
             if (key == enumKeyCodes::KEY_B) {
                 log::info("B key pressed!");
                 GUI* gui = GUI::get();
@@ -27,7 +26,6 @@ class $modify(ToastyKeyboardDispatcher, CCKeyboardDispatcher) {
                 }
             }
             
-            // V key - toggle frame advance (only in PlayLayer)
             if (key == enumKeyCodes::KEY_V) {
                 auto pl = PlayLayer::get();
                 if (pl) {
@@ -39,8 +37,6 @@ class $modify(ToastyKeyboardDispatcher, CCKeyboardDispatcher) {
             }
         }
         
-        // C key - advance one frame (only in PlayLayer with frame advance enabled)
-        // Allow both initial press AND repeat for continuous frame stepping
         if (down && key == enumKeyCodes::KEY_C) {
             auto pl = PlayLayer::get();
             ToastyReplay* mgr = ToastyReplay::get();
