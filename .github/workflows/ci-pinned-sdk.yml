@@ -30,7 +30,7 @@ jobs:
         with:
           sdk: "3.8.1"
           bindings: geode-sdk/bindings
-          bindings-ref: v3.8.1  # Add this to pin bindings to match SDK
+          bindings-ref: main  # Change to "main" since v3.8.1 branch doesn't exist
           targets: ${{ matrix.target }}
           # optionals:
           # extra-cmake-args: "-DCMAKE_BUILD_TYPE=Release"
