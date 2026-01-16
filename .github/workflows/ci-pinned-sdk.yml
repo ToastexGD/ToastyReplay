@@ -1,4 +1,4 @@
-name: CI (Pinned Geode SDK 4.10.0)
+name: CI (Pinned Geode SDK main)
 
 on:
   push:
@@ -28,9 +28,9 @@ jobs:
       - name: Use pinned Geode SDK and build
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: "4.10.0"
+          sdk: main
           bindings: geode-sdk/bindings
-          bindings-ref: v4.10.0
+          bindings-ref: 4.10.0
           targets: ${{ matrix.target }}
           # optionals:
           # extra-cmake-args: "-DCMAKE_BUILD_TYPE=Release"
