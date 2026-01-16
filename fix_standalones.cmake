@@ -1,4 +1,3 @@
-# Script to fix Standalones.hpp by adding F_API to FMOD function declarations
 set(STANDALONES_FILE "${CMAKE_CURRENT_BINARY_DIR}/bindings/bindings/Geode/binding/Standalones.hpp")
 if(EXISTS "${STANDALONES_FILE}")
     file(READ "${STANDALONES_FILE}" CONTENT)
