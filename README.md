@@ -84,3 +84,5 @@ Your feedback drives development! Reach out through:
 ---
 
 **Thank you for using ToastyReplay!** 🍞✨
+
+Note: CI is pinned to Geode SDK v3.8.1. If you change "geode" in mod.json, update .github/workflows/ci-pinned-sdk.yml to match to keep CI builds working.
