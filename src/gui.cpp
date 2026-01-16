@@ -10,10 +10,11 @@ using namespace geode::prelude;
 
 void ToastyReplay::handleKeybinds() {
     bool keyIsPressed = (keybind_frameAdvance != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_frameAdvance, false));
+    bool keyIsHeld = (keybind_frameAdvance != 0 && ImGui::IsKeyDown((ImGuiKey)keybind_frameAdvance));
 
     // Check for frame advance keybind
     if (keyIsPressed) {
-        if (!frameAdvanceKeyPressed) { // Only process on key press (not holding)
+        if (!frameAdvanceKeyPressed) {
             frameAdvanceKeyPressed = true;
 
             if (!frameAdvance) {
@@ -24,6 +25,9 @@ void ToastyReplay::handleKeybinds() {
                 stepFrame = true;
             }
         }
+    } else if (keyIsHeld && frameAdvance) {
+        // Key is held down while in frame advance mode: continuously step frames
+        stepFrame = true;
     } else {
         // Key is not pressed, reset the tracking
         frameAdvanceKeyPressed = false;
@@ -89,6 +93,10 @@ void GUI::renderStateSwitcher() {
     ToastyReplay* mgr = ToastyReplay::get();
 
     if (ImGui::RadioButton("Disable", mgr->state == NONE)) {
+        if (mgr->state == RECORD && mgr->currentReplay) {
+            delete mgr->currentReplay;
+            mgr->currentReplay = nullptr;
+        }
         mgr->state = NONE;
     }
     if (ImGui::IsItemHovered()) {
@@ -96,26 +104,14 @@ void GUI::renderStateSwitcher() {
     }
     ImGui::SameLine();
 
-    bool recordDisabled = mgr->lastUnsavedReplay != nullptr;
-    if (recordDisabled) {
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-    }
-    
-    if (ImGui::RadioButton("Record", mgr->state == RECORD) && !recordDisabled) {
+    if (ImGui::RadioButton("Record", mgr->state == RECORD)) {
         if (PlayLayer::get()) {
             mgr->startRecording(PlayLayer::get()->m_level);
-            mgr->currentReplay->purgeAfter(PlayLayer::get()->m_gameState.m_currentProgress);
         } else {
             mgr->state = RECORD;
         }
     }
-    
-    if (recordDisabled) {
-        ImGui::PopStyleVar();
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Save or Discard your last attempt before recording a new one!");
-        }
-    } else if (ImGui::IsItemHovered()) {
+    if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Record your inputs to create a replay");
     }
 
@@ -432,7 +428,7 @@ void GUI::renderMainPanel() {
     if (l_font) ImGui::PushFont(l_font);
     ImGui::TextColored(ImVec4(1.f, 0.78f, 0.17f, 1.f), "ToastyReplay");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.f), "v1.0.0-Beta.3");
+    ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.f), "v1.0.0-Beta");
     if (l_font) ImGui::PopFont();
 
     if (s_font) ImGui::PushFont(s_font);
@@ -440,62 +436,98 @@ void GUI::renderMainPanel() {
     ToastyReplay* mgr = ToastyReplay::get();
 
     if (ImGui::BeginChild("MainContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        if (mgr->lastUnsavedReplay) {
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Last Unsaved Attempt:");
-            zReplay* replay = mgr->lastUnsavedReplay;
-            ImGui::PushID(replay);
-
-            ImGui::Text("%s", replay->name.c_str());
-            ImGui::SameLine(ImGui::GetWindowWidth() - 75);
-            if (ImGui::Button("Save")) {
-                replay->save();
-                mgr->refreshReplays();
-                delete replay;
-                mgr->lastUnsavedReplay = nullptr;
-                ImGui::PopID();
-                goto end_unsaved;
-            }
-
-            ImGui::InputText("##unsavedname", tempReplayName, sizeof(tempReplayName));
+        
+        // Show playback status when playing
+        if (mgr->state == PLAYBACK && mgr->currentReplay) {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "PLAYING");
             ImGui::SameLine();
-            if (ImGui::Button("Apply")) {
-                replay->name = tempReplayName;
-                memset(tempReplayName, 0, sizeof(tempReplayName));
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), ": %s", mgr->currentReplay->name.c_str());
+            ImGui::SameLine();
+            ImGui::Text("| Inputs: %zu", mgr->currentReplay->inputs.size());
+            
+            if (ImGui::Button("Stop Playback", ImVec2(150, 0))) {
+                mgr->state = NONE;
             }
-
-            if (ImGui::Button("Discard", ImVec2(-1, 0))) {
-                delete replay;
-                mgr->lastUnsavedReplay = nullptr;
-                ImGui::PopID();
-                goto end_unsaved;
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Stop playing the macro");
             }
-
-            ImGui::PopID();
-            end_unsaved:
+            
             ImGui::Separator();
             ImGui::NewLine();
         }
+        
+        // Show recording status and controls when recording
+        if (mgr->state == RECORD && mgr->currentReplay) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "RECORDING");
+            ImGui::SameLine();
+            ImGui::Text("| Inputs: %zu", mgr->currentReplay->inputs.size());
+            
+            // Initialize the name buffer with current replay name if not done yet
+            if (!tempReplayNameInitialized) {
+                strncpy(tempReplayName, mgr->currentReplay->name.c_str(), sizeof(tempReplayName) - 1);
+                tempReplayName[sizeof(tempReplayName) - 1] = '\0';
+                tempReplayNameInitialized = true;
+            }
+            
+            // Rename input
+            ImGui::Text("Macro Name:");
+            if (ImGui::InputText("##recordingName", tempReplayName, sizeof(tempReplayName))) {
+                // Update replay name as user types
+                mgr->currentReplay->name = tempReplayName;
+            }
+            
+            // Save and Stop buttons
+            if (ImGui::Button("Save Macro", ImVec2(150, 0))) {
+                if (!mgr->currentReplay->inputs.empty()) {
+                    mgr->currentReplay->save();
+                    mgr->refreshReplays();
+                    log::info("Saved macro: {}", mgr->currentReplay->name);
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Save the current recording to file");
+            }
+            
+            ImGui::SameLine();
+            if (ImGui::Button("Stop Recording", ImVec2(150, 0))) {
+                delete mgr->currentReplay;
+                mgr->currentReplay = nullptr;
+                mgr->state = NONE;
+                tempReplayNameInitialized = false;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Stop recording and discard unsaved inputs");
+            }
+            
+            ImGui::Separator();
+            ImGui::NewLine();
+        } else {
+            // Reset when not recording so next recording starts fresh
+            tempReplayNameInitialized = false;
+        }
 
-        renderReplayInfo();
         renderStateSwitcher();
 
         ImGui::NewLine();
 
         ImGui::Text("Saved Replays");
 
-        std::string currentReplayName = mgr->currentReplay ? mgr->currentReplay->name : "Select a replay...";
+        std::string currentReplayName = (mgr->currentReplay && mgr->state != RECORD) ? mgr->currentReplay->name : "Select a replay...";
         if (ImGui::BeginCombo("##ReplayCombo", currentReplayName.c_str())) {
-            auto savedReplaysCopy = mgr->savedReplays; // Copy to avoid iterator invalidation on refresh
+            auto savedReplaysCopy = mgr->savedReplays;
             for (const auto& replayName : savedReplaysCopy) {
                 bool isSelected = (currentReplayName == replayName);
 
                 ImGui::PushID(replayName.c_str());
                 if (ImGui::Selectable(replayName.c_str(), isSelected, 0, ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
-                    zReplay* rec = zReplay::fromFile(replayName);
-                    if (rec) {
-                        if (mgr->currentReplay) delete mgr->currentReplay;
-                        mgr->currentReplay = rec;
-                        mgr->state = PLAYBACK;
+                    // Don't load if currently recording
+                    if (mgr->state != RECORD) {
+                        zReplay* rec = zReplay::fromFile(replayName);
+                        if (rec) {
+                            if (mgr->currentReplay) delete mgr->currentReplay;
+                            mgr->currentReplay = rec;
+                            mgr->state = PLAYBACK;
+                        }
                     }
                 }
 
@@ -528,14 +560,11 @@ void GUI::renderMainPanel() {
             }
         }
 
-        if (mgr->currentReplay) {
+        // Only show these options when NOT recording and a replay is loaded
+        if (mgr->currentReplay && mgr->state != RECORD) {
             ImGui::NewLine();
-            ImGui::Text("Override Recording Name");
-            ImGui::InputText("##replayname", tempReplayName, sizeof(tempReplayName));
-            if (ImGui::Button("Apply")) {
-                mgr->currentReplay->name = tempReplayName;
-                memset(tempReplayName, 0, sizeof(tempReplayName));
-            }
+            ImGui::Text("Loaded: %s", mgr->currentReplay->name.c_str());
+            ImGui::Text("Inputs: %zu", mgr->currentReplay->inputs.size());
 
             if (mgr->state == PLAYBACK) {
                 ImGui::Checkbox("Ignore Manual Input", &mgr->ignoreManualInput);
@@ -553,8 +582,10 @@ void GUI::renderMainPanel() {
 void GUI::renderWatermarkOverlay() {
     ToastyReplay* mgr = ToastyReplay::get();
     
-    // Only show watermark when in a level
-    if (!PlayLayer::get()) return;
+    // Show watermark when menu is visible OR when in playback mode (in a level)
+    bool shouldShowWatermark = visible || (PlayLayer::get() && mgr && mgr->state == PLAYBACK);
+    
+    if (!shouldShowWatermark) return;
     
     ImGuiIO& io = ImGui::GetIO();
     
@@ -567,11 +598,12 @@ void GUI::renderWatermarkOverlay() {
         ImGuiWindowFlags_AlwaysAutoResize |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoNav);
+        ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
     
     if (s_font) ImGui::PushFont(s_font);
     
-    ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.17f, 0.8f), "ToastyReplay v1.0.0-Beta.3");
+    ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.17f, 0.8f), "ToastyReplay v1.0.0-Beta");
     
     if (s_font) ImGui::PopFont();
     
@@ -584,7 +616,6 @@ void GUI::renderer() {
         mgr->handleKeybinds();
     }
 
-    // Always render watermark in PlayLayer regardless of visible state
     renderWatermarkOverlay();
 
     if (!visible) {
@@ -602,7 +633,6 @@ void GUI::renderer() {
         lastVisible = true;
     }
 
-    // Apply style colors
     ImGuiStyle* style = &ImGui::GetStyle();
     ImVec4 currentTextColor = textColor;
     if (rgbTextColor) {
@@ -618,9 +648,6 @@ void GUI::renderer() {
     RenderInfoPanel();
     RenderHackPanel();
     RenderThemePanel();
-    // RenderKeybindsPanel(); // REMOVED - keybinds panel
-
-    renderWatermarkOverlay();
 
     if (keyCheckFailed) {
         keyCheckFailed = false;
@@ -710,19 +737,19 @@ void GUI::setup() {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    auto resourceDir = Mod::get()->getResourcesDir();
-    auto path = (resourceDir / "font.ttf").string();
+    auto path = (Mod::get()->getResourcesDir() / "Roboto-Bold.ttf").string();
     
+    // Check if file exists, fallback to default font if not
     if (std::filesystem::exists(path)) {
         s_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f);
         l_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 28.0f);
         vl_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 100.0f);
-        io.Fonts->Build();
     } else {
-        s_font = nullptr;
-        l_font = nullptr;
-        vl_font = nullptr;
+        s_font = io.Fonts->AddFontDefault();
+        l_font = io.Fonts->AddFontDefault();
+        vl_font = io.Fonts->AddFontDefault();
     }
+    io.Fonts->Build();
 }
 
 $on_mod(Loaded) {

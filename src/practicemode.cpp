@@ -1,5 +1,6 @@
 // A simple practice mode implementation for the free version
 #include "ToastyReplay.hpp"
+#include "replay.hpp"
 #include "utils.hpp"
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GameObject.hpp>
@@ -7,7 +8,8 @@ using namespace geode::prelude;
 
 struct Checkpoint {
     std::vector<std::vector<std::byte>> savedPairs;
-    int activatedObjectsCount;
+    int inputCount;  // Number of inputs at this checkpoint
+    int frame;       // Frame number at this checkpoint
 };
 
 std::vector<Checkpoint> checkpoints;
@@ -35,6 +37,16 @@ class $modify(PlayLayer) {
             if (m_player1) cp.savedPairs.push_back(getValue(m_player1, pair));
             if (m_player2) cp.savedPairs.push_back(getValue(m_player2, pair));
         }
+        
+        // Store the current input count and frame at this checkpoint
+        if (mgr->state == RECORD && mgr->currentReplay) {
+            cp.inputCount = static_cast<int>(mgr->currentReplay->inputs.size());
+            cp.frame = m_gameState.m_currentProgress;
+        } else {
+            cp.inputCount = 0;
+            cp.frame = 0;
+        }
+        
         checkpoints.push_back(cp);
 
         return PlayLayer::createCheckpoint();
@@ -49,9 +61,24 @@ class $modify(PlayLayer) {
     }
 
     void resetLevel() {
+        ToastyReplay* mgr = ToastyReplay::get();
+        
+        // Check if we're loading from a checkpoint (not a full reset)
+        bool loadingFromCheckpoint = m_isPracticeMode && !checkpoints.empty();
+        
+        // If recording and loading from checkpoint, purge inputs recorded after the checkpoint
+        if (loadingFromCheckpoint && mgr->state == RECORD && mgr->currentReplay) {
+            Checkpoint& cp = checkpoints.back();
+            
+            // Remove inputs that were recorded after this checkpoint
+            if (cp.inputCount < static_cast<int>(mgr->currentReplay->inputs.size())) {
+                mgr->currentReplay->inputs.resize(cp.inputCount);
+                log::info("Purged inputs after checkpoint. Keeping {} inputs.", cp.inputCount);
+            }
+        }
+        
         PlayLayer::resetLevel();
 
-        ToastyReplay* mgr = ToastyReplay::get();
         if (checkpoints.empty()) {
             return;
         }
@@ -68,6 +95,5 @@ class $modify(PlayLayer) {
     void onExit() {
         PlayLayer::onExit();
         checkpoints.clear();
-        ToastyReplay* mgr = ToastyReplay::get();
     }
 };

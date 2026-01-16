@@ -10,9 +10,7 @@ int clickBotIndex = 0;
 
 class $modify(zGJBaseGameLayer, GJBaseGameLayer) {
     void processCommands(float delta) {
-        if (!ToastyReplay::get()->ignoreInput) {
-            GJBaseGameLayer::processCommands(delta);
-        }
+        GJBaseGameLayer::processCommands(delta);
 
         ToastyReplay* mgr = ToastyReplay::get();
 
@@ -24,15 +22,6 @@ class $modify(zGJBaseGameLayer, GJBaseGameLayer) {
                 mgr->isReplayInput = true;
                 GJBaseGameLayer::handleButton(input.down, input.button, !input.player2);
                 mgr->isReplayInput = false;
-            }
-
-            int offset = mgr->currentReplay->framerate * 0.1;
-
-            while (clickBotIndex < mgr->currentReplay->inputs.size() && 
-                   mgr->currentReplay->inputs[clickBotIndex].frame < m_gameState.m_currentProgress + offset) {
-                
-                auto click = mgr->currentReplay->inputs[clickBotIndex++];
-                mgr->playSound(click.player2, click.button, click.down);
             }
         }
     }

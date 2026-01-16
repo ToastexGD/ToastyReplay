@@ -47,43 +47,29 @@ public:
     bool showTrajectory = false;
     bool noclip = false;
     bool noclipAccuracyEnabled = false;
-    float noclipAccuracyLimit = 0.0f; // Minimum accuracy required (0 = disabled)
+    float noclipAccuracyLimit = 0.0f;
     
-    // Noclip accuracy tracking
     int noclipDeaths = 0;
     int noclipTotalFrames = 0;
     
-    // Seed feature
     bool seedEnabled = false;
     unsigned int seedValue = 1;
-    uintptr_t macroSeed = 0; // Add this line - stores seed from macro for playback
+    uintptr_t macroSeed = 0;
 
     int trajectoryLength = 312;
-    
-    bool keepRecordingOnReset = false; // ADD THIS LINE
     
     double speed = 1;
     double tps = 240.f;
     zReplay* currentReplay = nullptr;
-    zReplay* lastUnsavedReplay = nullptr;
 
     std::vector<std::string> savedReplays;
     
-    // Keybinds storage (key code)
-    int keybind_frameAdvance = 0x56; // V key
+    int keybind_frameAdvance = 0x56;
     int keybind_speedhackAudio = 0;
     int keybind_safeMode = 0;
     int keybind_trajectory = 0;
     int keybind_noclip = 0;
     int keybind_seed = 0;
-
-    void clearUnsavedReplays() {
-        if (lastUnsavedReplay) {
-            log::info("Clearing unsaved replay: {}", lastUnsavedReplay->name);
-            delete lastUnsavedReplay;
-            lastUnsavedReplay = nullptr;
-        }
-    }
 
     void refreshReplays() {
         savedReplays.clear();
@@ -99,7 +85,6 @@ public:
 
     void startRecording(GJGameLevel* level) {
         state = RECORD;
-        keepRecordingOnReset = true; // Set flag when starting recording
         createNewReplay(level);
     }
 
@@ -112,6 +97,26 @@ public:
             currentReplay->name = level->m_levelName;
         }
         currentReplay->framerate = tps;
+    }
+
+    void startPlayback() {
+        if (!currentReplay || currentReplay->inputs.empty()) return;
+        
+        state = PLAYBACK;
+        
+        // Trigger level reset when starting playback
+        PlayLayer* pl = PlayLayer::get();
+        if (pl) {
+            // If in practice mode, exit it first to reset from start
+            if (pl->m_isPracticeMode) {
+                pl->togglePracticeMode(false);
+            }
+            pl->resetLevel();
+        }
+    }
+
+    void stopPlayback() {
+        state = NONE;
     }
 
     static auto* get() {

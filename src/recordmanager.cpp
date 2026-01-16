@@ -3,8 +3,6 @@
 
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
-#include <Geode/modify/MenuLayer.hpp>
-#include <Geode/modify/LevelSelectLayer.hpp>
 #include <random>
 using namespace geode::prelude;
 
@@ -37,8 +35,6 @@ void updateSeed(bool isRestart = false) {
 #else
         GameToolbox::fast_srand(finalSeed);
 #endif
-
-        // REMOVED: mgr->safeMode = true; - Safe Mode is now independent
     }
 
     // Store seed when recording starts/restarts
@@ -82,61 +78,28 @@ class $modify(PlayLayer) {
 
     void resetLevel() {
         ToastyReplay* mgr = ToastyReplay::get();
-
-        if (mgr->state == RECORD) {
-            // Clear the current replay inputs to start fresh
-            if (mgr->currentReplay) {
-                mgr->currentReplay->inputs.clear();
-            } else {
-                mgr->createNewReplay(m_level);
-            }
-        }
         
-        // Reset noclip accuracy tracking on level reset
-        mgr->noclipDeaths = 0;
-        mgr->noclipTotalFrames = 0;
+        // Store if we're in practice mode before reset
+        bool inPractice = m_isPracticeMode;
         
-        // Update seed for consistent RNG (pass true for restart)
-        updateSeed(true);
-
         PlayLayer::resetLevel();
-
-        // Setup the new recording from the start
-        if (mgr->state == RECORD && mgr->currentReplay) {
-            mgr->currentReplay->levelInfo.id = m_level->m_levelID;
-            mgr->currentReplay->addInput(m_gameState.m_currentProgress, static_cast<int>(PlayerButton::Jump), false, false);
-            m_player1->m_isDashing = false;
-
-            if (m_gameState.m_isDualMode && m_levelSettings->m_twoPlayerMode) {
-                mgr->currentReplay->addInput(m_gameState.m_currentProgress, static_cast<int>(PlayerButton::Jump), false, false);
-                m_player2->m_isDashing = false;
-            }
+        
+        // If NOT in practice mode and recording, clear all inputs (fresh start)
+        if (!inPractice && mgr->state == RECORD && mgr->currentReplay) {
+            mgr->currentReplay->inputs.clear();
         }
+        // Note: In practice mode, input purging is handled by practicemode.cpp
     }
 
     void levelComplete() {
         ToastyReplay* mgr = ToastyReplay::get();
         mgr->safeMode = false;
+        
+        // On level complete, update the replay name
         if (mgr->state == RECORD && mgr->currentReplay) {
-            bool hasClicks = false;
-            for (auto& input : mgr->currentReplay->inputs) {
-                if (input.down) {
-                    hasClicks = true;
-                    break;
-                }
-            }
-
-            if (hasClicks) {
-                mgr->currentReplay->name = fmt::format("{} - 100%", mgr->currentReplay->levelInfo.name);
-                if (mgr->lastUnsavedReplay) delete mgr->lastUnsavedReplay;
-                mgr->lastUnsavedReplay = mgr->currentReplay;
-                mgr->currentReplay = nullptr;
-            } else {
-                delete mgr->currentReplay;
-                mgr->currentReplay = nullptr;
-            }
-            mgr->state = NONE;  // Reset recording state to prevent UI glitch
+            mgr->currentReplay->name = fmt::format("{} - 100%", mgr->currentReplay->levelInfo.name);
         }
+        
         PlayLayer::levelComplete();
     }
 
@@ -144,67 +107,38 @@ class $modify(PlayLayer) {
         ToastyReplay* mgr = ToastyReplay::get();
         
         if (mgr->noclip) {
-            // Track noclip deaths for accuracy
             mgr->noclipDeaths++;
             
-            // Check if accuracy limit is enabled and if we're below the threshold
             if (mgr->noclipAccuracyEnabled && mgr->noclipAccuracyLimit > 0.0f && mgr->noclipTotalFrames > 0) {
                 float accuracy = 100.0f * (1.0f - (float)mgr->noclipDeaths / (float)mgr->noclipTotalFrames);
                 if (accuracy < mgr->noclipAccuracyLimit) {
-                    // Accuracy too low, actually kill the player
-                    // Reset accuracy for next attempt
                     mgr->noclipDeaths = 0;
                     mgr->noclipTotalFrames = 0;
                     
-                    mgr->noclip = false; // Temporarily disable noclip
+                    mgr->noclip = false;
                     PlayLayer::destroyPlayer(p0, p1);
-                    mgr->noclip = true; // Re-enable noclip
+                    mgr->noclip = true;
                     return;
                 }
             }
             return;
         }
         
-        // Reset noclip accuracy when player actually dies (without noclip)
         mgr->noclipDeaths = 0;
         mgr->noclipTotalFrames = 0;
-        
-        if (mgr->state == RECORD && mgr->currentReplay) {
-            bool hasClicks = false;
-            for (auto& input : mgr->currentReplay->inputs) {
-                if (input.down) {
-                    hasClicks = true;
-                    break;
-                }
-            }
-
-            if (hasClicks) {
-                int percent = this->getCurrentPercentInt();
-                mgr->currentReplay->name = fmt::format("{} - {}%", mgr->currentReplay->levelInfo.name, percent);
-                if (mgr->lastUnsavedReplay) delete mgr->lastUnsavedReplay;
-                mgr->lastUnsavedReplay = mgr->currentReplay;
-                mgr->currentReplay = nullptr;
-                mgr->state = NONE;
-            }
-            // If no clicks, do nothing - let resetLevel handle clearing inputs
-            // Recording state stays active, replay stays active
-        }
 
         PlayLayer::destroyPlayer(p0, p1);
     }
 
-};
-
-class $modify(MenuLayer) {
-    void onExit() {
-        ToastyReplay::get()->clearUnsavedReplays();
-        MenuLayer::onExit();
-    }
-};
-
-class $modify(LevelSelectLayer) {
-    void onExit() {
-        ToastyReplay::get()->clearUnsavedReplays();
-        LevelSelectLayer::onExit();
+    void onQuit() {
+        ToastyReplay* mgr = ToastyReplay::get();
+        
+        if (mgr->state == RECORD && mgr->currentReplay) {
+            delete mgr->currentReplay;
+            mgr->currentReplay = nullptr;
+            mgr->state = NONE;
+        }
+        
+        PlayLayer::onQuit();
     }
 };

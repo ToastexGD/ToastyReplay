@@ -37,14 +37,15 @@ class $modify(ToastyKeyboardDispatcher, CCKeyboardDispatcher) {
                     }
                 }
             }
-            
-            // C key - advance one frame (only in PlayLayer with frame advance enabled)
-            if (key == enumKeyCodes::KEY_C) {
-                auto pl = PlayLayer::get();
-                ToastyReplay* mgr = ToastyReplay::get();
-                if (pl && mgr && mgr->frameAdvance) {
-                    mgr->stepFrame = true;
-                }
+        }
+        
+        // C key - advance one frame (only in PlayLayer with frame advance enabled)
+        // Allow both initial press AND repeat for continuous frame stepping
+        if (down && key == enumKeyCodes::KEY_C) {
+            auto pl = PlayLayer::get();
+            ToastyReplay* mgr = ToastyReplay::get();
+            if (pl && mgr && mgr->frameAdvance) {
+                mgr->stepFrame = true;
             }
         }
         

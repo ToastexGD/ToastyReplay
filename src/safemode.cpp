@@ -18,8 +18,14 @@ class $modify(SafeModePlayLayer, PlayLayer) {
         if (mgr->safeMode)
             m_isTestMode = true;
 
-        if (m_isPracticeMode)
+        // Don't reset safeMode in practice - let the full run complete
+        // safeMode should only be reset on actual level completion outside practice
+        if (m_isPracticeMode) {
+            // In practice mode, we still want to mark as safe but preserve for full run later
+            // The safeMode flag will be properly reset when actually completing outside practice
+        } else {
             mgr->safeMode = false;
+        }
 
         PlayLayer::levelComplete();
 

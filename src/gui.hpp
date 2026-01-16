@@ -11,7 +11,8 @@ public:
     ImFont* vl_font = nullptr;
 
 private:
-    char tempReplayName[30];
+    char tempReplayName[256] = {0};
+    bool tempReplayNameInitialized = false;  // Track if we need to initialize the name buffer
     
 public:
     static auto* get() {
