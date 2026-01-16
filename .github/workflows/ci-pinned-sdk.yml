@@ -2,7 +2,7 @@ git add .github/workflows/ci-pinned-sdk.yml README.mdname: CI (Pinned Geode SDK 
 
 on:
   push:
-    branches: [ main, '**' ]  # Add '**' to run on all branches
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -28,9 +28,9 @@ jobs:
       - name: Use pinned Geode SDK and build
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: "4.10.0"  # Changed from 3.8.1
+          sdk: "4.10.0"
           bindings: geode-sdk/bindings
-          bindings-ref: main  # Keep as main to avoid fetch issues
+          bindings-ref: main  # Ensure this is "main", not "v3.8.1"
           targets: ${{ matrix.target }}
           # optionals:
           # extra-cmake-args: "-DCMAKE_BUILD_TYPE=Release"
