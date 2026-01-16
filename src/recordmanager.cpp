@@ -31,7 +31,7 @@ void updateSeed(bool isRestart = false) {
         }
 
 #ifdef GEODE_IS_WINDOWS
-        *(uintptr_t*)((char*)geode::base::get() + seedAddr) = finalSeed;
+        *(uintptr_t*)((char*)geode::base::get() + seedAddr) = finalSeed;  // Reverted to get()
 #else
         GameToolbox::fast_srand(finalSeed);
 #endif
@@ -40,7 +40,7 @@ void updateSeed(bool isRestart = false) {
     // Store seed when recording starts/restarts
     if (isRestart && mgr->state == RECORD) {
 #ifdef GEODE_IS_WINDOWS
-        mgr->macroSeed = *(uintptr_t*)((char*)geode::base::get() + seedAddr);
+        mgr->macroSeed = *(uintptr_t*)((char*)geode::base::get() + seedAddr);  // Reverted to get()
 #else
         mgr->macroSeed = 0;
 #endif

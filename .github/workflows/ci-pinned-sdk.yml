@@ -1,4 +1,4 @@
-git add .github/workflows/ci-pinned-sdk.yml README.mdname: CI (Pinned Geode SDK 3.8.1)
+git add .github/workflows/ci-pinned-sdk.yml README.mdname: CI (Pinned Geode SDK 4.10.0)
 
 on:
   push:
@@ -28,9 +28,9 @@ jobs:
       - name: Use pinned Geode SDK and build
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: "3.8.1"
+          sdk: "4.10.0"  # Changed from 3.8.1
           bindings: geode-sdk/bindings
-          bindings-ref: main  # Change to "main" since v3.8.1 branch doesn't exist
+          bindings-ref: main  # Keep as main to avoid fetch issues
           targets: ${{ matrix.target }}
           # optionals:
           # extra-cmake-args: "-DCMAKE_BUILD_TYPE=Release"
