@@ -30,7 +30,7 @@ jobs:
         with:
           sdk: "4.10.0"
           bindings: geode-sdk/bindings
-          bindings-ref: main
+          bindings-ref: v4.10.0  # Changed from main to v4.10.0
           targets: ${{ matrix.target }}
           # optionals:
           # extra-cmake-args: "-DCMAKE_BUILD_TYPE=Release"
