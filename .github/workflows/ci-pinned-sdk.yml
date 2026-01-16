@@ -29,6 +29,8 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: "3.8.1"
+          bindings: geode-sdk/bindings
+          bindings-ref: v3.8.1  # Add this to pin bindings to match SDK
           targets: ${{ matrix.target }}
           # optionals:
           # extra-cmake-args: "-DCMAKE_BUILD_TYPE=Release"
