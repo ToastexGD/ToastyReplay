@@ -20,8 +20,8 @@ jobs:
         with:
           sdk: main
           bindings: geode-sdk/bindings
-          bindings-ref: 4.10.0
-          targets: Win64
+          bindings-ref: v4.10.0
+          target: Win64
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
