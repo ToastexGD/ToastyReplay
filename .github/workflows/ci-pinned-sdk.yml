@@ -22,3 +22,9 @@ jobs:
           bindings: geode-sdk/bindings
           bindings-ref: 4.10.0
           targets: Win64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: toastyreplay-geode
+          path: build/*.geode
