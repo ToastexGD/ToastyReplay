@@ -34,4 +34,4 @@ Extended information
 https://discord.gg/JWkVm7cUhH
 https://github.com/ToastexGD/ToastyReplay/issues
 
-Thanks everyone!
+Thanks everyone! <3
