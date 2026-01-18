@@ -4,14 +4,15 @@
 #include <Geode/Bindings.hpp>
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 using namespace geode::prelude;
 
-enum zState {
+enum RecordingState {
     NONE, RECORD, PLAYBACK
 };
 
-enum zError {
+enum ErrorCode {
     ERROR_NONE,
     KEY_NOT_FOUND_ERROR,
     KEY_INVALID_ERROR,
@@ -23,8 +24,8 @@ enum zError {
 
 class ToastyReplay {
 public:
-    zState state = NONE;
-    zError error = ERROR_NONE;
+    RecordingState state = NONE;
+    ErrorCode error = ERROR_NONE;
 
     bool fmodified = false;
 
@@ -60,7 +61,31 @@ public:
     
     double speed = 1;
     double tps = 240.f;
-    zReplay* currentReplay = nullptr;
+    ReplayData* currentReplay = nullptr;
+
+    std::unordered_map<CheckpointObject*, CheckpointData> checkpoints;
+    int previousFrame = 0;
+    int respawnFrame = -1;
+    size_t playbackIndex = 0;
+    size_t frameFixIndex = 0;
+    bool ignoreRecordAction = false;
+    bool restart = false;
+    bool firstAttempt = false;
+    bool frameFixes = false;
+    bool inputFixes = false;
+    int frameFixesLimit = 240;
+    int ignoreFrame = -1;
+    int ignoreJumpButton = -1;
+    int delayedFrameReleaseMain[2] = { -1, -1 };
+    int delayedFrameInput[2] = { -1, -1 };
+    int delayedFrameRelease[2][2] = { { -1, -1 }, { -1, -1 } };
+    bool heldButtons[6] = { false, false, false, false, false, false };
+    bool wasHolding[6] = { false, false, false, false, false, false };
+    bool addSideHoldingMembers[2] = { false, false };
+    bool ignoreStopDashing[2] = { false, false };
+    bool creatingTrajectory = false;
+    int currentSession = 0;
+    int lastAutoSaveFrame = 0;
 
     std::vector<std::string> savedReplays;
     
@@ -90,7 +115,7 @@ public:
 
     void createNewReplay(GJGameLevel* level) {
         if (currentReplay) delete currentReplay;
-        currentReplay = new zReplay();
+        currentReplay = new ReplayData();
         if (level) {
             currentReplay->levelInfo.id = level->m_levelID;
             currentReplay->levelInfo.name = level->m_levelName;
@@ -101,9 +126,13 @@ public:
 
     void startPlayback() {
         if (!currentReplay || currentReplay->inputs.empty()) return;
-        
+
         state = PLAYBACK;
-        
+        playbackIndex = 0;
+        frameFixIndex = 0;
+        firstAttempt = true;
+        respawnFrame = -1;
+
         PlayLayer* pl = PlayLayer::get();
         if (pl) {
             if (pl->m_isPracticeMode) {

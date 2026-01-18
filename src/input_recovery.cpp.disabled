@@ -1,0 +1,154 @@
+#include "practice_fixes.hpp"
+
+static bool flipControls() {
+    PlayLayer* pl = PlayLayer::get();
+    if (!pl) return GameManager::get()->getGameVariable("0010");
+
+    return pl->m_levelSettings->m_platformerMode ? false : GameManager::get()->getGameVariable("0010");
+}
+
+void InputPracticeFixes::applyFixes(PlayLayer* pl, PlayerStateData p1Data, PlayerStateData p2Data, int frame) {
+    if (!pl) return;
+
+    auto* mgr = ToastyReplay::get();
+    bool twoPlayers = pl->m_levelSettings->m_twoPlayerMode;
+
+    eraseActions(frame);
+
+    std::vector<button> foundButtons = findButtons();
+
+    std::vector<int> notFoundButtons = fixInputs(foundButtons, pl, p1Data, p2Data, frame);
+    for (auto& it : notFoundButtons) {
+        if ((mgr->heldButtons[it] && twoPlayers) || ((mgr->heldButtons[it] || mgr->heldButtons[it + (it >= 3 ? -3 : 3)]) && !twoPlayers)) {
+            if (it == 0 || it == 3)
+                mgr->delayedFrameInput[static_cast<int>(it == 3 && twoPlayers)] = frame + 2;
+            else {
+                mgr->currentReplay->inputs.emplace_back(frame, indexButton[it], !(it > 2), true);
+            }
+        }
+    }
+}
+
+void InputPracticeFixes::eraseActions(int frame) {
+    auto* mgr = ToastyReplay::get();
+
+    auto& inputs = mgr->currentReplay->inputs;
+
+    if (!inputs.empty()) {
+        while (inputs.back().frame >= frame && !inputs.empty())
+            inputs.pop_back();
+    }
+
+    auto& frameFixes = mgr->currentReplay->frameFixes;
+
+    if (frameFixes.empty()) return;
+
+    while (frameFixes.back().frame >= frame && !frameFixes.empty())
+        frameFixes.pop_back();
+}
+
+std::vector<button> InputPracticeFixes::findButtons() {
+    auto* mgr = ToastyReplay::get();
+    std::vector<button> result;
+
+    for (auto it = mgr->currentReplay->inputs.rbegin(); it != mgr->currentReplay->inputs.rend(); ++it) {
+        bool breakIteration = false;
+        for (auto& el : result) {
+            if (el.button == it->button && el.player2 == it->player2) {
+                breakIteration = true;
+                break;
+            }
+        }
+        if (breakIteration) continue;
+
+        result.push_back({ it->button, it->player2, it->down });
+        if (result.size() >= 6) break;
+    }
+    return result;
+}
+
+std::vector<int> InputPracticeFixes::fixInputs(std::vector<button> foundButtons, PlayLayer* pl, PlayerStateData p1Data, PlayerStateData p2Data, int frame) {
+    auto* mgr = ToastyReplay::get();
+
+    bool twoPlayers = pl->m_levelSettings->m_twoPlayerMode;
+    std::vector<int> notFoundButtons;
+
+    if (twoPlayers)
+        notFoundButtons = { 0, 1, 2, 3, 4, 5 };
+    else
+        notFoundButtons = { 0, 1, 2 };
+
+    for (auto& it : foundButtons) {
+        bool player2 = twoPlayers ? (flipControls() ? it.player2 : !it.player2) : false;
+
+        int btnIndex = twoPlayers ? (it.button - 1 + (3 * static_cast<int>(player2))) : (it.button - 1);
+        bool jumpBtn = btnIndex == 0 || btnIndex == 3;
+
+        if (it.down && jumpBtn && (p1Data.m_isRobot || p2Data.m_isRobot)) {
+            mgr->heldButtons[0] = false;
+            mgr->heldButtons[3] = false;
+        }
+
+        if ((p1Data.m_isDashing || p2Data.m_isDashing) && jumpBtn) {
+            mgr->heldButtons[0] = false;
+            mgr->heldButtons[3] = false;
+        }
+
+        if ((p1Data.m_currentSlope2 || p2Data.m_currentSlope2) && pl->m_levelSettings->m_platformerMode) {
+            mgr->heldButtons[1] = false;
+            mgr->heldButtons[2] = false;
+            mgr->heldButtons[4] = false;
+            mgr->heldButtons[5] = false;
+
+            mgr->ignoreFrame = frame + 3;
+        }
+
+        if (!twoPlayers) {
+            if ((mgr->heldButtons[1] || mgr->heldButtons[4]) && (mgr->heldButtons[2] || mgr->heldButtons[5])) {
+                mgr->heldButtons[1] = false;
+                mgr->heldButtons[4] = false;
+            }
+        }
+        else {
+            if (mgr->heldButtons[1] && mgr->heldButtons[2])
+                mgr->heldButtons[1] = false;
+
+            if (mgr->heldButtons[4] && mgr->heldButtons[5])
+                mgr->heldButtons[4] = false;
+        }
+
+        bool holdingButton = ((mgr->heldButtons[btnIndex] && twoPlayers) || (!twoPlayers && (mgr->heldButtons[btnIndex] || mgr->heldButtons[btnIndex + 3])));
+
+        if (!it.down && holdingButton) {
+            if (btnIndex != 0 && btnIndex != 3) {
+                mgr->currentReplay->inputs.emplace_back(frame, it.button, player2, true);
+            }
+            else
+                mgr->delayedFrameInput[static_cast<int>(player2)] = frame + 2;
+        }
+        else if (it.down && holdingButton && (btnIndex == 0 || btnIndex == 3))
+            mgr->delayedFrameInput[static_cast<int>(player2)] = frame + 2;
+
+        if (it.down && !holdingButton) {
+            if (btnIndex == 0 || btnIndex == 3)
+                mgr->delayedFrameReleaseMain[static_cast<int>(player2)] = frame + 2;
+            else {
+                bool rightKey = static_cast<bool>(btnIndex > 3 ? btnIndex - 4 : btnIndex - 1);
+                if (mgr->heldButtons[btnIndex + (rightKey ? -1 : 1)]) {
+                    mgr->currentReplay->inputs.emplace_back(frame, it.button, player2, false);
+                }
+                else {
+                    mgr->delayedFrameRelease[static_cast<int>(player2)][static_cast<int>(rightKey)] = frame + 2;
+                    mgr->addSideHoldingMembers[static_cast<int>(player2)] = true;
+                }
+            }
+        }
+
+        for (int i = 0; i < notFoundButtons.size(); i++) {
+            if (notFoundButtons[i] == btnIndex)
+                notFoundButtons.erase(notFoundButtons.begin() + i);
+        }
+    }
+
+    return notFoundButtons;
+}

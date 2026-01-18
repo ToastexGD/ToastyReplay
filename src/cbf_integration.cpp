@@ -10,7 +10,6 @@ class $modify(PlayLayer) {
 
         if (cbf) {
             cbf->setSettingValue<bool>("soft-toggle", ToastyReplay::get()->state != NONE);
-            GUI::get()->showCBFMessage = true;
         }
 
         PlayLayer::resetLevel();

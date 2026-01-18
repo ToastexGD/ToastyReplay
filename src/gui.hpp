@@ -19,9 +19,6 @@ public:
         return instance;
     }
 
-    bool showCBFMessage = false;
-    bool shownCBFMessage = false;
-    
     bool visible = false;
     bool lastVisible = false;
     bool key = false;

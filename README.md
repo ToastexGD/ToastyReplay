@@ -10,79 +10,28 @@
 
 ---
 
-**Geometry Dash's Most Accurate Replay Bot**
+### Geometry Dash's Most accurate Replay bot.
+- Replay any level regardless of RNG or FPS at a frame perfect level!
 
-Experience frame-perfect recording and playback with the most precise replay system available for Geometry Dash.
+Key Mechanics 
+--
+**Replay Menu**
+* Replay any level that is recorded using the gdr and other macro formats.
 
-*Inspired by XDBot and y/zbot functionalities.*
----
+* Access to **Frame Replacements** which records the exact physics of every frame in the recording. This is able to create 100% accurate replays.
 
-##  Key Features
+**Noclip (with accuracy)**
 
-### 🎥 Advanced Recording System
-- **Frame-perfect input capture** - Every click, hold, and release recorded with 100% Accuracy!
-- **Automatic session recording** - Your runs are captured seamlessly in the background.
-- **Lightweight performance** - Minimal impact on gameplay, designed for a seamless experience.
+* Noclip accuracy now has limits and decimals! Very easy to use.
 
-### ▶️ Replay Playback
-- **Flawless reproduction** - Watch your runs exactly as you played them.
-- **Macro-style accuracy** - Perfect for practice, showcasing, and analysis with __'trajectory support'__ (soon)
-- **Smooth playback controls** - Easy-to-use interface for managing your replays!
+Extended information
+--
 
-### 🎲 Random Seed Integration
-- **RNG consistency** - Replays maintain the exact same random seed as the original run!
-- **True accuracy** - Ensures objects with random behavior replay identically.
-- **Perfect for Challenge levels** - Reproducible runs for levels with randomized elements!
+* ToastyReplay is inspired by zBot and it's functionalities, all credit goes to Figment and zBot.
 
-### ⚙️ Frame Rate Optimization
-- **Adaptive frame handling** - Works seamlessly across different refresh rates!
-- **Recommended: 60 FPS to 360 FPS** - For best replays (Different FPS Values soon!)
-- **Physics-accurate timing** - Make sure to remove CBF or TPS Bypass before using! __(Yes frame extrapolation too)__
+* Monthly updates will be added to inprove customization, add features, and most inportantly squash bugs! If you find any bugs please report them in my discord. or in my issues page on the ToastyReplay Repository.
 
----
+https://discord.gg/JWkVm7cUhH
+https://github.com/ToastexGD/ToastyReplay/issues
 
-##  Beta Status
-
-**ToastyReplay is currently in BETA**
-
-This means im super busy, Yes I don't have time to update the about.me every day, so this will take time, months.
-- 📅 **Bi-monthly updates** - Regular feature additions and improvements
-- 🐛 **Active bug fixing** - Your feedback helps make this mod better
-- 🔄 **Continuous optimization** - Performance and accuracy improvements with each release
-
-### Known Limitations
-- Some edge cases on 60fps may not replay perfectly, like clipping into block physics. (we're working on it!)
-- UI is functional but will be enhanced in future updates.
-- Large replay files may take time to load.
-
----
-
-##  Planned Features
-
-Coming in future updates:
--  Cloud replay storage and sharing
--  Replay analysis tools and statistics
--  Online replay leaderboards
-
----
-
-##  Support & Feedback
-
-Found a bug? Have a feature request? Want to contribute?
-
-Your feedback drives development! Reach out through:
-- GitHub Issues (https://github.com/ToastexGD/ToastyReplay/issues)
-- Direct message to me!: **toastexgd** (On discord)
-
----
-
-##  Version Information
-
-**Current Version:** v1.0.0-beta
-**Update Schedule:** Bi-monthly releases  
-
----
-
-**Thank you for using ToastyReplay!** 🍞✨
-
-Note: CI is pinned to Geode SDK v3.8.1. If you change "geode" in mod.json, update .github/workflows/ci-pinned-sdk.yml to match to keep CI builds working.
+Thanks everyone!

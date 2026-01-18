@@ -2,25 +2,24 @@
 #include <Geode/modify/FMODAudioEngine.hpp>
 using namespace geode::prelude;
 
-
-class $modify(FMODAudioEngine) {
+class $modify(AudioSpeedController, FMODAudioEngine) {
     struct Fields {
-        float pitch = 1.f;
+        float lastPitchValue = 1.f;
     };
 
     void update(float delta) {
         FMODAudioEngine::update(delta);
 
-        ToastyReplay* mgr = ToastyReplay::get();
-        float pitch = mgr->speedHackAudio ? mgr->speed : 1.f;
-        if (pitch == m_fields->pitch) return;
+        auto* replay = ToastyReplay::get();
+        float targetPitch = replay->speedHackAudio ? replay->speed : 1.f;
 
-        m_fields->pitch = pitch;
+        if (targetPitch == m_fields->lastPitchValue) return;
 
-        FMOD::ChannelGroup* group = nullptr;
+        m_fields->lastPitchValue = targetPitch;
 
-        if (m_system->getMasterChannelGroup(&group) == FMOD_OK) {
-            group->setPitch(pitch);
-        }
+        FMOD::ChannelGroup* masterGroup = nullptr;
+        if (m_system->getMasterChannelGroup(&masterGroup) != FMOD_OK) return;
+
+        masterGroup->setPitch(targetPitch);
     }
 };

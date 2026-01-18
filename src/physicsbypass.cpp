@@ -8,62 +8,58 @@ using namespace geode::prelude;
 class $modify(PlayLayer) {
     void update(float dt) {
         ToastyReplay::get()->handleKeybinds();
-
         PlayLayer::update(dt);
     }
 
     void updateVisibility(float dt) {
-        if (ToastyReplay::get()->disableRender) {
-            return;
+        auto* replay = ToastyReplay::get();
+        if (!replay->disableRender) {
+            PlayLayer::updateVisibility(dt);
         }
-        PlayLayer::updateVisibility(dt);
     }
 };
 
 class $modify(CCScheduler) {
     void update(float dt) {
-        ToastyReplay* mgr = ToastyReplay::get();
-        return CCScheduler::update(dt * mgr->speed);
+        auto* replay = ToastyReplay::get();
+        float adjustedDelta = dt * replay->speed;
+        return CCScheduler::update(adjustedDelta);
     }
 };
 
 class $modify(GJBaseGameLayer) {
     void update(float dt) {
-        ToastyReplay* mgr = ToastyReplay::get();
+        auto* replay = ToastyReplay::get();
 
-        mgr->extraTPS += dt;
-        float newDelta = 1.f / (mgr->tps);
+        float targetDelta = 1.0f / replay->tps;
+        replay->extraTPS += dt;
 
-        if (mgr->frameAdvance) {
-            mgr->extraTPS = 0;
-            if (!mgr->stepFrame) return;
-            mgr->stepFrame = false;
-            if (mgr->noclip) mgr->noclipTotalFrames++;
-            return GJBaseGameLayer::update(newDelta);
-        }
+        if (replay->frameAdvance) {
+            replay->extraTPS = 0.0f;
 
-        if (mgr->extraTPS >= newDelta) {
-            int times = std::floor(mgr->extraTPS / newDelta);
-            mgr->extraTPS -= newDelta * times;
-
-            mgr->disableRender = true;
-            for (int i = 0; i < times - 1; i++) {
-                if (mgr->noclip) mgr->noclipTotalFrames++;
-                GJBaseGameLayer::update(newDelta);
+            if (replay->stepFrame) {
+                replay->stepFrame = false;
+                if (replay->noclip) replay->noclipTotalFrames++;
+                GJBaseGameLayer::update(targetDelta);
             }
-
-            mgr->disableRender = false;
-            if (mgr->noclip) mgr->noclipTotalFrames++;
-            return GJBaseGameLayer::update(newDelta);
+            return;
         }
+
+        while (replay->extraTPS >= targetDelta) {
+            replay->extraTPS -= targetDelta;
+
+            bool shouldRender = (replay->extraTPS < targetDelta);
+            replay->disableRender = !shouldRender;
+
+            if (replay->noclip) replay->noclipTotalFrames++;
+            GJBaseGameLayer::update(targetDelta);
+        }
+
+        replay->disableRender = false;
     }
 
     float getModifiedDelta(float dt) {
         GJBaseGameLayer::getModifiedDelta(dt);
-
-        ToastyReplay* mgr = ToastyReplay::get();
-        double newDelta = 1.f / mgr->tps;
-
-        return newDelta;
+        return 1.0f / ToastyReplay::get()->tps;
     }
 };

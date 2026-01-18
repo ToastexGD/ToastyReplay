@@ -9,16 +9,17 @@
 #include <Geode/modify/EffectGameObject.hpp>
 #include <Geode/modify/HardStreak.hpp>
 
-ShowTrajectory& t = ShowTrajectory::get();
+ShowTrajectory& trajectory = ShowTrajectory::get();
 
 cocos2d::ccColor4F ccc4FFromccc3B(cocos2d::ccColor3B color) {
     return ccc4f(color.r / 255.f, color.g / 255.f, color.b / 255.f, 1.f);
 }
 
 void ShowTrajectory::trajectoryOff() {
-    if (t.trajectoryNode()) {
-        t.trajectoryNode()->clear();
-        t.trajectoryNode()->setVisible(false);
+    auto* node = trajectoryNode();
+    if (node) {
+        node->clear();
+        node->setVisible(false);
     }
 }
 
@@ -71,24 +72,25 @@ void ShowTrajectory::applyPlayerData(PlayerObject* player, PlayerData data) {
 }
 
 void ShowTrajectory::updateTrajectory(PlayLayer* pl) {
-    if (!t.fakePlayer1 || !t.fakePlayer2) return;
+    if (!trajectory.fakePlayer1 || !trajectory.fakePlayer2) return;
 
-    t.creatingTrajectory = true;
+    trajectory.creatingTrajectory = true;
 
-    t.trajectoryNode()->setVisible(true);
-    t.trajectoryNode()->clear();
+    auto* node = trajectory.trajectoryNode();
+    node->setVisible(true);
+    node->clear();
 
-    if (t.fakePlayer1 && pl->m_player1) {
-        createTrajectory(pl, t.fakePlayer1, pl->m_player1, true);
-        createTrajectory(pl, t.fakePlayer2, pl->m_player1, false);
+    if (trajectory.fakePlayer1 && pl->m_player1) {
+        createTrajectory(pl, trajectory.fakePlayer1, pl->m_player1, true);
+        createTrajectory(pl, trajectory.fakePlayer2, pl->m_player1, false);
     }
 
     if (pl->m_gameState.m_isDualMode && pl->m_player2) {
-        createTrajectory(pl, t.fakePlayer2, pl->m_player2, true);
-        createTrajectory(pl, t.fakePlayer1, pl->m_player2, false);
+        createTrajectory(pl, trajectory.fakePlayer2, pl->m_player2, true);
+        createTrajectory(pl, trajectory.fakePlayer1, pl->m_player2, false);
     }
 
-    t.creatingTrajectory = false;
+    trajectory.creatingTrajectory = false;
 }
 
 void ShowTrajectory::createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, PlayerObject* realPlayer, bool hold, bool inverted) {
@@ -97,7 +99,7 @@ void ShowTrajectory::createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, P
     PlayerData playerData = savePlayerData(realPlayer);
     applyPlayerData(fakePlayer, playerData);
 
-    t.cancelTrajectory = false;
+    trajectory.cancelTrajectory = false;
 
     int length = ToastyReplay::get()->trajectoryLength;
 
@@ -106,9 +108,9 @@ void ShowTrajectory::createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, P
 
         if (hold) {
             if (player2)
-                t.player2Trajectory[i] = prevPos;
+                trajectory.player2Trajectory[i] = prevPos;
             else
-                t.player1Trajectory[i] = prevPos;
+                trajectory.player1Trajectory[i] = prevPos;
         }
 
         fakePlayer->m_collisionLogTop->removeAllObjects();
@@ -116,11 +118,11 @@ void ShowTrajectory::createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, P
         fakePlayer->m_collisionLogLeft->removeAllObjects();
         fakePlayer->m_collisionLogRight->removeAllObjects();
 
-        pl->checkCollisions(fakePlayer, t.delta, false);
+        pl->checkCollisions(fakePlayer, trajectory.delta, false);
 
-        if (t.cancelTrajectory) {
+        if (trajectory.cancelTrajectory) {
             fakePlayer->updatePlayerScale();
-            drawPlayerHitbox(fakePlayer, t.trajectoryNode());
+            drawPlayerHitbox(fakePlayer, trajectory.trajectoryNode());
             break;
         }
 
@@ -130,21 +132,21 @@ void ShowTrajectory::createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, P
                 (inverted ? !realPlayer->m_isGoingLeft : realPlayer->m_isGoingLeft) ? fakePlayer->pushButton(static_cast<PlayerButton>(2)) : fakePlayer->pushButton(static_cast<PlayerButton>(3));
         }
 
-        fakePlayer->update(t.delta);
-        fakePlayer->updateRotation(t.delta);
+        fakePlayer->update(trajectory.delta);
+        fakePlayer->updateRotation(trajectory.delta);
         fakePlayer->updatePlayerScale();
 
-        cocos2d::ccColor4F color = hold ? t.color1 : t.color2;
+        cocos2d::ccColor4F color = hold ? trajectory.color1 : trajectory.color2;
 
         if (!hold) {
-            if ((player2 && t.player2Trajectory[i] == prevPos) || (!player2 && t.player1Trajectory[i] == prevPos))
-                color = t.color3;
+            if ((player2 && trajectory.player2Trajectory[i] == prevPos) || (!player2 && trajectory.player1Trajectory[i] == prevPos))
+                color = trajectory.color3;
         }
 
         if (i >= length - 40)
             color.a = (length - i) / 40.f;
 
-        t.trajectoryNode()->drawSegment(prevPos, fakePlayer->getPosition(), 0.6f, color);
+        trajectory.trajectoryNode()->drawSegment(prevPos, fakePlayer->getPosition(), 0.6f, color);
     }
 }
 
@@ -152,11 +154,11 @@ void ShowTrajectory::drawPlayerHitbox(PlayerObject* player, CCDrawNode* drawNode
     cocos2d::CCRect bigRect = player->GameObject::getObjectRect();
     cocos2d::CCRect smallRect = player->GameObject::getObjectRect(0.3, 0.3);
 
-    std::vector<cocos2d::CCPoint> vertices = ShowTrajectory::getVertices(player, bigRect, t.deathRotation);
-    drawNode->drawPolygon(&vertices[0], 4, ccc4f(t.color2.r, t.color2.g, t.color2.b, 0.2f), 0.5, t.color2);
+    std::vector<cocos2d::CCPoint> vertices = ShowTrajectory::getVertices(player, bigRect, trajectory.deathRotation);
+    drawNode->drawPolygon(&vertices[0], 4, ccc4f(trajectory.color2.r, trajectory.color2.g, trajectory.color2.b, 0.2f), 0.5, trajectory.color2);
 
-    vertices = ShowTrajectory::getVertices(player, smallRect, t.deathRotation);
-    drawNode->drawPolygon(&vertices[0], 4, ccc4f(t.color3.r, t.color3.g, t.color3.b, 0.2f), 0.35, ccc4f(t.color3.r, t.color3.g, t.color3.b, 0.55f));
+    vertices = ShowTrajectory::getVertices(player, smallRect, trajectory.deathRotation);
+    drawNode->drawPolygon(&vertices[0], 4, ccc4f(trajectory.color3.r, trajectory.color3.g, trajectory.color3.b, 0.2f), 0.35, ccc4f(trajectory.color3.r, trajectory.color3.g, trajectory.color3.b, 0.55f));
 }
 
 std::vector<cocos2d::CCPoint> ShowTrajectory::getVertices(PlayerObject* player, cocos2d::CCRect rect, float rotation) {
@@ -265,7 +267,7 @@ class $modify(TrajectoryPlayLayer, PlayLayer) {
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
 
-        if (!t.trajectoryNode() || t.creatingTrajectory) return;
+        if (!trajectory.trajectoryNode() || trajectory.creatingTrajectory) return;
 
         if (ToastyReplay::get()->showTrajectory) {
             ShowTrajectory::updateTrajectory(this);
@@ -275,30 +277,30 @@ class $modify(TrajectoryPlayLayer, PlayLayer) {
     void setupHasCompleted() {
         PlayLayer::setupHasCompleted();
 
-        t.fakePlayer1 = nullptr;
-        t.fakePlayer2 = nullptr;
-        t.cancelTrajectory = false;
-        t.creatingTrajectory = false;
+        trajectory.fakePlayer1 = nullptr;
+        trajectory.fakePlayer2 = nullptr;
+        trajectory.cancelTrajectory = false;
+        trajectory.creatingTrajectory = false;
 
-        t.fakePlayer1 = PlayerObject::create(1, 1, this, this, true);
-        t.fakePlayer1->retain();
-        t.fakePlayer1->setPosition({ 0, 105 });
-        t.fakePlayer1->setVisible(false);
-        m_objectLayer->addChild(t.fakePlayer1);
+        trajectory.fakePlayer1 = PlayerObject::create(1, 1, this, this, true);
+        trajectory.fakePlayer1->retain();
+        trajectory.fakePlayer1->setPosition({ 0, 105 });
+        trajectory.fakePlayer1->setVisible(false);
+        m_objectLayer->addChild(trajectory.fakePlayer1);
 
-        t.fakePlayer2 = PlayerObject::create(1, 1, this, this, true);
-        t.fakePlayer2->retain();
-        t.fakePlayer2->setPosition({ 0, 105 });
-        t.fakePlayer2->setVisible(false);
-        m_objectLayer->addChild(t.fakePlayer2);
+        trajectory.fakePlayer2 = PlayerObject::create(1, 1, this, this, true);
+        trajectory.fakePlayer2->retain();
+        trajectory.fakePlayer2->setPosition({ 0, 105 });
+        trajectory.fakePlayer2->setVisible(false);
+        m_objectLayer->addChild(trajectory.fakePlayer2);
 
-        m_objectLayer->addChild(t.trajectoryNode(), 500);
+        m_objectLayer->addChild(trajectory.trajectoryNode(), 500);
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* gameObject) {
-        if (t.creatingTrajectory || (player == t.fakePlayer1 || player == t.fakePlayer2)) {
-            t.deathRotation = player->getRotation();
-            t.cancelTrajectory = true;
+        if (trajectory.creatingTrajectory || (player == trajectory.fakePlayer1 || player == trajectory.fakePlayer2)) {
+            trajectory.deathRotation = player->getRotation();
+            trajectory.cancelTrajectory = true;
             return;
         }
 
@@ -306,32 +308,32 @@ class $modify(TrajectoryPlayLayer, PlayLayer) {
     }
 
     void onQuit() {
-        if (t.trajectoryNode())
-            t.trajectoryNode()->clear();
+        if (trajectory.trajectoryNode())
+            trajectory.trajectoryNode()->clear();
 
-        t.fakePlayer1 = nullptr;
-        t.fakePlayer2 = nullptr;
-        t.cancelTrajectory = false;
-        t.creatingTrajectory = false;
+        trajectory.fakePlayer1 = nullptr;
+        trajectory.fakePlayer2 = nullptr;
+        trajectory.cancelTrajectory = false;
+        trajectory.creatingTrajectory = false;
 
         PlayLayer::onQuit();
     }
 
     void playEndAnimationToPos(cocos2d::CCPoint p0) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             PlayLayer::playEndAnimationToPos(p0);
     }
 };
 
 class $modify(TrajectoryPauseLayer, PauseLayer) {
     void goEdit() {
-        if (t.trajectoryNode())
-            t.trajectoryNode()->clear();
+        if (trajectory.trajectoryNode())
+            trajectory.trajectoryNode()->clear();
 
-        t.fakePlayer1 = nullptr;
-        t.fakePlayer2 = nullptr;
-        t.cancelTrajectory = false;
-        t.creatingTrajectory = false;
+        trajectory.fakePlayer1 = nullptr;
+        trajectory.fakePlayer2 = nullptr;
+        trajectory.cancelTrajectory = false;
+        trajectory.creatingTrajectory = false;
 
         PauseLayer::goEdit();
     }
@@ -339,7 +341,7 @@ class $modify(TrajectoryPauseLayer, PauseLayer) {
 
 class $modify(TrajectoryGJBaseGameLayer, GJBaseGameLayer) {
     void collisionCheckObjects(PlayerObject* p0, gd::vector<GameObject*>* objects, int p2, float p3) {
-        if (t.creatingTrajectory) {
+        if (trajectory.creatingTrajectory) {
             std::vector<GameObject*> disabledObjects;
 
             for (const auto& obj : *objects) {
@@ -372,7 +374,7 @@ class $modify(TrajectoryGJBaseGameLayer, GJBaseGameLayer) {
     }
 
     bool canBeActivatedByPlayer(PlayerObject* p0, EffectGameObject* p1) {
-        if (t.creatingTrajectory) {
+        if (trajectory.creatingTrajectory) {
             ShowTrajectory::handlePortal(p0, p1->m_objectID);
             return false;
         }
@@ -381,29 +383,29 @@ class $modify(TrajectoryGJBaseGameLayer, GJBaseGameLayer) {
     }
 
     void playerTouchedRing(PlayerObject* p0, RingObject* p1) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             GJBaseGameLayer::playerTouchedRing(p0, p1);
     }
 
     void playerTouchedTrigger(PlayerObject* p0, EffectGameObject* p1) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             GJBaseGameLayer::playerTouchedTrigger(p0, p1);
         else
             ShowTrajectory::handlePortal(p0, p1->m_objectID);
     }
 
     void activateSFXTrigger(SFXTriggerGameObject* p0) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             GJBaseGameLayer::activateSFXTrigger(p0);
     }
 
     void activateSongEditTrigger(SongTriggerGameObject* p0) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             GJBaseGameLayer::activateSongEditTrigger(p0);
     }
 
     void gameEventTriggered(GJGameEvent p0, int p1, int p2) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             GJBaseGameLayer::gameEventTriggered(p0, p1, p2);
     }
 };
@@ -412,42 +414,42 @@ class $modify(TrajectoryPlayerObject, PlayerObject) {
 
     void update(float dt) {
         PlayerObject::update(dt);
-        t.delta = dt;
+        trajectory.delta = dt;
     }
 
     void playSpiderDashEffect(cocos2d::CCPoint p0, cocos2d::CCPoint p1) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             PlayerObject::playSpiderDashEffect(p0, p1);
     }
 
     void incrementJumps() {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             PlayerObject::incrementJumps();
     }
 
     void ringJump(RingObject* p0, bool p1) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             PlayerObject::ringJump(p0, p1);
     }
 };
 
 class $modify(TrajectoryHardStreak, HardStreak) {
     void addPoint(cocos2d::CCPoint p0) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             HardStreak::addPoint(p0);
     }
 };
 
 class $modify(TrajectoryGameObject, GameObject) {
     void playShineEffect() {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             GameObject::playShineEffect();
     }
 };
 
 class $modify(TrajectoryEffectGameObject, EffectGameObject) {
     void triggerObject(GJBaseGameLayer* p0, int p1, const gd::vector<int>* p2) {
-        if (!t.creatingTrajectory)
+        if (!trajectory.creatingTrajectory)
             EffectGameObject::triggerObject(p0, p1, p2);
     }
 };

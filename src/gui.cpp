@@ -495,7 +495,7 @@ void GUI::renderMainPanel() {
                 if (ImGui::Selectable(replayName.c_str(), isSelected, 0, ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
                 
                     if (mgr->state != RECORD) {
-                        zReplay* rec = zReplay::fromFile(replayName);
+                        ReplayData* rec = ReplayData::fromFile(replayName);
                         if (rec) {
                             if (mgr->currentReplay) delete mgr->currentReplay;
                             mgr->currentReplay = rec;
@@ -533,13 +533,54 @@ void GUI::renderMainPanel() {
             }
         }
 
-        if (mgr->currentReplay && mgr->state != RECORD) {
+        if (mgr->currentReplay) {
             ImGui::NewLine();
             ImGui::Text("Loaded: %s", mgr->currentReplay->name.c_str());
             ImGui::Text("Inputs: %zu", mgr->currentReplay->inputs.size());
 
             if (mgr->state == PLAYBACK) {
                 ImGui::Checkbox("Ignore Manual Input", &mgr->ignoreManualInput);
+            }
+
+            if (mgr->state == RECORD || mgr->state == PLAYBACK) {
+                const char* accuracyModes[] = { "None", "Input Adjustments", "Frame Replacement" };
+                int currentMode = mgr->frameFixes ? 2 : (mgr->inputFixes ? 1 : 0);
+
+                ImGui::Text("Accuracy Mode:");
+                if (ImGui::BeginCombo("##AccuracyMode", accuracyModes[currentMode])) {
+                    if (ImGui::Selectable("None", currentMode == 0)) {
+                        mgr->frameFixes = false;
+                        mgr->inputFixes = false;
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("No position correction.");
+                    }
+
+                    if (ImGui::Selectable("Input Adjustments", currentMode == 1)) {
+                        mgr->frameFixes = false;
+                        mgr->inputFixes = true;
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Records position on each click. Efficient and accurate for cube/ball modes");
+                    }
+
+                    if (ImGui::Selectable("Frame Replacement", currentMode == 2)) {
+                        mgr->frameFixes = true;
+                        mgr->inputFixes = false;
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Records position continuously. Required for ship/wave and ufo modes");
+                    }
+
+                    ImGui::EndCombo();
+                }
+
+                if (mgr->frameFixes) {
+                    ImGui::SliderInt("Frame Replacement Rate", &mgr->frameFixesLimit, 30, 240);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Lower = Less Lag, Higher = More Accurate");
+                    }
+                }
             }
         }
 
@@ -629,22 +670,6 @@ void GUI::renderer() {
     if (ImGui::BeginPopupModal("Key Check Failed", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::Text("Your key is invalid or has been linked to a different computer.");
         ImGui::Text("Please enter a valid key or contact support.");
-        if (ImGui::Button("OK")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    if (showCBFMessage && !shownCBFMessage) {
-        shownCBFMessage = true;
-        ImGui::OpenPopup("CBF Detected!");
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(500, 140), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x / 2 - 250, ImGui::GetIO().DisplaySize.y / 2 - 70), ImGuiCond_Always);
-    if (ImGui::BeginPopupModal("CBF Detected!", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::Text("Click between frames has been detected!");
-        ImGui::Text("Even when disabled in options, playback may be affected.");
         if (ImGui::Button("OK")) {
             ImGui::CloseCurrentPopup();
         }

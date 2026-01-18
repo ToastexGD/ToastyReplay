@@ -10,11 +10,10 @@ file(GLOB SOURCES
 	src/gui.cpp
     src/keybinds.cpp
     src/physicsbypass.cpp
-    src/playbackmanager.cpp
-    src/recordmanager.cpp
+    src/replay_engine.cpp
+    src/checkpoint_system.cpp
     src/speedhackaudio.cpp
-    src/clickbetweenframescompat.cpp
-    src/practicemode.cpp
+    src/cbf_integration.cpp
     src/playsound.cpp
     src/trajectory.cpp
     src/safemode.cpp

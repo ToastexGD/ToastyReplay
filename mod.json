@@ -1,1 +1,18 @@
-{"geode":"4.10.0","version":"v1.0.0-beta.3","gd":{"win":"2.2074"},"id":"toastexgd.toastyreplay","name":"ToastyReplay","developer":"ToastexGD","description":"A replay mod for Geometry Dash","resources":{"files":["resources/*.ttf"]}}
+{
+	"geode": "4.10.0",
+	"version": "v1.0.0",
+	"gd": {
+		"win": "2.2074"
+	},
+	"id": "toastexgd.toastyreplay",
+	"name": "ToastyReplay",
+	"developer": "ToastexGD",
+	"description": "Frame perfect replay bot for Geode.",
+	"links": {
+		"source": "https://github.com/ToastexGD/ToastyReplay"
+	},
+	"resources": {
+		"files": ["resources/*.ttf"]
+	},
+	"tags": ["Gameplay", "Utility", "Cheat"]
+}
