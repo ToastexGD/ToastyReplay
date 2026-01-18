@@ -8,17 +8,7 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: Win64
-          - os: macos-latest
-            target: Mac64
-          - os: ubuntu-22.04
-            target: Linux64
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,4 +21,4 @@ jobs:
           sdk: main
           bindings: geode-sdk/bindings
           bindings-ref: 4.10.0
-          targets: ${{ matrix.target }}
+          targets: Win64
