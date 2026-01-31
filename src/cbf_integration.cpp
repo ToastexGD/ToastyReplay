@@ -4,12 +4,12 @@
 
 using namespace geode::prelude;
 
-class $modify(PlayLayer) {
+class $modify(CBFIntegrationLayer, PlayLayer) {
     void resetLevel() {
-        static Mod* cbf = geode::Loader::get()->getLoadedMod("syzzi.click_between_frames");
+        static Mod* cbfMod = geode::Loader::get()->getLoadedMod("syzzi.click_between_frames");
 
-        if (cbf) {
-            cbf->setSettingValue<bool>("soft-toggle", ToastyReplay::get()->state != NONE);
+        if (cbfMod) {
+            cbfMod->setSettingValue<bool>("soft-toggle", ReplayEngine::get()->engineMode != MODE_DISABLED);
         }
 
         PlayLayer::resetLevel();

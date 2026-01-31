@@ -1,6 +1,6 @@
 #include "show_trajectory.hpp"
-#include "../practice_fixes/practice_fixes.hpp"
-#include "../includes.hpp"
+#include "../checkpoint_handler.hpp"
+#include "../ToastyReplay.hpp"
 
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -10,102 +10,95 @@
 #include <Geode/modify/EffectGameObject.hpp>
 #include <Geode/modify/HardStreak.hpp>
 
-ShowTrajectory& t = ShowTrajectory::get();
+PathVisualizer& visualizer = PathVisualizer::get();
 
 $execute {
-    t.color1 = ccc4FFromccc3B(Mod::get()->getSavedValue<cocos2d::ccColor3B>("trajectory_color1", {0, 255, 0}));
-    t.color2 = ccc4FFromccc3B(Mod::get()->getSavedValue<cocos2d::ccColor3B>("trajectory_color2", {255, 0, 0}));
-    t.length = Mod::get()->getSavedValue<int>("trajectory_length", 240);
-    t.updateMergedColor();
+    visualizer.pressColor = ccc4FFromccc3B(Mod::get()->getSavedValue<cocos2d::ccColor3B>("trajectory_color1", {0, 255, 0}));
+    visualizer.releaseColorVal = ccc4FFromccc3B(Mod::get()->getSavedValue<cocos2d::ccColor3B>("trajectory_color2", {255, 0, 0}));
+    visualizer.frameCount = Mod::get()->getSavedValue<int>("trajectory_length", 240);
+    visualizer.refreshMergedColor();
 }
 
-void ShowTrajectory::trajectoryOff() {
-    if (t.trajectoryNode()) {
-        t.trajectoryNode()->clear();
-        t.trajectoryNode()->setVisible(false);
+void PathVisualizer::disable() {
+    if (visualizer.visualizerNode()) {
+        visualizer.visualizerNode()->clear();
+        visualizer.visualizerNode()->setVisible(false);
     }
 }
 
-bool ShowTrajectory::isGamemodePortal(int id) {
-    return gamemodePortalIDs.contains(id);
+bool PathVisualizer::isModePortal(int id) {
+    return modePortalIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::isGravityPortal(int id) {
-    return gravityPortalIDs.contains(id);
+bool PathVisualizer::isGravityFlip(int id) {
+    return gravityFlipIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::isSpeedPortal(int id) {
-    return speedPortalIDs.contains(id);
+bool PathVisualizer::isVelocityPortal(int id) {
+    return velocityPortalIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::isSizePortal(int id) {
-    return sizePortalIDs.contains(id);
+bool PathVisualizer::isScalePortal(int id) {
+    return scalePortalIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::isRing(int id) {
-    return ringIDs.contains(id);
+bool PathVisualizer::isJumpRing(int id) {
+    return jumpRingIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::isPad(int id) {
-    return padIDs.contains(id);
+bool PathVisualizer::isBouncePad(int id) {
+    return bouncePadIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::isDashOrb(int id) {
-    return dashOrbIDs.contains(id);
+bool PathVisualizer::isDashRing(int id) {
+    return dashRingIdentifiers.contains(id);
 }
 
-bool ShowTrajectory::shouldInteractWithObject(GameObject* obj) {
+bool PathVisualizer::shouldProcessObject(GameObject* obj) {
     if (!obj) return false;
-    
+
     int id = obj->m_objectID;
-    
-    // Allow portals
-    if (isGamemodePortal(id) || isGravityPortal(id) || isSpeedPortal(id) || isSizePortal(id))
+
+    if (isModePortal(id) || isGravityFlip(id) || isVelocityPortal(id) || isScalePortal(id))
         return true;
-    
-    // Allow rings and pads
-    if (isRing(id) || isPad(id))
+
+    if (isJumpRing(id) || isBouncePad(id))
         return true;
-    
-    // Allow collision objects (solids, slopes)
-    if (trajectoryObjectTypes.contains(static_cast<int>(obj->m_objectType)))
+
+    if (pathObjectCategories.contains(static_cast<int>(obj->m_objectType)))
         return true;
-    
+
     return false;
 }
 
-void ShowTrajectory::handlePortal(PlayerObject* player, GameObject* obj) {
+void PathVisualizer::processPortal(PlayerObject* player, GameObject* obj) {
     if (!obj || !player) return;
-    
+
     int id = obj->m_objectID;
-    
-    // Size portals
-    if (id == 101) { // Big
+
+    if (id == 101) {
         player->togglePlayerScale(true, true);
-    } else if (id == 99) { // Mini
+    } else if (id == 99) {
         player->togglePlayerScale(false, true);
     }
-    
-    // Speed portals
+
     else if (id == 200) player->m_playerSpeed = 0.7f;
     else if (id == 201) player->m_playerSpeed = 0.9f;
     else if (id == 202) player->m_playerSpeed = 1.1f;
     else if (id == 203) player->m_playerSpeed = 1.3f;
     else if (id == 1334) player->m_playerSpeed = 1.6f;
-    
-    // Gravity portals
-    else if (id == 10) { // Normal gravity
+
+    else if (id == 10) {
         if (player->m_isUpsideDown) {
             player->flipGravity(false, true);
         }
-    } else if (id == 11) { // Flipped gravity
+    } else if (id == 11) {
         if (!player->m_isUpsideDown) {
             player->flipGravity(true, true);
         }
     }
-    
-    // Gamemode portals
-    else if (id == 12) { // Cube
+
+    else if (id == 12) {
         player->toggleFlyMode(false, false);
         player->toggleBirdMode(false, false);
         player->toggleRollMode(false, false);
@@ -114,243 +107,222 @@ void ShowTrajectory::handlePortal(PlayerObject* player, GameObject* obj) {
         player->toggleSpiderMode(false, false);
         player->toggleSwingMode(false, false);
     }
-    else if (id == 13) { // Ship
+    else if (id == 13) {
         player->toggleFlyMode(true, true);
     }
-    else if (id == 47) { // Ball
+    else if (id == 47) {
         player->toggleRollMode(true, true);
     }
-    else if (id == 111) { // UFO
+    else if (id == 111) {
         player->toggleBirdMode(true, true);
     }
-    else if (id == 660) { // Wave
+    else if (id == 660) {
         player->toggleDartMode(true, true);
     }
-    else if (id == 745) { // Robot
+    else if (id == 745) {
         player->toggleRobotMode(true, true);
     }
-    else if (id == 1331) { // Spider
+    else if (id == 1331) {
         player->toggleSpiderMode(true, true);
     }
-    else if (id == 1933) { // Swing
+    else if (id == 1933) {
         player->toggleSwingMode(true, true);
     }
 }
 
-void ShowTrajectory::handleRing(PlayerObject* player, RingObject* ring, PlayLayer* pl) {
+void PathVisualizer::processRing(PlayerObject* player, RingObject* ring, PlayLayer* pl) {
     if (!ring || !player || !pl) return;
-    
+
     int id = ring->m_objectID;
-    
-    // Skip if already activated this trajectory
-    if (t.activatedObjects.contains(ring)) return;
-    t.activatedObjects.insert(ring);
-    
-    // Yellow ring
+
+    if (visualizer.triggeredObjects.contains(ring)) return;
+    visualizer.triggeredObjects.insert(ring);
+
     if (id == 36) {
         player->m_yVelocity = player->m_isUpsideDown ? -16.0 : 16.0;
     }
-    // Pink ring
     else if (id == 84) {
         player->m_yVelocity = player->m_isUpsideDown ? -12.0 : 12.0;
     }
-    // Red ring
     else if (id == 141) {
         player->m_yVelocity = player->m_isUpsideDown ? -20.0 : 20.0;
     }
-    // Green ring (gravity)
     else if (id == 1022) {
         player->flipGravity(!player->m_isUpsideDown, true);
         player->m_yVelocity = player->m_isUpsideDown ? -16.0 : 16.0;
     }
-    // Black ring (dash)
-    else if (id == 1330 || isDashOrb(id)) {
-        // Simplified dash handling - just give velocity boost
+    else if (id == 1330 || isDashRing(id)) {
         player->m_yVelocity = player->m_isUpsideDown ? -14.0 : 14.0;
     }
-    // Spider ring
     else if (id == 1704 && player->m_isSpider) {
         player->flipGravity(!player->m_isUpsideDown, true);
     }
 }
 
-void ShowTrajectory::handlePad(PlayerObject* player, GameObject* pad) {
+void PathVisualizer::processPad(PlayerObject* player, GameObject* pad) {
     if (!pad || !player) return;
-    
+
     int id = pad->m_objectID;
-    
-    // Skip if already activated this trajectory
-    if (t.activatedObjects.contains(pad)) return;
-    t.activatedObjects.insert(pad);
-    
-    // Yellow pad
+
+    if (visualizer.triggeredObjects.contains(pad)) return;
+    visualizer.triggeredObjects.insert(pad);
+
     if (id == 35) {
         player->m_yVelocity = player->m_isUpsideDown ? -15.0 : 15.0;
         player->m_isOnGround = false;
     }
-    // Pink pad
     else if (id == 67) {
         player->m_yVelocity = player->m_isUpsideDown ? -11.0 : 11.0;
         player->m_isOnGround = false;
     }
-    // Red pad
     else if (id == 140) {
         player->m_yVelocity = player->m_isUpsideDown ? -19.0 : 19.0;
         player->m_isOnGround = false;
     }
-    // Spider pad
     else if (id == 1332 && player->m_isSpider) {
         player->flipGravity(!player->m_isUpsideDown, true);
     }
 }
 
-void ShowTrajectory::updateTrajectory(PlayLayer* pl) {
-    if (!t.fakePlayer1 || !t.fakePlayer2) return;
+void PathVisualizer::refresh(PlayLayer* pl) {
+    if (!visualizer.shadowPlayer1 || !visualizer.shadowPlayer2) return;
 
-    auto& g = Global::get();
-    
-    g.safeMode = true;
-    t.creatingTrajectory = true;
-    g.creatingTrajectory = true;
-    t.activatedObjects.clear();
+    auto* engine = ReplayEngine::get();
 
-    t.trajectoryNode()->setVisible(true);
-    t.trajectoryNode()->clear();
+    engine->safeMode = true;
+    visualizer.buildingPath = true;
+    engine->creatingTrajectory = true;
+    visualizer.triggeredObjects.clear();
 
-    if (t.fakePlayer1 && pl->m_player1) {
-        createTrajectory(pl, t.fakePlayer1, pl->m_player1, true);
-        t.activatedObjects.clear();
-        createTrajectory(pl, t.fakePlayer2, pl->m_player1, false);
+    visualizer.visualizerNode()->setVisible(true);
+    visualizer.visualizerNode()->clear();
 
-        if (g.trajectoryBothSides) {
-            t.activatedObjects.clear();
-            createTrajectory(pl, t.fakePlayer1, pl->m_player1, true, true);
-            t.activatedObjects.clear();
-            createTrajectory(pl, t.fakePlayer2, pl->m_player1, false, true);
+    if (visualizer.shadowPlayer1 && pl->m_player1) {
+        buildPath(pl, visualizer.shadowPlayer1, pl->m_player1, true);
+        visualizer.triggeredObjects.clear();
+        buildPath(pl, visualizer.shadowPlayer2, pl->m_player1, false);
+
+        if (engine->trajectoryBothSides) {
+            visualizer.triggeredObjects.clear();
+            buildPath(pl, visualizer.shadowPlayer1, pl->m_player1, true, true);
+            visualizer.triggeredObjects.clear();
+            buildPath(pl, visualizer.shadowPlayer2, pl->m_player1, false, true);
         }
     }
 
     if (pl->m_gameState.m_isDualMode && pl->m_player2) {
-        t.activatedObjects.clear();
-        createTrajectory(pl, t.fakePlayer2, pl->m_player2, true);
-        t.activatedObjects.clear();
-        createTrajectory(pl, t.fakePlayer1, pl->m_player2, false);
+        visualizer.triggeredObjects.clear();
+        buildPath(pl, visualizer.shadowPlayer2, pl->m_player2, true);
+        visualizer.triggeredObjects.clear();
+        buildPath(pl, visualizer.shadowPlayer1, pl->m_player2, false);
 
-        if (g.trajectoryBothSides) {
-            t.activatedObjects.clear();
-            createTrajectory(pl, t.fakePlayer2, pl->m_player2, true, true);
-            t.activatedObjects.clear();
-            createTrajectory(pl, t.fakePlayer1, pl->m_player2, false, true);
+        if (engine->trajectoryBothSides) {
+            visualizer.triggeredObjects.clear();
+            buildPath(pl, visualizer.shadowPlayer2, pl->m_player2, true, true);
+            visualizer.triggeredObjects.clear();
+            buildPath(pl, visualizer.shadowPlayer1, pl->m_player2, false, true);
         }
     }
 
-    t.creatingTrajectory = false;
-    g.creatingTrajectory = false;
+    visualizer.buildingPath = false;
+    engine->creatingTrajectory = false;
 }
 
-void ShowTrajectory::createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, PlayerObject* realPlayer, bool hold, bool inverted) {
-    bool player2 = pl->m_player2 == realPlayer;
+void PathVisualizer::buildPath(PlayLayer* pl, PlayerObject* shadow, PlayerObject* actual, bool pressing, bool flipped) {
+    bool isSecondPlayer = pl->m_player2 == actual;
 
-    // Copy player state
-    PlayerData playerData = PlayerPracticeFixes::saveData(realPlayer);
-    PlayerPracticeFixes::applyData(fakePlayer, playerData, false, true);
+    PhysicsSnapshot playerData = PlayerStateRestorer::captureState(actual);
+    PlayerStateRestorer::restoreState(shadow, playerData, false, true);
 
-    t.cancelTrajectory = false;
+    visualizer.pathAborted = false;
 
-    for (int i = 0; i < t.length; i++) {
-        CCPoint prevPos = fakePlayer->getPosition();
+    for (int i = 0; i < visualizer.frameCount; i++) {
+        CCPoint prevPos = shadow->getPosition();
 
-        if (hold) {
-            if (player2)
-                t.player2Trajectory[i] = prevPos;
+        if (pressing) {
+            if (isSecondPlayer)
+                visualizer.p2Coords[i] = prevPos;
             else
-                t.player1Trajectory[i] = prevPos;
+                visualizer.p1Coords[i] = prevPos;
         }
 
-        // Clear collision logs
-        fakePlayer->m_collisionLogTop->removeAllObjects();
-        fakePlayer->m_collisionLogBottom->removeAllObjects();
-        fakePlayer->m_collisionLogLeft->removeAllObjects();
-        fakePlayer->m_collisionLogRight->removeAllObjects();
+        shadow->m_collisionLogTop->removeAllObjects();
+        shadow->m_collisionLogBottom->removeAllObjects();
+        shadow->m_collisionLogLeft->removeAllObjects();
+        shadow->m_collisionLogRight->removeAllObjects();
 
-        // Run collision check
-        pl->checkCollisions(fakePlayer, t.delta, false);
+        pl->checkCollisions(shadow, visualizer.frameDelta, false);
 
-        if (t.cancelTrajectory) {
-            fakePlayer->updatePlayerScale();
-            drawPlayerHitbox(fakePlayer, t.trajectoryNode());
+        if (visualizer.pathAborted) {
+            shadow->updatePlayerScale();
+            renderBounds(shadow, visualizer.visualizerNode());
             break;
         }
 
-        // Handle input on first frame
         if (i == 0) {
-            if (hold) {
-                fakePlayer->pushButton(static_cast<PlayerButton>(1));
+            if (pressing) {
+                shadow->pushButton(static_cast<PlayerButton>(1));
             } else {
-                fakePlayer->releaseButton(static_cast<PlayerButton>(1));
+                shadow->releaseButton(static_cast<PlayerButton>(1));
             }
-            
+
             if (pl->m_levelSettings->m_platformerMode) {
-                bool goingLeft = inverted ? !realPlayer->m_isGoingLeft : realPlayer->m_isGoingLeft;
+                bool goingLeft = flipped ? !actual->m_isGoingLeft : actual->m_isGoingLeft;
                 if (goingLeft) {
-                    fakePlayer->pushButton(static_cast<PlayerButton>(2));
+                    shadow->pushButton(static_cast<PlayerButton>(2));
                 } else {
-                    fakePlayer->pushButton(static_cast<PlayerButton>(3));
+                    shadow->pushButton(static_cast<PlayerButton>(3));
                 }
             }
         }
 
-        // Update player physics
-        fakePlayer->update(t.delta);
-        fakePlayer->updateRotation(t.delta);
-        fakePlayer->updatePlayerScale();
+        shadow->update(visualizer.frameDelta);
+        shadow->updateRotation(visualizer.frameDelta);
+        shadow->updatePlayerScale();
 
-        // Determine line color
-        cocos2d::ccColor4F color = hold ? t.color1 : t.color2;
+        cocos2d::ccColor4F lineColor = pressing ? visualizer.pressColor : visualizer.releaseColorVal;
 
-        if (!hold) {
-            CCPoint* compareArr = player2 ? t.player2Trajectory : t.player1Trajectory;
+        if (!pressing) {
+            CCPoint* compareArr = isSecondPlayer ? visualizer.p2Coords : visualizer.p1Coords;
             if (compareArr[i] == prevPos) {
-                color = t.color3;
+                lineColor = visualizer.mergedColor;
             }
         }
 
-        // Fade out near the end
-        if (i >= t.length - 40) {
-            color.a = static_cast<float>(t.length - i) / 40.f;
+        if (i >= visualizer.frameCount - 40) {
+            lineColor.a = static_cast<float>(visualizer.frameCount - i) / 40.f;
         }
 
-        t.trajectoryNode()->drawSegment(prevPos, fakePlayer->getPosition(), 0.6f, color);
+        visualizer.visualizerNode()->drawSegment(prevPos, shadow->getPosition(), 0.6f, lineColor);
     }
 }
 
-void ShowTrajectory::drawPlayerHitbox(PlayerObject* player, CCDrawNode* drawNode) {
+void PathVisualizer::renderBounds(PlayerObject* player, CCDrawNode* node) {
     cocos2d::CCRect bigRect = player->getObjectRect();
     cocos2d::CCRect smallRect = player->getObjectRect(0.3f, 0.3f);
 
-    std::vector<cocos2d::CCPoint> vertices = getVertices(player, bigRect, t.deathRotation);
-    drawNode->drawPolygon(&vertices[0], 4, ccc4f(t.color2.r, t.color2.g, t.color2.b, 0.2f), 0.5f, t.color2);
+    std::vector<cocos2d::CCPoint> vertices = computeVertices(player, bigRect, visualizer.deathAngle);
+    node->drawPolygon(&vertices[0], 4, ccc4f(visualizer.releaseColorVal.r, visualizer.releaseColorVal.g, visualizer.releaseColorVal.b, 0.2f), 0.5f, visualizer.releaseColorVal);
 
-    vertices = getVertices(player, smallRect, t.deathRotation);
-    drawNode->drawPolygon(&vertices[0], 4, ccc4f(t.color3.r, t.color3.g, t.color3.b, 0.2f), 0.35f, ccc4f(t.color3.r, t.color3.g, t.color3.b, 0.55f));
+    vertices = computeVertices(player, smallRect, visualizer.deathAngle);
+    node->drawPolygon(&vertices[0], 4, ccc4f(visualizer.mergedColor.r, visualizer.mergedColor.g, visualizer.mergedColor.b, 0.2f), 0.35f, ccc4f(visualizer.mergedColor.r, visualizer.mergedColor.g, visualizer.mergedColor.b, 0.55f));
 }
 
-std::vector<cocos2d::CCPoint> ShowTrajectory::getVertices(PlayerObject* player, cocos2d::CCRect rect, float rotation) {
+std::vector<cocos2d::CCPoint> PathVisualizer::computeVertices(PlayerObject* player, cocos2d::CCRect bounds, float angle) {
     std::vector<cocos2d::CCPoint> vertices = {
-        ccp(rect.getMinX(), rect.getMaxY()),
-        ccp(rect.getMaxX(), rect.getMaxY()),
-        ccp(rect.getMaxX(), rect.getMinY()),
-        ccp(rect.getMinX(), rect.getMinY())
+        ccp(bounds.getMinX(), bounds.getMaxY()),
+        ccp(bounds.getMaxX(), bounds.getMaxY()),
+        ccp(bounds.getMaxX(), bounds.getMinY()),
+        ccp(bounds.getMinX(), bounds.getMinY())
     };
 
     cocos2d::CCPoint center = ccp(
-        (rect.getMinX() + rect.getMaxX()) / 2.f,
-        (rect.getMinY() + rect.getMaxY()) / 2.f
+        (bounds.getMinX() + bounds.getMaxX()) / 2.f,
+        (bounds.getMinY() + bounds.getMaxY()) / 2.f
     );
 
-    float size = rect.getMaxX() - rect.getMinX();
+    float size = bounds.getMaxX() - bounds.getMinX();
 
-    // Adjust for hitbox scaling
     if ((static_cast<int>(size) == 18 || static_cast<int>(size) == 5) && player->getScale() == 1.f) {
         for (auto& vertex : vertices) {
             vertex.x = center.x + (vertex.x - center.x) / 0.6f;
@@ -358,7 +330,7 @@ std::vector<cocos2d::CCPoint> ShowTrajectory::getVertices(PlayerObject* player, 
         }
     }
 
-    if ((static_cast<int>(size) == 7 || static_cast<int>(size) == 30 || 
+    if ((static_cast<int>(size) == 7 || static_cast<int>(size) == 30 ||
          static_cast<int>(size) == 29 || static_cast<int>(size) == 9) && player->getScale() != 1.f) {
         for (auto& vertex : vertices) {
             vertex.x = center.x + (vertex.x - center.x) * 0.6f;
@@ -366,7 +338,6 @@ std::vector<cocos2d::CCPoint> ShowTrajectory::getVertices(PlayerObject* player, 
         }
     }
 
-    // Wave hitbox adjustment
     if (player->m_isDart) {
         for (auto& vertex : vertices) {
             vertex.x = center.x + (vertex.x - center.x) * 0.3f;
@@ -374,38 +345,37 @@ std::vector<cocos2d::CCPoint> ShowTrajectory::getVertices(PlayerObject* player, 
         }
     }
 
-    // Apply rotation
-    float angle = CC_DEGREES_TO_RADIANS(rotation * -1.f);
+    float radians = CC_DEGREES_TO_RADIANS(angle * -1.f);
     for (auto& vertex : vertices) {
         float x = vertex.x - center.x;
         float y = vertex.y - center.y;
 
-        vertex.x = center.x + (x * cos(angle)) - (y * sin(angle));
-        vertex.y = center.y + (x * sin(angle)) + (y * cos(angle));
+        vertex.x = center.x + (x * cos(radians)) - (y * sin(radians));
+        vertex.y = center.y + (x * sin(radians)) + (y * cos(radians));
     }
 
     return vertices;
 }
 
-void ShowTrajectory::updateMergedColor() {
+void PathVisualizer::refreshMergedColor() {
     cocos2d::ccColor4F newColor = {0.f, 0.f, 0.f, 1.f};
 
-    newColor.r = (color1.r + color2.r) / 2.f;
-    newColor.b = (color1.b + color2.b) / 2.f;
-    newColor.g = (color1.g + color2.g) / 2.f;
+    newColor.r = (pressColor.r + releaseColorVal.r) / 2.f;
+    newColor.b = (pressColor.b + releaseColorVal.b) / 2.f;
+    newColor.g = (pressColor.g + releaseColorVal.g) / 2.f;
 
     newColor.r = std::min(1.f, newColor.r + 0.45f);
     newColor.g = std::min(1.f, newColor.g + 0.45f);
     newColor.b = std::min(1.f, newColor.b + 0.45f);
 
-    color3 = newColor;
+    mergedColor = newColor;
 }
 
-cocos2d::CCDrawNode* ShowTrajectory::trajectoryNode() {
-    static TrajectoryNode* instance = nullptr;
+cocos2d::CCDrawNode* PathVisualizer::visualizerNode() {
+    static VisualizerNode* instance = nullptr;
 
     if (!instance) {
-        instance = TrajectoryNode::create();
+        instance = VisualizerNode::create();
         instance->retain();
 
         cocos2d::ccBlendFunc blendFunc;
@@ -417,47 +387,45 @@ cocos2d::CCDrawNode* ShowTrajectory::trajectoryNode() {
     return instance;
 }
 
-// Hooks
-
-class $modify(TrajectoryPlayLayer, PlayLayer) {
+class $modify(PathVisualizerPlayLayer, PlayLayer) {
 
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
 
-        if (!t.trajectoryNode() || t.creatingTrajectory) return;
+        if (!visualizer.visualizerNode() || visualizer.buildingPath) return;
 
-        if (Global::get().showTrajectory) {
-            ShowTrajectory::updateTrajectory(this);
+        if (ReplayEngine::get()->showTrajectory) {
+            PathVisualizer::refresh(this);
         }
     }
 
     void setupHasCompleted() {
         PlayLayer::setupHasCompleted();
 
-        t.fakePlayer1 = nullptr;
-        t.fakePlayer2 = nullptr;
-        t.cancelTrajectory = false;
-        t.creatingTrajectory = false;
+        visualizer.shadowPlayer1 = nullptr;
+        visualizer.shadowPlayer2 = nullptr;
+        visualizer.pathAborted = false;
+        visualizer.buildingPath = false;
 
-        t.fakePlayer1 = PlayerObject::create(1, 1, this, this, true);
-        t.fakePlayer1->retain();
-        t.fakePlayer1->setPosition({0, 105});
-        t.fakePlayer1->setVisible(false);
-        m_objectLayer->addChild(t.fakePlayer1);
+        visualizer.shadowPlayer1 = PlayerObject::create(1, 1, this, this, true);
+        visualizer.shadowPlayer1->retain();
+        visualizer.shadowPlayer1->setPosition({0, 105});
+        visualizer.shadowPlayer1->setVisible(false);
+        m_objectLayer->addChild(visualizer.shadowPlayer1);
 
-        t.fakePlayer2 = PlayerObject::create(1, 1, this, this, true);
-        t.fakePlayer2->retain();
-        t.fakePlayer2->setPosition({0, 105});
-        t.fakePlayer2->setVisible(false);
-        m_objectLayer->addChild(t.fakePlayer2);
+        visualizer.shadowPlayer2 = PlayerObject::create(1, 1, this, this, true);
+        visualizer.shadowPlayer2->retain();
+        visualizer.shadowPlayer2->setPosition({0, 105});
+        visualizer.shadowPlayer2->setVisible(false);
+        m_objectLayer->addChild(visualizer.shadowPlayer2);
 
-        m_objectLayer->addChild(t.trajectoryNode(), 500);
+        m_objectLayer->addChild(visualizer.visualizerNode(), 500);
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* gameObject) {
-        if (t.creatingTrajectory || player == t.fakePlayer1 || player == t.fakePlayer2) {
-            t.deathRotation = player->getRotation();
-            t.cancelTrajectory = true;
+        if (visualizer.buildingPath || player == visualizer.shadowPlayer1 || player == visualizer.shadowPlayer2) {
+            visualizer.deathAngle = player->getRotation();
+            visualizer.pathAborted = true;
             return;
         }
 
@@ -465,48 +433,47 @@ class $modify(TrajectoryPlayLayer, PlayLayer) {
     }
 
     void onQuit() {
-        if (t.trajectoryNode())
-            t.trajectoryNode()->clear();
+        if (visualizer.visualizerNode())
+            visualizer.visualizerNode()->clear();
 
-        t.fakePlayer1 = nullptr;
-        t.fakePlayer2 = nullptr;
-        t.cancelTrajectory = false;
-        t.creatingTrajectory = false;
+        visualizer.shadowPlayer1 = nullptr;
+        visualizer.shadowPlayer2 = nullptr;
+        visualizer.pathAborted = false;
+        visualizer.buildingPath = false;
 
         PlayLayer::onQuit();
     }
 
     void playEndAnimationToPos(cocos2d::CCPoint p0) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             PlayLayer::playEndAnimationToPos(p0);
     }
 };
 
-class $modify(TrajectoryPauseLayer, PauseLayer) {
+class $modify(PathVisualizerPauseLayer, PauseLayer) {
     void goEdit() {
-        if (t.trajectoryNode())
-            t.trajectoryNode()->clear();
+        if (visualizer.visualizerNode())
+            visualizer.visualizerNode()->clear();
 
-        t.fakePlayer1 = nullptr;
-        t.fakePlayer2 = nullptr;
-        t.cancelTrajectory = false;
-        t.creatingTrajectory = false;
+        visualizer.shadowPlayer1 = nullptr;
+        visualizer.shadowPlayer2 = nullptr;
+        visualizer.pathAborted = false;
+        visualizer.buildingPath = false;
 
         PauseLayer::goEdit();
     }
 };
 
-class $modify(TrajectoryBGL, GJBaseGameLayer) {
+class $modify(PathVisualizerBaseLayer, GJBaseGameLayer) {
 
     void collisionCheckObjects(PlayerObject* p0, gd::vector<GameObject*>* objects, int p2, float p3) {
-        if (t.creatingTrajectory) {
+        if (visualizer.buildingPath) {
             std::vector<GameObject*> disabledObjects;
 
             for (auto& obj : *objects) {
                 if (!obj) continue;
 
-                // Only disable objects that shouldn't be interacted with
-                if (!ShowTrajectory::shouldInteractWithObject(obj)) {
+                if (!PathVisualizer::shouldProcessObject(obj)) {
                     if (obj->m_isDisabled || obj->m_isDisabled2) continue;
 
                     disabledObjects.push_back(obj);
@@ -530,8 +497,8 @@ class $modify(TrajectoryBGL, GJBaseGameLayer) {
     }
 
     bool canBeActivatedByPlayer(PlayerObject* p0, EffectGameObject* p1) {
-        if (t.creatingTrajectory) {
-            ShowTrajectory::handlePortal(p0, p1);
+        if (visualizer.buildingPath) {
+            PathVisualizer::processPortal(p0, p1);
             return false;
         }
 
@@ -539,10 +506,9 @@ class $modify(TrajectoryBGL, GJBaseGameLayer) {
     }
 
     void playerTouchedRing(PlayerObject* p0, RingObject* p1) {
-        if (t.creatingTrajectory) {
-            // Handle ring in trajectory mode
+        if (visualizer.buildingPath) {
             if (auto pl = PlayLayer::get()) {
-                ShowTrajectory::handleRing(p0, p1, pl);
+                PathVisualizer::processRing(p0, p1, pl);
             }
             return;
         }
@@ -551,69 +517,69 @@ class $modify(TrajectoryBGL, GJBaseGameLayer) {
     }
 
     void playerTouchedTrigger(PlayerObject* p0, EffectGameObject* p1) {
-        if (!t.creatingTrajectory) {
+        if (!visualizer.buildingPath) {
             GJBaseGameLayer::playerTouchedTrigger(p0, p1);
         } else {
-            ShowTrajectory::handlePortal(p0, p1);
+            PathVisualizer::processPortal(p0, p1);
         }
     }
 
     void activateSFXTrigger(SFXTriggerGameObject* p0) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             GJBaseGameLayer::activateSFXTrigger(p0);
     }
 
     void activateSongEditTrigger(SongTriggerGameObject* p0) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             GJBaseGameLayer::activateSongEditTrigger(p0);
     }
 
     void gameEventTriggered(GJGameEvent p0, int p1, int p2) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             GJBaseGameLayer::gameEventTriggered(p0, p1, p2);
     }
 };
 
-class $modify(TrajectoryPlayerObject, PlayerObject) {
+class $modify(PathVisualizerPlayerObject, PlayerObject) {
 
     void update(float dt) {
         PlayerObject::update(dt);
-        t.delta = dt;
+        visualizer.frameDelta = dt;
     }
 
     void playSpiderDashEffect(cocos2d::CCPoint p0, cocos2d::CCPoint p1) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             PlayerObject::playSpiderDashEffect(p0, p1);
     }
 
     void incrementJumps() {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             PlayerObject::incrementJumps();
     }
 
     void ringJump(RingObject* p0, bool p1) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             PlayerObject::ringJump(p0, p1);
     }
 };
 
-class $modify(TrajectoryHardStreak, HardStreak) {
+class $modify(PathVisualizerHardStreak, HardStreak) {
     void addPoint(cocos2d::CCPoint p0) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             HardStreak::addPoint(p0);
     }
 };
 
-class $modify(TrajectoryGameObject, GameObject) {
+class $modify(PathVisualizerGameObject, GameObject) {
     void playShineEffect() {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             GameObject::playShineEffect();
     }
 };
 
-class $modify(TrajectoryEffectGameObject, EffectGameObject) {
+class $modify(PathVisualizerEffectObject, EffectGameObject) {
     void triggerObject(GJBaseGameLayer* p0, int p1, const gd::vector<int>* p2) {
-        if (!t.creatingTrajectory)
+        if (!visualizer.buildingPath)
             EffectGameObject::triggerObject(p0, p1, p2);
     }
 };

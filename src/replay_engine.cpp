@@ -2,18 +2,18 @@
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
-void updateSeed(bool isRestart = false);
+void refreshRngState(bool isRestart = false);
 
-static int getCurrentFrame() {
+static int computeCurrentTick() {
     PlayLayer* pl = PlayLayer::get();
     if (!pl) return 0;
 
-    auto* mgr = ToastyReplay::get();
-    int frame = static_cast<int>(pl->m_gameState.m_levelTime * mgr->tps);
-    frame++;
+    auto* engine = ReplayEngine::get();
+    int tick = static_cast<int>(pl->m_gameState.m_levelTime * engine->tickRate);
+    tick++;
 
-    if (frame < 0) return 0;
-    return frame;
+    if (tick < 0) return 0;
+    return tick;
 }
 
 static bool flipControls() {
@@ -23,14 +23,14 @@ static bool flipControls() {
     return pl->m_levelSettings->m_platformerMode ? false : GameManager::get()->getGameVariable("0010");
 }
 
-class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
+class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
   struct Fields {
     bool macroInput = false;
   };
 
   void processCommands(float dt) {
-    auto* mgr = ToastyReplay::get();
+    auto* engine = ReplayEngine::get();
 
     PlayLayer* pl = PlayLayer::get();
 
@@ -38,16 +38,16 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
       return GJBaseGameLayer::processCommands(dt);
     }
 
-    updateSeed();
+    refreshRngState();
 
-    if (mgr->state != NONE) {
+    if (engine->engineMode != MODE_DISABLED) {
 
-      if (!mgr->firstAttempt) {
+      if (!engine->initialRun) {
       }
 
-      int frame = getCurrentFrame();
-      if (frame > 2 && mgr->firstAttempt && mgr->currentReplay) {
-        mgr->firstAttempt = false;
+      int tick = computeCurrentTick();
+      if (tick > 2 && engine->initialRun && engine->activeMacro) {
+        engine->initialRun = false;
 
         if (m_levelSettings->m_platformerMode && !m_levelEndAnimationStarted)
           return pl->resetLevelFromStart();
@@ -55,62 +55,62 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
           return pl->resetLevel();
       }
 
-      if (mgr->previousFrame == frame && frame != 0 && mgr->currentReplay)
+      if (engine->lastTickIndex == tick && tick != 0 && engine->activeMacro)
         return GJBaseGameLayer::processCommands(dt);
 
     }
 
     GJBaseGameLayer::processCommands(dt);
 
-    if (mgr->state == NONE)
+    if (engine->engineMode == MODE_DISABLED)
       return;
 
-    int frame = getCurrentFrame();
-    mgr->previousFrame = frame;
+    int tick = computeCurrentTick();
+    engine->lastTickIndex = tick;
 
-    if (mgr->currentReplay && mgr->restart && !m_levelEndAnimationStarted) {
-      if ((m_levelSettings->m_platformerMode && mgr->state != NONE))
+    if (engine->activeMacro && engine->levelRestarting && !m_levelEndAnimationStarted) {
+      if ((m_levelSettings->m_platformerMode && engine->engineMode != MODE_DISABLED))
         return pl->resetLevelFromStart();
       else
         return pl->resetLevel();
     }
 
-    if (mgr->state == RECORD)
-      handleRecording(frame);
+    if (engine->engineMode == MODE_CAPTURE)
+      processCapture(tick);
 
-    if (mgr->state == PLAYBACK)
-      handlePlaying(frame);
+    if (engine->engineMode == MODE_EXECUTE)
+      processExecution(tick);
 
   }
 
-  void handleRecording(int frame) {
-    auto* mgr = ToastyReplay::get();
+  void processCapture(int tick) {
+    auto* engine = ReplayEngine::get();
 
-    if (!mgr->currentReplay) return;
+    if (!engine->activeMacro) return;
 
-    if (mgr->ignoreFrame != -1) {
-      if (mgr->ignoreFrame < frame) mgr->ignoreFrame = -1;
+    if (engine->skipTickIndex != -1) {
+      if (engine->skipTickIndex < tick) engine->skipTickIndex = -1;
     }
 
     bool twoPlayers = m_levelSettings->m_twoPlayerMode;
 
-    if (mgr->delayedFrameInput[0] == frame) {
-      mgr->delayedFrameInput[0] = -1;
+    if (engine->deferredInputTick[0] == tick) {
+      engine->deferredInputTick[0] = -1;
       GJBaseGameLayer::handleButton(true, 1, true);
     }
 
-    if (mgr->delayedFrameInput[1] == frame) {
-      mgr->delayedFrameInput[1] = -1;
+    if (engine->deferredInputTick[1] == tick) {
+      engine->deferredInputTick[1] = -1;
       GJBaseGameLayer::handleButton(true, 1, false);
     }
 
-    if (frame > mgr->ignoreJumpButton && mgr->ignoreJumpButton != -1)
-      mgr->ignoreJumpButton = -1;
+    if (tick > engine->skipActionTick && engine->skipActionTick != -1)
+      engine->skipActionTick = -1;
 
     for (int x = 0; x < 2; x++) {
-      if (mgr->delayedFrameReleaseMain[x] == frame) {
+      if (engine->deferredReleaseA[x] == tick) {
         bool player2 = x == 0;
-        mgr->delayedFrameReleaseMain[x] = -1;
+        engine->deferredReleaseA[x] = -1;
         GJBaseGameLayer::handleButton(false, 1, twoPlayers ? player2 : false);
       }
 
@@ -118,24 +118,24 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
         continue;
 
       for (int y = 0; y < 2; y++) {
-        if (mgr->delayedFrameRelease[x][y] == frame) {
+        if (engine->deferredReleaseB[x][y] == tick) {
           int button = y == 0 ? 2 : 3;
           bool player2 = x == 0;
-          mgr->delayedFrameRelease[x][y] = -1;
+          engine->deferredReleaseB[x][y] = -1;
           GJBaseGameLayer::handleButton(false, button, player2);
         }
       }
     }
 
-    if (!mgr->frameFixes || mgr->currentReplay->inputs.empty()) return;
+    if (!engine->positionCorrection || engine->activeMacro->inputs.empty()) return;
 
-    auto& positionSnapshots = mgr->currentReplay->frameFixes;
-    if (!positionSnapshots.empty()) {
-      int lastSnapshotFrame = positionSnapshots.back().frame;
-      float timeSinceLastSnapshot = (frame - lastSnapshotFrame) / mgr->tps;
-      float snapshotInterval = 1.f / mgr->frameFixesLimit;
+    auto& corrections = engine->activeMacro->corrections;
+    if (!corrections.empty()) {
+      int lastCorrectionTick = corrections.back().tick;
+      float timeSinceLastCorrection = (tick - lastCorrectionTick) / engine->tickRate;
+      float correctionFrequency = 1.f / engine->correctionInterval;
 
-      if (timeSinceLastSnapshot < snapshotInterval)
+      if (timeSinceLastCorrection < correctionFrequency)
         return;
     }
 
@@ -148,22 +148,22 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
     float angle1 = clampAngleTo360(m_player1->getRotation());
     float angle2 = clampAngleTo360(m_player2->getRotation());
 
-    FrameFix currentSnapshot;
-    currentSnapshot.frame = frame;
-    currentSnapshot.p1.pos = m_player1->getPosition();
-    currentSnapshot.p1.rotation = angle1;
-    currentSnapshot.p2.pos = m_player2->getPosition();
-    currentSnapshot.p2.rotation = angle2;
+    PositionCorrection currentCorrection;
+    currentCorrection.tick = tick;
+    currentCorrection.player1Data.coordinates = m_player1->getPosition();
+    currentCorrection.player1Data.angle = angle1;
+    currentCorrection.player2Data.coordinates = m_player2->getPosition();
+    currentCorrection.player2Data.angle = angle2;
 
-    positionSnapshots.push_back(currentSnapshot);
+    corrections.push_back(currentCorrection);
 
   }
 
-  void handlePlaying(int frame) {
-    auto* mgr = ToastyReplay::get();
+  void processExecution(int tick) {
+    auto* engine = ReplayEngine::get();
     if (m_levelEndAnimationStarted) return;
 
-    if (!mgr->currentReplay) return;
+    if (!engine->activeMacro) return;
 
     if (m_player1->m_isDead) {
       m_player1->releaseAllButtons();
@@ -173,95 +173,95 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
 
     m_fields->macroInput = true;
 
-    size_t& inputIdx = mgr->playbackIndex;
-    auto& inputList = mgr->currentReplay->inputs;
+    size_t& inputIdx = engine->executeIndex;
+    auto& inputList = engine->activeMacro->inputs;
 
-    while (inputIdx < inputList.size() && frame >= inputList[inputIdx].frame) {
+    while (inputIdx < inputList.size() && tick >= inputList[inputIdx].tick) {
       auto input = inputList[inputIdx];
 
-      if (frame != mgr->respawnFrame) {
+      if (tick != engine->respawnTickIndex) {
         if (flipControls())
-          input.player2 = !input.player2;
+          input.secondPlayer = !input.secondPlayer;
 
-        GJBaseGameLayer::handleButton(input.down, input.button, input.player2);
+        GJBaseGameLayer::handleButton(input.pressed, input.actionType, input.secondPlayer);
       }
 
       inputIdx++;
     }
 
-    mgr->respawnFrame = -1;
+    engine->respawnTickIndex = -1;
     m_fields->macroInput = false;
 
     if (inputIdx == inputList.size()) {
     }
 
-    if ((!mgr->frameFixes && !mgr->inputFixes) || !PlayLayer::get()) return;
+    if ((!engine->positionCorrection && !engine->inputCorrection) || !PlayLayer::get()) return;
 
-    size_t& snapshotIdx = mgr->frameFixIndex;
-    auto& snapshotList = mgr->currentReplay->frameFixes;
+    size_t& correctionIdx = engine->correctionIndex;
+    auto& correctionList = engine->activeMacro->corrections;
 
-    while (snapshotIdx < snapshotList.size() && frame >= snapshotList[snapshotIdx].frame) {
-      const FrameFix& snapshot = snapshotList[snapshotIdx];
+    while (correctionIdx < correctionList.size() && tick >= correctionList[correctionIdx].tick) {
+      const PositionCorrection& correction = correctionList[correctionIdx];
 
       PlayerObject* player1 = m_player1;
       PlayerObject* player2 = m_player2;
 
-      bool hasValidP1Position = (snapshot.p1.pos.x != 0.f && snapshot.p1.pos.y != 0.f);
-      bool hasValidP1Rotation = (snapshot.p1.rotate && snapshot.p1.rotation != 0.f);
+      bool hasValidP1Position = (correction.player1Data.coordinates.x != 0.f && correction.player1Data.coordinates.y != 0.f);
+      bool hasValidP1Rotation = (correction.player1Data.hasRotation && correction.player1Data.angle != 0.f);
 
       if (hasValidP1Position)
-        player1->setPosition(snapshot.p1.pos);
+        player1->setPosition(correction.player1Data.coordinates);
 
       if (hasValidP1Rotation)
-        player1->setRotation(snapshot.p1.rotation);
+        player1->setRotation(correction.player1Data.angle);
 
       if (m_gameState.m_isDualMode) {
-        bool hasValidP2Position = (snapshot.p2.pos.x != 0.f && snapshot.p2.pos.y != 0.f);
-        bool hasValidP2Rotation = (snapshot.p2.rotate && snapshot.p2.rotation != 0.f);
+        bool hasValidP2Position = (correction.player2Data.coordinates.x != 0.f && correction.player2Data.coordinates.y != 0.f);
+        bool hasValidP2Rotation = (correction.player2Data.hasRotation && correction.player2Data.angle != 0.f);
 
         if (hasValidP2Position)
-          player2->setPosition(snapshot.p2.pos);
+          player2->setPosition(correction.player2Data.coordinates);
 
         if (hasValidP2Rotation)
-          player2->setRotation(snapshot.p2.rotation);
+          player2->setRotation(correction.player2Data.angle);
       }
 
-      snapshotIdx++;
+      correctionIdx++;
     }
 
   }
 
   void handleButton(bool hold, int button, bool player2) {
-    auto* mgr = ToastyReplay::get();
+    auto* engine = ReplayEngine::get();
 
-    if (mgr->state == NONE)
+    if (engine->engineMode == MODE_DISABLED)
       return GJBaseGameLayer::handleButton(hold, button, player2);
 
-    if (mgr->state == PLAYBACK) {
-      if (mgr->ignoreManualInput && !m_fields->macroInput)
+    if (engine->engineMode == MODE_EXECUTE) {
+      if (engine->userInputIgnored && !m_fields->macroInput)
         return;
       else return GJBaseGameLayer::handleButton(hold, button, player2);
     }
-    else if (mgr->ignoreFrame != -1 && hold)
+    else if (engine->skipTickIndex != -1 && hold)
       return;
 
-    int frame = getCurrentFrame();
+    int tick = computeCurrentTick();
 
-    bool isDelayedInput = mgr->delayedFrameInput[(m_levelSettings->m_twoPlayerMode ? static_cast<int>(!player2) : 0)] != -1;
-    bool isDelayedRelease = mgr->delayedFrameReleaseMain[(m_levelSettings->m_twoPlayerMode ? static_cast<int>(!player2) : 0)] != -1;
+    bool isDelayedInput = engine->deferredInputTick[(m_levelSettings->m_twoPlayerMode ? static_cast<int>(!player2) : 0)] != -1;
+    bool isDelayedRelease = engine->deferredReleaseA[(m_levelSettings->m_twoPlayerMode ? static_cast<int>(!player2) : 0)] != -1;
 
-    if ((isDelayedInput || mgr->ignoreJumpButton == frame || isDelayedRelease) && button == 1) {
-      if (mgr->ignoreJumpButton >= frame)
-        mgr->delayedFrameInput[(m_levelSettings->m_twoPlayerMode ? static_cast<int>(!player2) : 0)] = mgr->ignoreJumpButton + 1;
+    if ((isDelayedInput || engine->skipActionTick == tick || isDelayedRelease) && button == 1) {
+      if (engine->skipActionTick >= tick)
+        engine->deferredInputTick[(m_levelSettings->m_twoPlayerMode ? static_cast<int>(!player2) : 0)] = engine->skipActionTick + 1;
 
       return;
     }
 
-    if (mgr->state != RECORD) return GJBaseGameLayer::handleButton(hold, button, player2);
+    if (engine->engineMode != MODE_CAPTURE) return GJBaseGameLayer::handleButton(hold, button, player2);
 
-    if (!mgr->currentReplay) return GJBaseGameLayer::handleButton(hold, button, player2);
+    if (!engine->activeMacro) return GJBaseGameLayer::handleButton(hold, button, player2);
 
-    if (mgr->inputFixes) {
+    if (engine->inputCorrection) {
       auto normalizeRotation = [](float rot) -> float {
         while (rot < 0.f) rot += 360.f;
         while (rot > 360.f) rot -= 360.f;
@@ -271,14 +271,14 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
       float rotation1 = normalizeRotation(m_player1->getRotation());
       float rotation2 = normalizeRotation(m_player2->getRotation());
 
-      FrameFix inputSnapshot;
-      inputSnapshot.frame = frame;
-      inputSnapshot.p1.pos = m_player1->getPosition();
-      inputSnapshot.p1.rotation = rotation1;
-      inputSnapshot.p2.pos = m_player2->getPosition();
-      inputSnapshot.p2.rotation = rotation2;
+      PositionCorrection inputCorrection;
+      inputCorrection.tick = tick;
+      inputCorrection.player1Data.coordinates = m_player1->getPosition();
+      inputCorrection.player1Data.angle = rotation1;
+      inputCorrection.player2Data.coordinates = m_player2->getPosition();
+      inputCorrection.player2Data.angle = rotation2;
 
-      mgr->currentReplay->frameFixes.push_back(inputSnapshot);
+      engine->activeMacro->corrections.push_back(inputCorrection);
     }
 
     GJBaseGameLayer::handleButton(hold, button, player2);
@@ -286,9 +286,9 @@ class $modify(ToastyReplayBGLHook, GJBaseGameLayer) {
     if (!m_levelSettings->m_twoPlayerMode)
       player2 = false;
 
-    if (!mgr->ignoreRecordAction && !mgr->creatingTrajectory && !m_player1->m_isDead) {
-      mgr->currentReplay->addInput(frame, button, player2, hold);
-      mgr->isReplayInput = true;
+    if (!engine->captureIgnored && !engine->simulatingPath && !m_player1->m_isDead) {
+      engine->activeMacro->recordAction(tick, button, player2, hold);
+      engine->macroInputActive = true;
     }
   }
 };

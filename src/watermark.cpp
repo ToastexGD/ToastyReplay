@@ -3,19 +3,19 @@
 
 using namespace geode::prelude;
 
-void renderWatermarkOverlay() {
-    if (!GUI::get()->visible) {
+void displayOverlayBranding() {
+    if (!MenuInterface::get()->shown) {
         return;
     }
-    
+
     ImGuiIO& io = ImGui::GetIO();
-    ImVec2 screenSize = io.DisplaySize;
-    
-    std::string watermarkText = "ToastyReplay v" MOD_VERSION "-beta";
-    ImVec2 textSize = ImGui::CalcTextSize(watermarkText.c_str());
-    ImVec2 centeredPos = ImVec2((screenSize.x - textSize.x) / 2, screenSize.y - 25);
+    ImVec2 screenDimensions = io.DisplaySize;
+
+    std::string brandText = "ToastyReplay v" MOD_VERSION "-beta";
+    ImVec2 textDimensions = ImGui::CalcTextSize(brandText.c_str());
+    ImVec2 centeredCoord = ImVec2((screenDimensions.x - textDimensions.x) / 2, screenDimensions.y - 25);
 
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
-    
-    drawList->AddText(centeredPos, IM_COL32(200, 200, 200, 150), watermarkText.c_str());
+
+    drawList->AddText(centeredCoord, IM_COL32(200, 200, 200, 150), brandText.c_str());
 }

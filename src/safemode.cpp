@@ -5,58 +5,58 @@
 
 using namespace geode::prelude;
 
-class $modify(SafeModePlayLayer, PlayLayer) {
+class $modify(ProtectedPlayLayer, PlayLayer) {
     void showNewBest(bool p0, int p1, int p2, bool p3, bool p4, bool p5) {
-        if (!ToastyReplay::get()->safeMode)
+        if (!ReplayEngine::get()->protectedMode)
             PlayLayer::showNewBest(p0, p1, p2, p3, p4, p5);
     }
 
     void levelComplete() {
-        ToastyReplay* mgr = ToastyReplay::get();
-        bool wasTestMode = m_isTestMode;
+        ReplayEngine* engine = ReplayEngine::get();
+        bool originalTestMode = m_isTestMode;
 
-        if (mgr->safeMode)
+        if (engine->protectedMode)
             m_isTestMode = true;
 
         if (m_isPracticeMode) {
         } else {
-            mgr->safeMode = false;
+            engine->protectedMode = false;
         }
 
         PlayLayer::levelComplete();
 
-        m_isTestMode = wasTestMode;
+        m_isTestMode = originalTestMode;
     }
 };
 
-class $modify(SafeModeEndLevelLayer, EndLevelLayer) {
+class $modify(ProtectedEndLevelLayer, EndLevelLayer) {
     void customSetup() {
         EndLevelLayer::customSetup();
-        ToastyReplay* mgr = ToastyReplay::get();
+        ReplayEngine* engine = ReplayEngine::get();
 
-        if (!mgr->safeMode) return;
+        if (!engine->protectedMode) return;
 
-        CCLabelBMFont* lbl = CCLabelBMFont::create("Safe Mode Active", "goldFont.fnt");
-        lbl->setPosition({ 3.5, 10 });
-        lbl->setOpacity(155);
-        lbl->setID("safe-mode-label"_spr);
-        lbl->setScale(0.55f);
-        lbl->setAnchorPoint({ 0, 0.5 });
+        CCLabelBMFont* indicator = CCLabelBMFont::create("Safe Mode Active", "goldFont.fnt");
+        indicator->setPosition({ 3.5, 10 });
+        indicator->setOpacity(155);
+        indicator->setID("protected-mode-indicator"_spr);
+        indicator->setScale(0.55f);
+        indicator->setAnchorPoint({ 0, 0.5 });
 
-        addChild(lbl);
+        addChild(indicator);
     }
 
     void onHideLayer(CCObject* obj) {
         EndLevelLayer::onHideLayer(obj);
 
-        if (CCNode* lbl = getChildByID("safe-mode-label"_spr))
-            lbl->setVisible(!lbl->isVisible());
+        if (CCNode* indicator = getChildByID("protected-mode-indicator"_spr))
+            indicator->setVisible(!indicator->isVisible());
     }
 };
 
-class $modify(SafeModeGJGameLevel, GJGameLevel) {
+class $modify(ProtectedGJGameLevel, GJGameLevel) {
     void savePercentage(int p0, bool p1, int p2, int p3, bool p4) {
-        if (!ToastyReplay::get()->safeMode)
+        if (!ReplayEngine::get()->protectedMode)
             GJGameLevel::savePercentage(p0, p1, p2, p3, p4);
     }
 };

@@ -7,289 +7,294 @@
 #include <unordered_set>
 
 using namespace geode::prelude;
-#define REPLAY_FORMAT_VERSION 1.0f
+#define MACRO_FORMAT_VER 1.0f
 
-struct PlayerStateData {
+struct PhysicsSnapshot {
 #ifdef GEODE_IS_WINDOWS
-    std::unordered_map<int, GJPointDouble> m_rotateObjectsRelated;
-    std::unordered_map<int, GameObject*> m_maybeRotatedObjectsMap;
-    std::unordered_set<int> m_touchedRings;
-    std::unordered_set<int> m_ringRelatedSet;
-    std::map<int, bool> m_jumpPadRelated;
-    std::map<int, bool> m_holdingButtons;
+    std::unordered_map<int, GJPointDouble> rotationObjectMap;
+    std::unordered_map<int, GameObject*> rotatedObjLookup;
+    std::unordered_set<int> activatedRings;
+    std::unordered_set<int> ringInteractionSet;
+    std::map<int, bool> padInteractionMap;
+    std::map<int, bool> buttonHoldState;
 #endif
-    std::vector<float> m_playerFollowFloats;
+    std::vector<float> followFloatValues;
     cocos2d::CCPoint position;
     float rotation;
-    bool m_holdingRight;
-    bool m_holdingLeft;
-    cocos2d::CCNode* m_mainLayer;
-    bool m_wasTeleported;
-    bool m_fixGravityBug;
-    bool m_reverseSync;
-    double m_yVelocityBeforeSlope;
-    double m_dashX;
-    double m_dashY;
-    double m_dashAngle;
-    double m_dashStartTime;
-    DashRingObject* m_dashRing;
-    double m_slopeStartTime;
-    bool m_justPlacedStreak;
-    GameObject* m_maybeLastGroundObject;
-    cocos2d::CCDictionary* m_collisionLogTop;
-    cocos2d::CCDictionary* m_collisionLogBottom;
-    cocos2d::CCDictionary* m_collisionLogLeft;
-    cocos2d::CCDictionary* m_collisionLogRight;
-    int m_lastCollisionBottom;
-    int m_lastCollisionTop;
-    int m_lastCollisionLeft;
-    int m_lastCollisionRight;
-    int m_unk50C;
-    int m_unk510;
-    GameObject* m_currentSlope2;
-    GameObject* m_preLastGroundObject;
-    float m_slopeAngle;
-    bool m_slopeSlidingMaybeRotated;
-    bool m_quickCheckpointMode;
-    GameObject* m_collidedObject;
-    GameObject* m_lastGroundObject;
-    GameObject* m_collidingWithLeft;
-    GameObject* m_collidingWithRight;
-    int m_maybeSavedPlayerFrame;
-    double m_scaleXRelated2;
-    double m_groundYVelocity;
-    double m_yVelocityRelated;
-    double m_scaleXRelated3;
-    double m_scaleXRelated4;
-    double m_scaleXRelated5;
-    bool m_isCollidingWithSlope;
-    bool m_isBallRotating;
-    bool m_unk669;
-    GameObject* m_currentSlope3;
-    GameObject* m_currentSlope;
-    double unk_584;
-    int m_collidingWithSlopeId;
-    bool m_slopeFlipGravityRelated;
-    cocos2d::CCArray* m_particleSystems;
-    float m_slopeAngleRadians;
-    float m_rotationSpeed;
-    float m_rotateSpeed;
-    bool m_isRotating;
-    bool m_isBallRotating2;
-    bool m_hasGlow;
-    bool m_isHidden;
-    double m_speedMultiplier;
-    double m_yStart;
-    double m_gravity;
-    float m_trailingParticleLife;
-    float m_unk648;
-    double m_gameModeChangedTime;
-    bool m_padRingRelated;
-    bool m_maybeReducedEffects;
-    bool m_maybeIsFalling;
-    bool m_shouldTryPlacingCheckpoint;
-    bool m_playEffects;
-    bool m_maybeCanRunIntoBlocks;
-    bool m_hasGroundParticles;
-    bool m_hasShipParticles;
-    bool m_isOnGround3;
-    bool m_checkpointTimeout;
-    double m_lastCheckpointTime;
-    double m_lastJumpTime;
-    double m_lastFlipTime;
-    double m_flashTime;
-    float m_flashRelated;
-    float m_flashRelated1;
-    double m_lastSpiderFlipTime;
-    bool m_unkBool5;
-    bool m_maybeIsVehicleGlowing;
-    bool m_gv0096;
-    bool m_gv0100;
-    double m_accelerationOrSpeed;
-    double m_snapDistance;
-    bool m_ringJumpRelated;
-    GameObject* m_objectSnappedTo;
-    CheckpointObject* m_pendingCheckpoint;
-    int m_onFlyCheckpointTries;
-    bool m_maybeSpriteRelated;
-    bool m_useLandParticles0;
-    float m_landParticlesAngle;
-    float m_landParticleRelatedY;
-    int m_playerStreak;
-    double m_slopeRotation;
-    double m_currentSlopeYVelocity;
-    double m_unk3d0;
-    double m_blackOrbRelated;
-    bool m_unk3e0;
-    bool m_unk3e1;
-    bool m_isAccelerating;
-    bool m_isCurrentSlopeTop;
-    double m_collidedTopMinY;
-    double m_collidedBottomMaxY;
-    double m_collidedLeftMaxX;
-    double m_collidedRightMinX;
-    bool m_canPlaceCheckpoint;
-    bool m_maybeIsColliding;
-    bool m_jumpBuffered;
-    bool m_stateRingJump;
-    bool m_wasJumpBuffered;
-    bool m_wasRobotJump;
-    unsigned char m_stateJumpBuffered;
-    bool m_stateRingJump2;
-    bool m_touchedRing;
-    bool m_touchedCustomRing;
-    bool m_touchedGravityPortal;
-    bool m_maybeTouchedBreakableBlock;
-    geode::SeedValueRSV m_jumpRelatedAC2;
-    bool m_touchedPad;
-    double m_yVelocity;
-    double m_fallSpeed;
-    bool m_isOnSlope;
-    bool m_wasOnSlope;
-    float m_slopeVelocity;
-    bool m_maybeUpsideDownSlope;
-    bool m_isShip;
-    bool m_isBird;
-    bool m_isBall;
-    bool m_isDart;
-    bool m_isRobot;
-    bool m_isSpider;
-    bool m_isUpsideDown;
-    bool m_isDead;
-    bool m_isOnGround;
-    bool m_isGoingLeft;
-    bool m_isSideways;
-    bool m_isSwing;
-    int m_reverseRelated;
-    double m_maybeReverseSpeed;
-    double m_maybeReverseAcceleration;
-    float m_xVelocityRelated2;
-    bool m_isDashing;
-    int m_unk9e8;
-    int m_groundObjectMaterial;
-    float m_vehicleSize;
-    float m_playerSpeed;
-    cocos2d::CCPoint m_shipRotation;
-    cocos2d::CCPoint m_lastPortalPos;
-    float m_unkUnused3;
-    bool m_isOnGround2;
-    double m_lastLandTime;
-    float m_platformerVelocityRelated;
-    bool m_maybeIsBoosted;
-    double m_scaleXRelatedTime;
-    bool m_decreaseBoostSlide;
-    bool m_unkA29;
-    bool m_isLocked;
-    bool m_controlsDisabled;
-    cocos2d::CCPoint m_lastGroundedPos;
-    cocos2d::CCArray* m_touchingRings;
-    GameObject* m_lastActivatedPortal;
-    bool m_hasEverJumped;
-    bool m_ringOrStreakRelated;
-    cocos2d::CCPoint m_position;
-    bool m_isSecondPlayer;
-    bool m_unkA99;
-    double m_totalTime;
-    bool m_isBeingSpawnedByDualPortal;
-    float m_unkAAC;
-    float m_unkAngle1;
-    float m_yVelocityRelated3;
-    bool m_gamevar0060;
-    bool m_swapColors;
-    bool m_gamevar0062;
-    int m_followRelated;
-    float m_unk838;
-    int m_stateOnGround;
-    unsigned char m_stateUnk;
-    unsigned char m_stateNoStickX;
-    unsigned char m_stateNoStickY;
-    unsigned char m_stateUnk2;
-    int m_stateBoostX;
-    int m_stateBoostY;
-    int m_maybeStateForce2;
-    int m_stateScale;
-    double m_platformerXVelocity;
-    bool m_leftPressedFirst;
-    double m_scaleXRelated;
-    bool m_maybeHasStopped;
-    float m_xVelocityRelated;
-    bool m_maybeGoingCorrectSlopeDirection;
-    bool m_isSliding;
-    double m_maybeSlopeForce;
-    bool m_isOnIce;
-    double m_physDeltaRelated;
-    bool m_isOnGround4;
-    int m_maybeSlidingTime;
-    double m_maybeSlidingStartTime;
-    double m_changedDirectionsTime;
-    double m_slopeEndTime;
-    bool m_isMoving;
-    bool m_platformerMovingLeft;
-    bool m_platformerMovingRight;
-    bool m_isSlidingRight;
-    double m_maybeChangedDirectionAngle;
-    double m_unkUnused2;
-    bool m_isPlatformer;
-    int m_stateNoAutoJump;
-    int m_stateDartSlide;
-    int m_stateHitHead;
-    int m_stateFlipGravity;
-    float m_gravityMod;
-    int m_stateForce;
-    cocos2d::CCPoint m_stateForceVector;
-    bool m_affectedByForces;
-    float m_somethingPlayerSpeedTime;
-    float m_playerSpeedAC;
-    bool m_fixRobotJump;
-    bool m_inputsLocked;
-    bool m_gv0123;
-    int m_iconRequestID;
-    cocos2d::CCArray* m_unk958;
-    int m_unkUnused;
-    bool m_isOutOfBounds;
-    float m_fallStartY;
-    bool m_disablePlayerSqueeze;
-    bool m_robotHasRun3;
-    bool m_robotHasRun2;
-    bool m_item20;
-    bool m_ignoreDamage;
-    bool m_enable22Changes;
+    bool holdRight;
+    bool holdLeft;
+    cocos2d::CCNode* parentLayer;
+    bool teleportOccurred;
+    bool gravityBugFix;
+    bool reverseActive;
+    double preSlope_yVel;
+    double dashVecX;
+    double dashVecY;
+    double dashRotation;
+    double dashBeginTime;
+    DashRingObject* activeDashRing;
+    double slopeBeginTime;
+    bool streakJustPlaced;
+    GameObject* priorGroundObj;
+    cocos2d::CCDictionary* hitLogTop;
+    cocos2d::CCDictionary* hitLogBottom;
+    cocos2d::CCDictionary* hitLogLeft;
+    cocos2d::CCDictionary* hitLogRight;
+    int lastHitBottom;
+    int lastHitTop;
+    int lastHitLeft;
+    int lastHitRight;
+    int reserved50C;
+    int reserved510;
+    GameObject* slopeRef2;
+    GameObject* prevGroundRef;
+    float inclineAngle;
+    bool slidingRotated;
+    bool fastCheckpoint;
+    GameObject* hitObject;
+    GameObject* groundObjRef;
+    GameObject* leftCollider;
+    GameObject* rightCollider;
+    int savedTickIndex;
+    double scaleFactorX2;
+    double groundVertVel;
+    double vertVelRelated;
+    double scaleFactorX3;
+    double scaleFactorX4;
+    double scaleFactorX5;
+    bool slopeCollision;
+    bool ballSpinning;
+    bool reserved669;
+    GameObject* slopeRef3;
+    GameObject* currentIncline;
+    double field584;
+    int slopeColliderId;
+    bool slopeGravFlip;
+    cocos2d::CCArray* particleList;
+    float inclineRadians;
+    float spinRate;
+    float turnRate;
+    bool spinning;
+    bool ballSpinning2;
+    bool glowActive;
+    bool hidden;
+    double speedFactor;
+    double startY;
+    double gravityVal;
+    float particleDuration;
+    float field648;
+    double modeChangeTime;
+    bool padRingFlag;
+    bool reducedFX;
+    bool falling;
+    bool checkpointAttempt;
+    bool effectsOn;
+    bool blockCollisionEnabled;
+    bool groundFX;
+    bool shipFX;
+    bool grounded3;
+    bool checkpointCooldown;
+    double lastCheckTime;
+    double lastJumpTimestamp;
+    double lastFlipTimestamp;
+    double flashTimestamp;
+    float flashVal;
+    float flashVal1;
+    double lastSpiderFlipTimestamp;
+    bool flagBool5;
+    bool vehicleGlow;
+    bool gameVar0096;
+    bool gameVar0100;
+    double accelOrSpeed;
+    double snapDist;
+    bool ringJumpFlag;
+    GameObject* snappedObj;
+    CheckpointObject* queuedCheckpoint;
+    int flyCheckpointAttempts;
+    bool spriteFlag;
+    bool landParticles0;
+    float landParticleAngle;
+    float landParticleY;
+    int streakCount;
+    double inclineRotation;
+    double slopeVertVel;
+    double field3d0;
+    double darkOrbVal;
+    bool flag3e0;
+    bool flag3e1;
+    bool accelerating;
+    bool topSlope;
+    double topCollideMinY;
+    double bottomCollideMaxY;
+    double leftCollideMaxX;
+    double rightCollideMinX;
+    bool checkpointAllowed;
+    bool collisionOccurring;
+    bool jumpQueued;
+    bool ringJumpState;
+    bool jumpWasQueued;
+    bool robotJumpOccurred;
+    unsigned char jumpQueuedState;
+    bool ringJumpState2;
+    bool ringTouched;
+    bool customRingTouched;
+    bool gravPortalTouched;
+    bool breakableBlockTouched;
+    geode::SeedValueRSV jumpAC2;
+    bool padTouched;
+    double vertVelocity;
+    double fallVelocity;
+    bool onIncline;
+    bool wasOnIncline;
+    float inclineVelocity;
+    bool invertedIncline;
+    bool shipMode;
+    bool ufoMode;
+    bool ballMode;
+    bool waveMode;
+    bool robotMode;
+    bool spiderMode;
+    bool invertedGravity;
+    bool dead;
+    bool grounded;
+    bool movingLeft;
+    bool sideways;
+    bool swingMode;
+    int reverseVal;
+    double reverseSpeed;
+    double reverseAccel;
+    float horizVelRelated2;
+    bool dashing;
+    int field9e8;
+    int groundMaterial;
+    float playerScale;
+    float moveSpeed;
+    cocos2d::CCPoint shipAngle;
+    cocos2d::CCPoint lastPortalCoord;
+    float unusedField3;
+    bool grounded2;
+    double landTimestamp;
+    float platVelRelated;
+    bool boosted;
+    double scaleXTime;
+    bool boostSlideDecay;
+    bool fieldA29;
+    bool locked;
+    bool inputsDisabled;
+    cocos2d::CCPoint lastGroundCoord;
+    cocos2d::CCArray* ringContacts;
+    GameObject* lastPortalObj;
+    bool hasJumped;
+    bool streakOrRingFlag;
+    cocos2d::CCPoint coord;
+    bool isPlayer2;
+    bool fieldA99;
+    double totalElapsed;
+    bool dualSpawning;
+    float fieldAAC;
+    float angleField1;
+    float vertVelRelated3;
+    bool gameVar0060;
+    bool colorsSwapped;
+    bool gameVar0062;
+    int followVal;
+    float field838;
+    int groundedState;
+    unsigned char stateUnk;
+    unsigned char noStickX;
+    unsigned char noStickY;
+    unsigned char stateUnk2;
+    int boostX;
+    int boostY;
+    int forceState2;
+    int scaleState;
+    double platHorizVel;
+    bool leftFirst;
+    double scaleXVal;
+    bool hasStopped;
+    float horizVelRelated;
+    bool correctSlopeDir;
+    bool sliding;
+    double slopeForce;
+    bool onIce;
+    double physicsDelta;
+    bool grounded4;
+    int slideTime;
+    double slideStartTime;
+    double dirChangeTime;
+    double slopeEndTimestamp;
+    bool moving;
+    bool platMovingLeft;
+    bool platMovingRight;
+    bool slidingRight;
+    double dirChangeAngle;
+    double unusedField2;
+    bool platformerActive;
+    int noAutoJumpState;
+    int dartSlideState;
+    int hitHeadState;
+    int flipGravState;
+    float gravityModifier;
+    int forceState;
+    cocos2d::CCPoint forceVec;
+    bool forcesActive;
+    float speedTimeVal;
+    float speedAC;
+    bool robotJumpFix;
+    bool inputLocked;
+    bool gameVar0123;
+    int iconReqId;
+    cocos2d::CCArray* field958;
+    int unusedField;
+    bool outOfBounds;
+    float fallOriginY;
+    bool squeezeDisabled;
+    bool robotRun3;
+    bool robotRun2;
+    bool item20Flag;
+    bool damageIgnored;
+    bool v22Changes;
 };
 
-struct FrameData {
-    cocos2d::CCPoint pos = { 0.f, 0.f };
-    float rotation = 0.f;
-    bool rotate = true;
+struct PositionSnapshot {
+    cocos2d::CCPoint coordinates = { 0.f, 0.f };
+    float angle = 0.f;
+    bool hasRotation = true;
 };
 
-struct FrameFix {
-    int frame;
-    FrameData p1;
-    FrameData p2;
+struct PositionCorrection {
+    int tick;
+    PositionSnapshot player1Data;
+    PositionSnapshot player2Data;
 };
 
-struct CheckpointData {
-    int frame;
-    PlayerStateData p1;
-    PlayerStateData p2;
-    uintptr_t seed;
-    int previousFrame;
+struct RestorePoint {
+    int tick;
+    PhysicsSnapshot player1State;
+    PhysicsSnapshot player2State;
+    uintptr_t rngState;
+    int priorTick;
 };
 
-struct ReplayInput : gdr::Input {
-    ReplayInput() = default;
+struct MacroAction : gdr::Input {
+    int tick = 0;
+    int actionType = 0;
+    bool secondPlayer = false;
+    bool pressed = false;
 
-    ReplayInput(int frame, int button, bool player2, bool down)
-        : Input(frame, button, player2, down) {}
+    MacroAction() = default;
+
+    MacroAction(int t, int action, bool isSecondPlayer, bool isPressed)
+        : Input(t, action, isSecondPlayer, isPressed), tick(t), actionType(action), secondPlayer(isSecondPlayer), pressed(isPressed) {}
 };
 
-struct ReplayData : gdr::Replay<ReplayData, ReplayInput> {
+struct MacroSequence : gdr::Replay<MacroSequence, MacroAction> {
     std::string name;
-    std::vector<FrameFix> frameFixes;
+    std::vector<PositionCorrection> corrections;
 
-    ReplayData() : Replay("ToastyReplay", MOD_VERSION) {}
+    MacroSequence() : Replay("ToastyReplay", MOD_VERSION) {}
 
-    void save() {
+    void persist() {
         author = GJAccountManager::get()->m_username;
         duration = inputs.size() > 0 ? inputs.back().frame / framerate : 0;
 
@@ -298,63 +303,63 @@ struct ReplayData : gdr::Replay<ReplayData, ReplayInput> {
             std::filesystem::create_directory(dir);
         }
 
-        std::string fileName = name;
-        std::replace(fileName.begin(), fileName.end(), ':', '_');
-        std::replace(fileName.begin(), fileName.end(), '*', '_');
-        std::replace(fileName.begin(), fileName.end(), '?', '_');
-        std::replace(fileName.begin(), fileName.end(), '/', '_');
-        std::replace(fileName.begin(), fileName.end(), '\\', '_');
-        std::replace(fileName.begin(), fileName.end(), '|', '_');
-        std::replace(fileName.begin(), fileName.end(), '<', '_');
-        std::replace(fileName.begin(), fileName.end(), '>', '_');
-        std::replace(fileName.begin(), fileName.end(), '\"', '_');
+        std::string safeName = name;
+        std::replace(safeName.begin(), safeName.end(), ':', '_');
+        std::replace(safeName.begin(), safeName.end(), '*', '_');
+        std::replace(safeName.begin(), safeName.end(), '?', '_');
+        std::replace(safeName.begin(), safeName.end(), '/', '_');
+        std::replace(safeName.begin(), safeName.end(), '\\', '_');
+        std::replace(safeName.begin(), safeName.end(), '|', '_');
+        std::replace(safeName.begin(), safeName.end(), '<', '_');
+        std::replace(safeName.begin(), safeName.end(), '>', '_');
+        std::replace(safeName.begin(), safeName.end(), '\"', '_');
 
-        std::ofstream f(dir / (fileName + ".gdr"), std::ios::binary);
+        std::ofstream output(dir / (safeName + ".gdr"), std::ios::binary);
 
-        auto data = exportData(false);
+        auto bytes = exportData(false);
 
-        f.write(reinterpret_cast<const char *>(data.data()), data.size());
-        f.close();
-        log::info("Saved replay to {}", (dir / (fileName + ".gdr")).string());
+        output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+        output.close();
+        log::info("Saved replay to {}", (dir / (safeName + ".gdr")).string());
     }
 
-    static ReplayData* fromFile(const std::string& fileName) {
+    static MacroSequence* loadFromDisk(const std::string& filename) {
         auto dir = geode::prelude::Mod::get()->getSaveDir() / "replays";
         if (std::filesystem::exists(dir) || std::filesystem::create_directory(dir)) {
-            std::ifstream f(dir / (fileName + ".gdr"), std::ios::binary);
-            
-            if (!f.is_open()) {
-                f = std::ifstream(dir / fileName, std::ios::binary);
-                if (!f.is_open()) return nullptr;
+            std::ifstream input(dir / (filename + ".gdr"), std::ios::binary);
+
+            if (!input.is_open()) {
+                input = std::ifstream(dir / filename, std::ios::binary);
+                if (!input.is_open()) return nullptr;
             }
 
-            f.seekg(0, std::ios::end);
-            auto size = f.tellg();
-            f.seekg(0, std::ios::beg);
+            input.seekg(0, std::ios::end);
+            auto fileSize = input.tellg();
+            input.seekg(0, std::ios::beg);
 
-            std::vector<uint8_t> data(size);
-            f.read(reinterpret_cast<char*>(data.data()), size);
-            f.close();
+            std::vector<uint8_t> bytes(fileSize);
+            input.read(reinterpret_cast<char*>(bytes.data()), fileSize);
+            input.close();
 
-            ReplayData* ret = new ReplayData();
-            *ret = ReplayData::importData(data);
-            ret->name = fileName;
+            MacroSequence* result = new MacroSequence();
+            *result = MacroSequence::importData(bytes);
+            result->name = filename;
 
-            return ret;
+            return result;
         }
 
         return nullptr;
     }
 
-    void purgeAfter(int frame) {
-        inputs.erase(std::remove_if(inputs.begin(), inputs.end(), [frame](ReplayInput& input) {
-            return input.frame >= frame;
+    void truncateAfter(int tick) {
+        inputs.erase(std::remove_if(inputs.begin(), inputs.end(), [tick](MacroAction& action) {
+            return action.frame >= tick;
         }), inputs.end());
     }
 
-    void addInput(int frame, int button, bool player2, bool down) {
-        log::info("Adding input: frame: {}, button: {}, player2: {}, down: {}", frame, button, player2, down);
-        inputs.emplace_back(frame, button, player2, down);
+    void recordAction(int tick, int actionType, bool secondPlayer, bool pressed) {
+        log::info("Adding input: frame: {}, button: {}, player2: {}, down: {}", tick, actionType, secondPlayer, pressed);
+        inputs.emplace_back(tick, actionType, secondPlayer, pressed);
     }
 };
 

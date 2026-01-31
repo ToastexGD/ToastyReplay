@@ -5,61 +5,61 @@
 #include <imgui-cocos.hpp>
 using namespace geode::prelude;
 
-class $modify(PlayLayer) {
+class $modify(TickControlPlayLayer, PlayLayer) {
     void update(float dt) {
-        ToastyReplay::get()->handleKeybinds();
+        ReplayEngine::get()->processHotkeys();
         PlayLayer::update(dt);
     }
 
     void updateVisibility(float dt) {
-        auto* replay = ToastyReplay::get();
-        if (!replay->disableRender) {
+        auto* engine = ReplayEngine::get();
+        if (!engine->renderingDisabled) {
             PlayLayer::updateVisibility(dt);
         }
     }
 };
 
-class $modify(CCScheduler) {
+class $modify(SpeedControlScheduler, CCScheduler) {
     void update(float dt) {
-        auto* replay = ToastyReplay::get();
-        float adjustedDelta = dt * replay->speed;
-        return CCScheduler::update(adjustedDelta);
+        auto* engine = ReplayEngine::get();
+        float scaledDelta = dt * engine->gameSpeed;
+        return CCScheduler::update(scaledDelta);
     }
 };
 
-class $modify(GJBaseGameLayer) {
+class $modify(PhysicsControlLayer, GJBaseGameLayer) {
     void update(float dt) {
-        auto* replay = ToastyReplay::get();
+        auto* engine = ReplayEngine::get();
 
-        float targetDelta = 1.0f / replay->tps;
-        replay->extraTPS += dt;
+        float targetDelta = 1.0f / engine->tickRate;
+        engine->tickAccumulator += dt;
 
-        if (replay->frameAdvance) {
-            replay->extraTPS = 0.0f;
+        if (engine->tickStepping) {
+            engine->tickAccumulator = 0.0f;
 
-            if (replay->stepFrame) {
-                replay->stepFrame = false;
-                if (replay->noclip) replay->noclipTotalFrames++;
+            if (engine->singleTickStep) {
+                engine->singleTickStep = false;
+                if (engine->collisionBypass) engine->totalTickCount++;
                 GJBaseGameLayer::update(targetDelta);
             }
             return;
         }
 
-        while (replay->extraTPS >= targetDelta) {
-            replay->extraTPS -= targetDelta;
+        while (engine->tickAccumulator >= targetDelta) {
+            engine->tickAccumulator -= targetDelta;
 
-            bool shouldRender = (replay->extraTPS < targetDelta);
-            replay->disableRender = !shouldRender;
+            bool shouldRender = (engine->tickAccumulator < targetDelta);
+            engine->renderingDisabled = !shouldRender;
 
-            if (replay->noclip) replay->noclipTotalFrames++;
+            if (engine->collisionBypass) engine->totalTickCount++;
             GJBaseGameLayer::update(targetDelta);
         }
 
-        replay->disableRender = false;
+        engine->renderingDisabled = false;
     }
 
     float getModifiedDelta(float dt) {
         GJBaseGameLayer::getModifiedDelta(dt);
-        return 1.0f / ToastyReplay::get()->tps;
+        return 1.0f / ReplayEngine::get()->tickRate;
     }
 };

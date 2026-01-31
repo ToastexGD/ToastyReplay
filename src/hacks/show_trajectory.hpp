@@ -5,20 +5,20 @@
 
 using namespace geode::prelude;
 
-class TrajectoryNode : public CCDrawNode {
+class VisualizerNode : public CCDrawNode {
 public:
-    static TrajectoryNode* create() {
-        auto ret = new TrajectoryNode();
-        if (ret && ret->init()) {
-            ret->autorelease();
-            return ret;
+    static VisualizerNode* create() {
+        auto node = new VisualizerNode();
+        if (node && node->init()) {
+            node->autorelease();
+            return node;
         }
-        CC_SAFE_DELETE(ret);
+        CC_SAFE_DELETE(node);
         return nullptr;
     }
 };
 
-const std::set<int> gamemodePortalIDs = {
+const std::set<int> modePortalIdentifiers = {
     12,
     13,
     47,
@@ -29,13 +29,13 @@ const std::set<int> gamemodePortalIDs = {
     1933
 };
 
-const std::set<int> gravityPortalIDs = {
+const std::set<int> gravityFlipIdentifiers = {
     10,
     11,
     2926
 };
 
-const std::set<int> speedPortalIDs = {
+const std::set<int> velocityPortalIdentifiers = {
     200,
     201,
     202,
@@ -43,26 +43,26 @@ const std::set<int> speedPortalIDs = {
     1334
 };
 
-const std::set<int> sizePortalIDs = {
+const std::set<int> scalePortalIdentifiers = {
     99,
     101
 };
 
-const std::set<int> mirrorPortalIDs = {
+const std::set<int> flipPortalIdentifiers = {
     45,
     46
 };
 
-const std::set<int> dualPortalIDs = {
+const std::set<int> splitPortalIdentifiers = {
     286,
     287
 };
 
-const std::set<int> teleportPortalIDs = {
+const std::set<int> warpPortalIdentifiers = {
     747
 };
 
-const std::set<int> ringIDs = {
+const std::set<int> jumpRingIdentifiers = {
     36,
     84,
     141,
@@ -75,7 +75,7 @@ const std::set<int> ringIDs = {
     3027
 };
 
-const std::set<int> padIDs = {
+const std::set<int> bouncePadIdentifiers = {
     35,
     67,
     140,
@@ -84,19 +84,19 @@ const std::set<int> padIDs = {
     3016
 };
 
-const std::set<int> dashOrbIDs = {
+const std::set<int> dashRingIdentifiers = {
     1704,
     3005,
     3004
 };
 
-const std::set<int> trajectoryObjectTypes = {
+const std::set<int> pathObjectCategories = {
     0,
     5,
     7,
 };
 
-const std::set<int> collectibleIDs = {
+const std::set<int> collectableIdentifiers = {
     1329,
     142,
     1614,
@@ -104,55 +104,55 @@ const std::set<int> collectibleIDs = {
     1275
 };
 
-class ShowTrajectory {
+class PathVisualizer {
 public:
-    static ShowTrajectory& get() {
-        static ShowTrajectory instance;
-        return instance;
+    static PathVisualizer& get() {
+        static PathVisualizer singleton;
+        return singleton;
     }
 
-    bool creatingTrajectory = false;
-    bool cancelTrajectory = false;
-    
-    PlayerObject* fakePlayer1 = nullptr;
-    PlayerObject* fakePlayer2 = nullptr;
-    
-    cocos2d::ccColor4F color1 = {0.0f, 1.0f, 0.0f, 1.0f};
-    cocos2d::ccColor4F color2 = {1.0f, 0.0f, 0.0f, 1.0f};
-    cocos2d::ccColor4F color3 = {1.0f, 1.0f, 0.0f, 1.0f};
-    
-    int length = 240;
-    float delta = 1.0f / 240.0f;
-    float deathRotation = 0.0f;
-    
-    cocos2d::CCPoint player1Trajectory[2000];
-    cocos2d::CCPoint player2Trajectory[2000];
-    
-    std::set<GameObject*> activatedObjects;
-    
-    static void trajectoryOff();
-    static void updateTrajectory(PlayLayer* pl);
-    static void createTrajectory(PlayLayer* pl, PlayerObject* fakePlayer, PlayerObject* realPlayer, bool hold, bool inverted = false);
-    static void drawPlayerHitbox(PlayerObject* player, CCDrawNode* drawNode);
-    static std::vector<cocos2d::CCPoint> getVertices(PlayerObject* player, cocos2d::CCRect rect, float rotation);
-    static void updateMergedColor();
-    
-    static void handlePortal(PlayerObject* player, GameObject* obj);
-    static void handleRing(PlayerObject* player, RingObject* ring, PlayLayer* pl);
-    static void handlePad(PlayerObject* player, GameObject* pad);
-    static void handleDash(PlayerObject* player, DashRingObject* dashRing);
-    
-    static bool shouldInteractWithObject(GameObject* obj);
-    static bool isGamemodePortal(int id);
-    static bool isGravityPortal(int id);
-    static bool isSpeedPortal(int id);
-    static bool isSizePortal(int id);
-    static bool isRing(int id);
-    static bool isPad(int id);
-    static bool isDashOrb(int id);
-    
-    static cocos2d::CCDrawNode* trajectoryNode();
-    
+    bool buildingPath = false;
+    bool pathAborted = false;
+
+    PlayerObject* shadowPlayer1 = nullptr;
+    PlayerObject* shadowPlayer2 = nullptr;
+
+    cocos2d::ccColor4F pressColor = {0.0f, 1.0f, 0.0f, 1.0f};
+    cocos2d::ccColor4F releaseColorVal = {1.0f, 0.0f, 0.0f, 1.0f};
+    cocos2d::ccColor4F mergedColor = {1.0f, 1.0f, 0.0f, 1.0f};
+
+    int frameCount = 240;
+    float frameDelta = 1.0f / 240.0f;
+    float deathAngle = 0.0f;
+
+    cocos2d::CCPoint p1Coords[2000];
+    cocos2d::CCPoint p2Coords[2000];
+
+    std::set<GameObject*> triggeredObjects;
+
+    static void disable();
+    static void refresh(PlayLayer* pl);
+    static void buildPath(PlayLayer* pl, PlayerObject* shadow, PlayerObject* actual, bool pressing, bool flipped = false);
+    static void renderBounds(PlayerObject* player, CCDrawNode* node);
+    static std::vector<cocos2d::CCPoint> computeVertices(PlayerObject* player, cocos2d::CCRect bounds, float angle);
+    static void refreshMergedColor();
+
+    static void processPortal(PlayerObject* player, GameObject* obj);
+    static void processRing(PlayerObject* player, RingObject* ring, PlayLayer* pl);
+    static void processPad(PlayerObject* player, GameObject* pad);
+    static void processDash(PlayerObject* player, DashRingObject* dashObj);
+
+    static bool shouldProcessObject(GameObject* obj);
+    static bool isModePortal(int objId);
+    static bool isGravityFlip(int objId);
+    static bool isVelocityPortal(int objId);
+    static bool isScalePortal(int objId);
+    static bool isJumpRing(int objId);
+    static bool isBouncePad(int objId);
+    static bool isDashRing(int objId);
+
+    static cocos2d::CCDrawNode* visualizerNode();
+
 private:
-    ShowTrajectory() = default;
+    PathVisualizer() = default;
 };

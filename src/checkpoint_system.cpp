@@ -7,84 +7,84 @@
 using namespace geode::prelude;
 
 #ifdef GEODE_IS_WINDOWS
-const uintptr_t seedAddr = 0x6a4e20;
+const uintptr_t rngMemoryOffset = 0x6a4e20;
 #endif
 
-void updateSeed(bool isRestart = false) {
-    ToastyReplay* mgr = ToastyReplay::get();
+void refreshRngState(bool isLevelStart = false) {
+    ReplayEngine* engine = ReplayEngine::get();
     PlayLayer* pl = PlayLayer::get();
     if (!pl) return;
 
-    if (mgr->seedEnabled) {
-        int finalSeed;
+    if (engine->rngLocked) {
+        int computedSeed;
 
         if (!pl->m_player1->m_isDead) {
-            std::mt19937 generator(mgr->seedValue + pl->m_gameState.m_currentProgress);
-            std::uniform_int_distribution<int> distribution(10000, 999999999);
-            finalSeed = distribution(generator);
+            std::mt19937 gen(engine->rngSeedVal + pl->m_gameState.m_currentProgress);
+            std::uniform_int_distribution<int> dist(10000, 999999999);
+            computedSeed = dist(gen);
         } else {
             std::random_device rd;
-            std::mt19937 generator(rd());
-            std::uniform_int_distribution<int> distribution(1000, 999999999);
-            finalSeed = distribution(generator);
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<int> dist(1000, 999999999);
+            computedSeed = dist(gen);
         }
 
 #ifdef GEODE_IS_WINDOWS
-        *(uintptr_t*)((char*)geode::base::get() + seedAddr) = finalSeed;
+        *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset) = computedSeed;
 #else
-        GameToolbox::fast_srand(finalSeed);
+        GameToolbox::fast_srand(computedSeed);
 #endif
     }
 
-    if (isRestart && mgr->state == RECORD) {
+    if (isLevelStart && engine->engineMode == MODE_CAPTURE) {
 #ifdef GEODE_IS_WINDOWS
-        mgr->macroSeed = *(uintptr_t*)((char*)geode::base::get() + seedAddr);
+        engine->capturedRngState = *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset);
 #else
-        mgr->macroSeed = 0;
+        engine->capturedRngState = 0;
 #endif
     }
 }
 
-static void clearInputState() {
-    auto* mgr = ToastyReplay::get();
+static void resetInputTracking() {
+    auto* engine = ReplayEngine::get();
 
-    mgr->ignoreFrame = -1;
-    mgr->ignoreJumpButton = -1;
+    engine->skipTickIndex = -1;
+    engine->skipActionTick = -1;
 
-    mgr->delayedFrameReleaseMain[0] = -1;
-    mgr->delayedFrameReleaseMain[1] = -1;
+    engine->deferredReleaseA[0] = -1;
+    engine->deferredReleaseA[1] = -1;
 
-    mgr->delayedFrameInput[0] = -1;
-    mgr->delayedFrameInput[1] = -1;
+    engine->deferredInputTick[0] = -1;
+    engine->deferredInputTick[1] = -1;
 
-    mgr->addSideHoldingMembers[0] = false;
-    mgr->addSideHoldingMembers[1] = false;
+    engine->lateralInputPending[0] = false;
+    engine->lateralInputPending[1] = false;
     for (int x = 0; x < 2; x++) {
         for (int y = 0; y < 2; y++)
-            mgr->delayedFrameRelease[x][y] = -1;
+            engine->deferredReleaseB[x][y] = -1;
     }
 }
 
-static void trimReplayData(int frame) {
-    auto* mgr = ToastyReplay::get();
-    if (!mgr->currentReplay) return;
+static void truncateMacroData(int tick) {
+    auto* engine = ReplayEngine::get();
+    if (!engine->activeMacro) return;
 
-    auto& inputs = mgr->currentReplay->inputs;
-    if (!inputs.empty()) {
-        while (!inputs.empty() && inputs.back().frame >= frame) {
-            inputs.pop_back();
+    auto& actions = engine->activeMacro->inputs;
+    if (!actions.empty()) {
+        while (!actions.empty() && actions.back().tick >= tick) {
+            actions.pop_back();
         }
     }
 
-    auto& frameFixes = mgr->currentReplay->frameFixes;
-    if (!frameFixes.empty()) {
-        while (!frameFixes.empty() && frameFixes.back().frame >= frame) {
-            frameFixes.pop_back();
+    auto& corrections = engine->activeMacro->corrections;
+    if (!corrections.empty()) {
+        while (!corrections.empty() && corrections.back().tick >= tick) {
+            corrections.pop_back();
         }
     }
 }
 
-class $modify(CheckpointObject) {
+class $modify(RestorePointHandler, CheckpointObject) {
 #ifdef GEODE_IS_WINDOWS
     bool init() {
         bool ret = CheckpointObject::init();
@@ -97,36 +97,36 @@ class $modify(CheckpointObject) {
 
         if (!cp) return ret;
 
-        auto* mgr = ToastyReplay::get();
+        auto* engine = ReplayEngine::get();
         PlayLayer* pl = PlayLayer::get();
 
-        if (!pl || mgr->state != RECORD) return ret;
+        if (!pl || engine->engineMode != MODE_CAPTURE) return ret;
 
-        int frame = static_cast<int>(pl->m_gameState.m_levelTime * mgr->tps);
-        frame++;
+        int tick = static_cast<int>(pl->m_gameState.m_levelTime * engine->tickRate);
+        tick++;
 
-        mgr->checkpoints[cp] = {
-            frame,
-            PlayerStateData(),
-            PlayerStateData(),
+        engine->storedRestorePoints[cp] = {
+            tick,
+            PhysicsSnapshot(),
+            PhysicsSnapshot(),
 #ifdef GEODE_IS_WINDOWS
-            *(uintptr_t*)((char*)geode::base::get() + seedAddr),
+            *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset),
 #else
             0,
 #endif
-            mgr->previousFrame
+            engine->lastTickIndex
         };
 
         return ret;
     }
 };
 
-class $modify(PlayLayer) {
-    bool init(GJGameLevel* lvl, bool useReplay, bool dontCreateObjects) {        
-        ToastyReplay* mgr = ToastyReplay::get();
-        
-        if (mgr->state == RECORD) {
-            mgr->createNewReplay(lvl);
+class $modify(MacroPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* lvl, bool useReplay, bool dontCreateObjects) {
+        ReplayEngine* engine = ReplayEngine::get();
+
+        if (engine->engineMode == MODE_CAPTURE) {
+            engine->initializeMacro(lvl);
         }
 
         return PlayLayer::init(lvl, useReplay, dontCreateObjects);
@@ -135,26 +135,26 @@ class $modify(PlayLayer) {
     void resetLevel() {
         PlayLayer::resetLevel();
 
-        ToastyReplay* mgr = ToastyReplay::get();
+        ReplayEngine* engine = ReplayEngine::get();
 
         bool inPractice = m_isPracticeMode;
-        int frame = m_gameState.m_currentProgress;
+        int tick = m_gameState.m_currentProgress;
 
-        updateSeed(true);
+        refreshRngState(true);
 
-        mgr->safeMode = false;
-        mgr->playbackIndex = 0;
-        mgr->frameFixIndex = 0;
-        mgr->restart = false;
+        engine->protectedMode = false;
+        engine->executeIndex = 0;
+        engine->correctionIndex = 0;
+        engine->levelRestarting = false;
 
-        if (mgr->state == RECORD && mgr->currentReplay) {
+        if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
             if (!inPractice) {
-                mgr->currentReplay->inputs.clear();
-                mgr->currentReplay->frameFixes.clear();
-                mgr->checkpoints.clear();
+                engine->activeMacro->inputs.clear();
+                engine->activeMacro->corrections.clear();
+                engine->storedRestorePoints.clear();
 
                 if (m_player1 && m_player2) {
-                    clearInputState();
+                    resetInputTracking();
 
                     m_player1->m_holdingRight = false;
                     m_player1->m_holdingLeft = false;
@@ -168,13 +168,13 @@ class $modify(PlayLayer) {
                         m_player2->m_holdingButtons[3] = false;
                     }
                 }
-            } else if (frame <= 1 || mgr->checkpoints.empty()) {
-                mgr->currentReplay->inputs.clear();
-                mgr->currentReplay->frameFixes.clear();
-                mgr->checkpoints.clear();
+            } else if (tick <= 1 || engine->storedRestorePoints.empty()) {
+                engine->activeMacro->inputs.clear();
+                engine->activeMacro->corrections.clear();
+                engine->storedRestorePoints.clear();
 
                 if (m_player1 && m_player2) {
-                    clearInputState();
+                    resetInputTracking();
 
                     m_player1->m_holdingRight = false;
                     m_player1->m_holdingLeft = false;
@@ -195,24 +195,24 @@ class $modify(PlayLayer) {
     void loadFromCheckpoint(CheckpointObject* cp) {
         if (!cp) return PlayLayer::loadFromCheckpoint(cp);
 
-        auto* mgr = ToastyReplay::get();
+        auto* engine = ReplayEngine::get();
 
-        if (mgr->state == RECORD) {
-            if (!mgr->checkpoints.contains(cp)) return PlayLayer::loadFromCheckpoint(cp);
+        if (engine->engineMode == MODE_CAPTURE) {
+            if (!engine->storedRestorePoints.contains(cp)) return PlayLayer::loadFromCheckpoint(cp);
 
-            int frame = mgr->checkpoints[cp].frame;
+            int tick = engine->storedRestorePoints[cp].tick;
 
-            clearInputState();
+            resetInputTracking();
 
-            trimReplayData(frame);
+            truncateMacroData(tick);
 
-            mgr->ignoreJumpButton = frame + 1;
-            mgr->previousFrame = mgr->checkpoints[cp].previousFrame;
+            engine->skipActionTick = tick + 1;
+            engine->lastTickIndex = engine->storedRestorePoints[cp].priorTick;
 
 #ifdef GEODE_IS_WINDOWS
-            if (mgr->seedEnabled) {
-                uintptr_t seed = mgr->checkpoints[cp].seed;
-                *(uintptr_t*)((char*)geode::base::get() + seedAddr) = seed;
+            if (engine->rngLocked) {
+                uintptr_t savedRng = engine->storedRestorePoints[cp].rngState;
+                *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset) = savedRng;
             }
 #endif
 
@@ -225,52 +225,52 @@ class $modify(PlayLayer) {
     }
 
     void levelComplete() {
-        ToastyReplay* mgr = ToastyReplay::get();
-        mgr->safeMode = false;
-        
-        if (mgr->state == RECORD && mgr->currentReplay) {
-            mgr->currentReplay->name = fmt::format("{} - 100%", mgr->currentReplay->levelInfo.name);
+        ReplayEngine* engine = ReplayEngine::get();
+        engine->protectedMode = false;
+
+        if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
+            engine->activeMacro->name = fmt::format("{} - 100%", engine->activeMacro->levelInfo.name);
         }
-        
+
         PlayLayer::levelComplete();
     }
 
     void destroyPlayer(PlayerObject* p0, GameObject* p1) {
-        ToastyReplay* mgr = ToastyReplay::get();
-        
-        if (mgr->noclip) {
-            mgr->noclipDeaths++;
-            
-            if (mgr->noclipAccuracyEnabled && mgr->noclipAccuracyLimit > 0.0f && mgr->noclipTotalFrames > 0) {
-                float accuracy = 100.0f * (1.0f - (float)mgr->noclipDeaths / (float)mgr->noclipTotalFrames);
-                if (accuracy < mgr->noclipAccuracyLimit) {
-                    mgr->noclipDeaths = 0;
-                    mgr->noclipTotalFrames = 0;
-                    
-                    mgr->noclip = false;
+        ReplayEngine* engine = ReplayEngine::get();
+
+        if (engine->collisionBypass) {
+            engine->bypassedCollisions++;
+
+            if (engine->collisionLimitActive && engine->collisionThreshold > 0.0f && engine->totalTickCount > 0) {
+                float hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
+                if (hitRate < engine->collisionThreshold) {
+                    engine->bypassedCollisions = 0;
+                    engine->totalTickCount = 0;
+
+                    engine->collisionBypass = false;
                     PlayLayer::destroyPlayer(p0, p1);
-                    mgr->noclip = true;
+                    engine->collisionBypass = true;
                     return;
                 }
             }
             return;
         }
-        
-        mgr->noclipDeaths = 0;
-        mgr->noclipTotalFrames = 0;
+
+        engine->bypassedCollisions = 0;
+        engine->totalTickCount = 0;
 
         PlayLayer::destroyPlayer(p0, p1);
     }
 
     void onQuit() {
-        ToastyReplay* mgr = ToastyReplay::get();
-        
-        if (mgr->state == RECORD && mgr->currentReplay) {
-            delete mgr->currentReplay;
-            mgr->currentReplay = nullptr;
-            mgr->state = NONE;
+        ReplayEngine* engine = ReplayEngine::get();
+
+        if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
+            delete engine->activeMacro;
+            engine->activeMacro = nullptr;
+            engine->engineMode = MODE_DISABLED;
         }
-        
+
         PlayLayer::onQuit();
     }
 };

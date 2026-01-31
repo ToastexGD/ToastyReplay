@@ -8,130 +8,135 @@
 
 using namespace geode::prelude;
 
-enum RecordingState {
-    NONE, RECORD, PLAYBACK
+enum MacroMode {
+    MODE_DISABLED, MODE_CAPTURE, MODE_EXECUTE
 };
 
-enum ErrorCode {
-    ERROR_NONE,
-    KEY_NOT_FOUND_ERROR,
-    KEY_INVALID_ERROR,
-    CURL_FAILED_ERROR,
-    INVALID_HWID_ERROR,
-    UNKNOWN_ERROR,
-    KEY_LINKED_DIFFERENT_COMPUTER_ERROR
+enum ValidationResult {
+    RESULT_OK,
+    RESULT_KEY_MISSING,
+    RESULT_KEY_MALFORMED,
+    RESULT_NETWORK_FAILURE,
+    RESULT_DEVICE_MISMATCH,
+    RESULT_UNEXPECTED,
+    RESULT_DEVICE_CONFLICT
 };
 
-class ToastyReplay {
+class ReplayEngine {
 public:
-    RecordingState state = NONE;
-    ErrorCode error = ERROR_NONE;
+    MacroMode engineMode = MODE_DISABLED;
+    ValidationResult validationStatus = RESULT_OK;
 
-    bool fmodified = false;
+    bool dataModified = false;
 
-    float extraTPS = 0.f;
+    float tickAccumulator = 0.f;
 
-    bool disableRender = false;
-    bool ignoreBypass = false;
-    bool justLoaded = false;
-    bool ignoreInput = false;
-    bool frameAdvance = false;
-    bool doAdvance = false;
-    bool stepFrame = false;
-    bool internalRenderer = false;
-    bool prevFrameAdvance = false;
-    bool frameAdvanceKeyPressed = false;
-    bool speedHackAudio = true;
-    bool ignoreManualInput = false;
-    bool isReplayInput = false;
+    bool renderingDisabled = false;
+    bool bypassIgnored = false;
+    bool recentlyInitialized = false;
+    bool inputIgnored = false;
+    bool tickStepping = false;
+    bool pendingStep = false;
+    bool singleTickStep = false;
+    bool renderInternal = false;
+    bool priorTickStepping = false;
+    bool stepKeyActive = false;
+    bool audioPitchEnabled = true;
+    bool userInputIgnored = false;
+    bool macroInputActive = false;
+    bool protectedMode = false;
+    bool pathPreview = false;
+    bool collisionBypass = false;
+    bool collisionLimitActive = false;
+    float collisionThreshold = 0.0f;
+
     bool safeMode = false;
     bool showTrajectory = false;
-    bool noclip = false;
-    bool noclipAccuracyEnabled = false;
-    float noclipAccuracyLimit = 0.0f;
-    
-    int noclipDeaths = 0;
-    int noclipTotalFrames = 0;
-    
-    bool seedEnabled = false;
-    unsigned int seedValue = 1;
-    uintptr_t macroSeed = 0;
-
-    int trajectoryLength = 312;
-    
-    double speed = 1;
-    double tps = 240.f;
-    ReplayData* currentReplay = nullptr;
-
-    std::unordered_map<CheckpointObject*, CheckpointData> checkpoints;
-    int previousFrame = 0;
-    int respawnFrame = -1;
-    size_t playbackIndex = 0;
-    size_t frameFixIndex = 0;
-    bool ignoreRecordAction = false;
-    bool restart = false;
-    bool firstAttempt = false;
-    bool frameFixes = false;
-    bool inputFixes = false;
-    int frameFixesLimit = 240;
-    int ignoreFrame = -1;
-    int ignoreJumpButton = -1;
-    int delayedFrameReleaseMain[2] = { -1, -1 };
-    int delayedFrameInput[2] = { -1, -1 };
-    int delayedFrameRelease[2][2] = { { -1, -1 }, { -1, -1 } };
-    bool heldButtons[6] = { false, false, false, false, false, false };
-    bool wasHolding[6] = { false, false, false, false, false, false };
-    bool addSideHoldingMembers[2] = { false, false };
-    bool ignoreStopDashing[2] = { false, false };
+    bool trajectoryBothSides = false;
     bool creatingTrajectory = false;
-    int currentSession = 0;
-    int lastAutoSaveFrame = 0;
 
-    std::vector<std::string> savedReplays;
-    
-    int keybind_frameAdvance = 0x56;
-    int keybind_speedhackAudio = 0;
-    int keybind_safeMode = 0;
-    int keybind_trajectory = 0;
-    int keybind_noclip = 0;
-    int keybind_seed = 0;
+    int bypassedCollisions = 0;
+    int totalTickCount = 0;
 
-    void refreshReplays() {
-        savedReplays.clear();
+    bool rngLocked = false;
+    unsigned int rngSeedVal = 1;
+    uintptr_t capturedRngState = 0;
+
+    int pathLength = 312;
+
+    double gameSpeed = 1;
+    double tickRate = 240.f;
+    MacroSequence* activeMacro = nullptr;
+
+    std::unordered_map<CheckpointObject*, RestorePoint> storedRestorePoints;
+    int lastTickIndex = 0;
+    int respawnTickIndex = -1;
+    size_t executeIndex = 0;
+    size_t correctionIndex = 0;
+    bool captureIgnored = false;
+    bool levelRestarting = false;
+    bool initialRun = false;
+    bool positionCorrection = false;
+    bool inputCorrection = false;
+    int correctionInterval = 240;
+    int skipTickIndex = -1;
+    int skipActionTick = -1;
+    int deferredReleaseA[2] = { -1, -1 };
+    int deferredInputTick[2] = { -1, -1 };
+    int deferredReleaseB[2][2] = { { -1, -1 }, { -1, -1 } };
+    bool activeButtons[6] = { false, false, false, false, false, false };
+    bool priorButtonState[6] = { false, false, false, false, false, false };
+    bool lateralInputPending[2] = { false, false };
+    bool dashCancelIgnored[2] = { false, false };
+    bool simulatingPath = false;
+    int sessionCounter = 0;
+    int lastSaveTick = 0;
+
+    std::vector<std::string> storedMacros;
+
+    int hotkey_tickStep = 0x56;
+    int hotkey_audioPitch = 0;
+    int hotkey_protected = 0;
+    int hotkey_pathPreview = 0;
+    int hotkey_collision = 0;
+    int hotkey_rngLock = 0;
+
+    void reloadMacroList() {
+        storedMacros.clear();
         auto dir = geode::prelude::Mod::get()->getSaveDir() / "replays";
         if (std::filesystem::exists(dir)) {
             for (auto& entry : std::filesystem::directory_iterator(dir)) {
                 if (entry.is_regular_file() && entry.path().extension() == ".gdr") {
-                    savedReplays.push_back(entry.path().stem().string());
+                    storedMacros.push_back(entry.path().stem().string());
                 }
             }
         }
     }
 
-    void startRecording(GJGameLevel* level) {
-        state = RECORD;
-        createNewReplay(level);
+    void beginCapture(GJGameLevel* level) {
+        engineMode = MODE_CAPTURE;
+        initializeMacro(level);
     }
 
-    void createNewReplay(GJGameLevel* level) {
-        if (currentReplay) delete currentReplay;
-        currentReplay = new ReplayData();
+    void initializeMacro(GJGameLevel* level) {
+        if (activeMacro) delete activeMacro;
+        activeMacro = new MacroSequence();
         if (level) {
-            currentReplay->levelInfo.id = level->m_levelID;
-            currentReplay->levelInfo.name = level->m_levelName;
-            currentReplay->name = level->m_levelName;
+            activeMacro->levelInfo.id = level->m_levelID;
+            activeMacro->levelInfo.name = level->m_levelName;
+            activeMacro->name = level->m_levelName;
         }
-        currentReplay->framerate = tps;
+        activeMacro->framerate = tickRate;
     }
 
-    void startPlayback() {
-        if (!currentReplay || currentReplay->inputs.empty()) return;
+    void beginExecution() {
+        if (!activeMacro || activeMacro->inputs.empty()) return;
 
-        state = PLAYBACK;
-        playbackIndex = 0;
-        frameFixIndex = 0;
-        firstAttempt = true;
-        respawnFrame = -1;
+        engineMode = MODE_EXECUTE;
+        executeIndex = 0;
+        correctionIndex = 0;
+        initialRun = true;
+        respawnTickIndex = -1;
 
         PlayLayer* pl = PlayLayer::get();
         if (pl) {
@@ -142,17 +147,17 @@ public:
         }
     }
 
-    void stopPlayback() {
-        state = NONE;
+    void haltExecution() {
+        engineMode = MODE_DISABLED;
     }
 
     static auto* get() {
-        static ToastyReplay* instance = new ToastyReplay();
-        return instance;
+        static ReplayEngine* singleton = new ReplayEngine();
+        return singleton;
     }
 
-    void playSound(bool p2, int button, bool down);
+    void triggerAudio(bool secondPlayer, int actionType, bool pressed);
 
-    void handleKeybinds();
+    void processHotkeys();
 };
 #endif

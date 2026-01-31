@@ -8,56 +8,56 @@
 
 using namespace geode::prelude;
 
-void ToastyReplay::handleKeybinds() {
-    bool keyIsPressed = (keybind_frameAdvance != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_frameAdvance, false));
-    bool keyIsHeld = (keybind_frameAdvance != 0 && ImGui::IsKeyDown((ImGuiKey)keybind_frameAdvance));
+void ReplayEngine::processHotkeys() {
+    bool keyPressed = (hotkey_tickStep != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_tickStep, false));
+    bool keyHeld = (hotkey_tickStep != 0 && ImGui::IsKeyDown((ImGuiKey)hotkey_tickStep));
 
-    if (keyIsPressed) {
-        if (!frameAdvanceKeyPressed) {
-            frameAdvanceKeyPressed = true;
+    if (keyPressed) {
+        if (!stepKeyActive) {
+            stepKeyActive = true;
 
-            if (!frameAdvance) {
-                frameAdvance = true;
+            if (!tickStepping) {
+                tickStepping = true;
             } else {
-                stepFrame = true;
+                singleTickStep = true;
             }
         }
-    } else if (keyIsHeld && frameAdvance) {
-        stepFrame = true;
+    } else if (keyHeld && tickStepping) {
+        singleTickStep = true;
     } else {
-        frameAdvanceKeyPressed = false;
+        stepKeyActive = false;
     }
 
-    if (keybind_speedhackAudio != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_speedhackAudio, false)) {
-        speedHackAudio = !speedHackAudio;
+    if (hotkey_audioPitch != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_audioPitch, false)) {
+        audioPitchEnabled = !audioPitchEnabled;
     }
 
-    if (keybind_safeMode != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_safeMode, false)) {
-        safeMode = !safeMode;
+    if (hotkey_protected != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_protected, false)) {
+        protectedMode = !protectedMode;
     }
 
-    if (keybind_trajectory != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_trajectory, false)) {
-        showTrajectory = !showTrajectory;
+    if (hotkey_pathPreview != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_pathPreview, false)) {
+        pathPreview = !pathPreview;
     }
 
-    if (keybind_noclip != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_noclip, false)) {
-        noclip = !noclip;
+    if (hotkey_collision != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_collision, false)) {
+        collisionBypass = !collisionBypass;
     }
 
-    if (keybind_seed != 0 && ImGui::IsKeyPressed((ImGuiKey)keybind_seed, false)) {
-        seedEnabled = !seedEnabled;
+    if (hotkey_rngLock != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_rngLock, false)) {
+        rngLocked = !rngLocked;
     }
 }
 
-static ImVec4 getRainbowColor(float speed) {
-    static float hue = 0.0f;
-    hue += speed * 0.001f;
-    if (hue > 1.0f) hue -= 1.0f;
-    
-    float h = hue * 6.0f;
+static ImVec4 computeCycleColor(float rate) {
+    static float hueVal = 0.0f;
+    hueVal += rate * 0.001f;
+    if (hueVal > 1.0f) hueVal -= 1.0f;
+
+    float h = hueVal * 6.0f;
     float c = 1.0f;
     float x = c * (1.0f - std::abs(std::fmod(h, 2.0f) - 1.0f));
-    
+
     float r = 0, g = 0, b = 0;
     if (h < 1.0f) { r = c; g = x; }
     else if (h < 2.0f) { r = x; g = c; }
@@ -65,40 +65,40 @@ static ImVec4 getRainbowColor(float speed) {
     else if (h < 4.0f) { g = x; b = c; }
     else if (h < 5.0f) { r = x; b = c; }
     else { r = c; b = x; }
-    
+
     return ImVec4(r, g, b, 1.0f);
 }
 
-void GUI::renderReplayInfo() {
-    ToastyReplay* mgr = ToastyReplay::get();
-    
-    if (mgr->currentReplay) {
+void MenuInterface::displayMacroDetails() {
+    ReplayEngine* engine = ReplayEngine::get();
+
+    if (engine->activeMacro) {
         ImGui::Text("Currently Recording: ");
         ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%s", mgr->currentReplay->name.c_str());
+        ImGui::TextColored({ 0,255,255,255 }, "%s", engine->activeMacro->name.c_str());
     }
 }
 
-void GUI::renderStateSwitcher() {
-    ToastyReplay* mgr = ToastyReplay::get();
+void MenuInterface::displayModeSelector() {
+    ReplayEngine* engine = ReplayEngine::get();
 
-    if (ImGui::RadioButton("Disable", mgr->state == NONE)) {
-        if (mgr->state == RECORD && mgr->currentReplay) {
-            delete mgr->currentReplay;
-            mgr->currentReplay = nullptr;
+    if (ImGui::RadioButton("Disable", engine->engineMode == MODE_DISABLED)) {
+        if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
+            delete engine->activeMacro;
+            engine->activeMacro = nullptr;
         }
-        mgr->state = NONE;
+        engine->engineMode = MODE_DISABLED;
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Disable recording and playback");
     }
     ImGui::SameLine();
 
-    if (ImGui::RadioButton("Record", mgr->state == RECORD)) {
+    if (ImGui::RadioButton("Record", engine->engineMode == MODE_CAPTURE)) {
         if (PlayLayer::get()) {
-            mgr->startRecording(PlayLayer::get()->m_level);
+            engine->beginCapture(PlayLayer::get()->m_level);
         } else {
-            mgr->state = RECORD;
+            engine->engineMode = MODE_CAPTURE;
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -106,11 +106,11 @@ void GUI::renderStateSwitcher() {
     }
 
     ImGui::SameLine();
-    if (ImGui::RadioButton("Playback", mgr->state == PLAYBACK)) {
-        if (mgr->currentReplay) {
-            mgr->state = PLAYBACK;
+    if (ImGui::RadioButton("Playback", engine->engineMode == MODE_EXECUTE)) {
+        if (engine->activeMacro) {
+            engine->engineMode = MODE_EXECUTE;
         } else {
-            mgr->state = NONE;
+            engine->engineMode = MODE_DISABLED;
         }
     }
     if (ImGui::IsItemHovered()) {
@@ -118,42 +118,42 @@ void GUI::renderStateSwitcher() {
     }
 }
 
-void RenderInfoPanel() {
-    ToastyReplay* mgr = ToastyReplay::get();
+void DrawUtilityPanel() {
+    ReplayEngine* engine = ReplayEngine::get();
 
-    ImGuiCond sizeCondition = GUI::get()->themeResetRequested ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-    ImGui::SetNextWindowSize(GUI::get()->infoPanelSize, sizeCondition);
+    ImGuiCond sizeRule = MenuInterface::get()->layoutReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+    ImGui::SetNextWindowSize(MenuInterface::get()->utilityPanelDims, sizeRule);
     ImGui::SetNextWindowPos(ImVec2(385, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(220, 300), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("utilities", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-    
-    GUI::get()->infoPanelSize = ImGui::GetWindowSize();
-    
-    float cappedScale = GUI::get()->fontSize;
+
+    MenuInterface::get()->utilityPanelDims = ImGui::GetWindowSize();
+
+    float cappedScale = MenuInterface::get()->textScale;
     if (cappedScale > 1.3f) cappedScale = 1.3f;
     ImGui::SetWindowFontScale(cappedScale);
-    
-    if (GUI::get()->s_font) ImGui::PushFont(GUI::get()->s_font);
+
+    if (MenuInterface::get()->smallTypeface) ImGui::PushFont(MenuInterface::get()->smallTypeface);
 
     if (ImGui::BeginChild("InfoContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
         ImGui::Text("TPS: ");
         ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%.0f", mgr->tps);
+        ImGui::TextColored({ 0,255,255,255 }, "%.0f", engine->tickRate);
 
         ImGui::Text("Speed: ");
         ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%.2f", mgr->speed);
-        
+        ImGui::TextColored({ 0,255,255,255 }, "%.2f", engine->gameSpeed);
+
         ImGui::Text("Frame: ");
         ImGui::SameLine();
         ImGui::TextColored({ 0,255,255,255 }, "%i", PlayLayer::get() ? PlayLayer::get()->m_gameState.m_currentProgress : 0);
-        
 
-        static float tempTPS = mgr->tps;
+
+        static float tempTickRate = engine->tickRate;
         ImGui::Text("Set TPS: ");
-        ImGui::InputFloat("##tps", &tempTPS);
+        ImGui::InputFloat("##tps", &tempTickRate);
         if (ImGui::Button("Apply TPS")) {
-            if (mgr->state == NONE || !PlayLayer::get()) mgr->tps = tempTPS;
+            if (engine->engineMode == MODE_DISABLED || !PlayLayer::get()) engine->tickRate = tempTickRate;
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Set ticks per second (physics rate)");
@@ -161,355 +161,355 @@ void RenderInfoPanel() {
 
         ImGui::NewLine();
 
-        static float tempSpeed = 1;
+        static float tempGameSpeed = 1;
         ImGui::Text("Set Speed: ");
-        ImGui::InputFloat("##speed", &tempSpeed);
+        ImGui::InputFloat("##speed", &tempGameSpeed);
         if (ImGui::Button("Apply Speedhack")) {
-            mgr->speed = tempSpeed;
+            engine->gameSpeed = tempGameSpeed;
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Change game speed multiplier");
         }
         ImGui::EndChild();
     }
-    if (GUI::get()->s_font) ImGui::PopFont();
-    
+    if (MenuInterface::get()->smallTypeface) ImGui::PopFont();
+
     ImGui::End();
 }
 
-void RenderHackPanel() {
-    ToastyReplay* mgr = ToastyReplay::get();
-    
-    ImGui::SetNextWindowSize(GUI::get()->hackPanelSize, ImGuiCond_FirstUseEver);
+void DrawToolsPanel() {
+    ReplayEngine* engine = ReplayEngine::get();
+
+    ImGui::SetNextWindowSize(MenuInterface::get()->toolsPanelDims, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(610, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(220, 200), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("hacks", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-    
-    GUI::get()->hackPanelSize = ImGui::GetWindowSize();
-    
-    float cappedScale = GUI::get()->fontSize;
+
+    MenuInterface::get()->toolsPanelDims = ImGui::GetWindowSize();
+
+    float cappedScale = MenuInterface::get()->textScale;
     if (cappedScale > 1.3f) cappedScale = 1.3f;
     ImGui::SetWindowFontScale(cappedScale);
-    
-    if (GUI::get()->s_font) ImGui::PushFont(GUI::get()->s_font);
+
+    if (MenuInterface::get()->smallTypeface) ImGui::PushFont(MenuInterface::get()->smallTypeface);
 
     if (ImGui::BeginChild("HackContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGui::Checkbox("Frame Advance", &mgr->frameAdvance);
+        ImGui::Checkbox("Frame Advance", &engine->tickStepping);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Pause the game and advance frame by frame");
         }
-        
-        ImGui::Checkbox("Speedhack Audio", &mgr->speedHackAudio);
+
+        ImGui::Checkbox("Speedhack Audio", &engine->audioPitchEnabled);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Apply speedhack to game audio as well");
         }
-        
-        ImGui::Checkbox("Safe Mode", &mgr->safeMode);
+
+        ImGui::Checkbox("Safe Mode", &engine->protectedMode);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Prevents stats and percentage gain");
         }
-        
-        ImGui::Checkbox("Show Trajectory", &mgr->showTrajectory);
+
+        ImGui::Checkbox("Show Trajectory", &engine->pathPreview);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Display predicted player trajectory");
         }
-        
-        if (mgr->showTrajectory) {
+
+        if (engine->pathPreview) {
             ImGui::Indent();
-            static int trajectoryLength = 312;
+            static int pathLen = 312;
             ImGui::Text("Trajectory Length");
-            if (ImGui::InputInt("##trajLength", &trajectoryLength, 10, 50)) {
-                if (trajectoryLength < 50) trajectoryLength = 50;
-                if (trajectoryLength > 480) trajectoryLength = 480;
-                mgr->trajectoryLength = trajectoryLength;
+            if (ImGui::InputInt("##trajLength", &pathLen, 10, 50)) {
+                if (pathLen < 50) pathLen = 50;
+                if (pathLen > 480) pathLen = 480;
+                engine->pathLength = pathLen;
             }
             ImGui::Unindent();
         }
-        
-        ImGui::Checkbox("Noclip", &mgr->noclip);
+
+        ImGui::Checkbox("Noclip", &engine->collisionBypass);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Disable player collision with obstacles");
         }
-        
-        if (mgr->noclip) {
+
+        if (engine->collisionBypass) {
             ImGui::Indent();
-            
-            float accuracy = 100.0f;
-            if (mgr->noclipTotalFrames > 0) {
-                accuracy = 100.0f * (1.0f - (float)mgr->noclipDeaths / (float)mgr->noclipTotalFrames);
+
+            float hitRate = 100.0f;
+            if (engine->totalTickCount > 0) {
+                hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
             }
-            
-            ImVec4 accuracyColor;
-            if (accuracy >= 90.0f) {
-                accuracyColor = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); // Green
-            } else if (accuracy >= 70.0f) {
-                accuracyColor = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
+
+            ImVec4 hitRateColor;
+            if (hitRate >= 90.0f) {
+                hitRateColor = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
+            } else if (hitRate >= 70.0f) {
+                hitRateColor = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
             } else {
-                accuracyColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
+                hitRateColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
             }
-            
+
             ImGui::Text("Accuracy: ");
             ImGui::SameLine();
-            ImGui::TextColored(accuracyColor, "%.2f%%", accuracy);
-            
-            ImGui::Text("Deaths: %d | Frames: %d", mgr->noclipDeaths, mgr->noclipTotalFrames);
-            
-            ImGui::Checkbox("Accuracy Limit", &mgr->noclipAccuracyEnabled);
+            ImGui::TextColored(hitRateColor, "%.2f%%", hitRate);
+
+            ImGui::Text("Deaths: %d | Frames: %d", engine->bypassedCollisions, engine->totalTickCount);
+
+            ImGui::Checkbox("Accuracy Limit", &engine->collisionLimitActive);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Kill player if accuracy drops below limit");
             }
-            
-            if (mgr->noclipAccuracyEnabled) {
+
+            if (engine->collisionLimitActive) {
                 ImGui::Text("Min Accuracy:");
-                
-                const char* accuracyOptions[] = { "Disabled", "50%", "60%", "70%", "75%", "80%", "85%", "90%", "95%", "99%" };
-                float accuracyValues[] = { 0.0f, 50.0f, 60.0f, 70.0f, 75.0f, 80.0f, 85.0f, 90.0f, 95.0f, 99.0f };
-                
-                int currentSelection = 0;
+
+                const char* thresholdOptions[] = { "Disabled", "50%", "60%", "70%", "75%", "80%", "85%", "90%", "95%", "99%" };
+                float thresholdValues[] = { 0.0f, 50.0f, 60.0f, 70.0f, 75.0f, 80.0f, 85.0f, 90.0f, 95.0f, 99.0f };
+
+                int currentIdx = 0;
                 for (int i = 0; i < 10; i++) {
-                    if (std::abs(mgr->noclipAccuracyLimit - accuracyValues[i]) < 0.1f) {
-                        currentSelection = i;
+                    if (std::abs(engine->collisionThreshold - thresholdValues[i]) < 0.1f) {
+                        currentIdx = i;
                         break;
                     }
                 }
-                
-                if (ImGui::Combo("##accuracyLimit", &currentSelection, accuracyOptions, 10)) {
-                    mgr->noclipAccuracyLimit = accuracyValues[currentSelection];
+
+                if (ImGui::Combo("##accuracyLimit", &currentIdx, thresholdOptions, 10)) {
+                    engine->collisionThreshold = thresholdValues[currentIdx];
                 }
             }
-            
+
             ImGui::Unindent();
         }
-        
-        ImGui::Checkbox("Seed", &mgr->seedEnabled);
+
+        ImGui::Checkbox("Seed", &engine->rngLocked);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Use a fixed seed for consistent RNG");
         }
-        
-        if (mgr->seedEnabled) {
+
+        if (engine->rngLocked) {
             ImGui::Indent();
-            
-            static char seedBuffer[32] = "1";
-            static bool seedBufferInit = false;
-            if (!seedBufferInit) {
-                snprintf(seedBuffer, sizeof(seedBuffer), "%u", mgr->seedValue);
-                seedBufferInit = true;
+
+            static char rngBuffer[32] = "1";
+            static bool rngBufferInit = false;
+            if (!rngBufferInit) {
+                snprintf(rngBuffer, sizeof(rngBuffer), "%u", engine->rngSeedVal);
+                rngBufferInit = true;
             }
-            
+
             ImGui::Text("Seed Value:");
-            if (ImGui::InputText("##seedValue", seedBuffer, sizeof(seedBuffer), ImGuiInputTextFlags_CharsDecimal)) {
+            if (ImGui::InputText("##seedValue", rngBuffer, sizeof(rngBuffer), ImGuiInputTextFlags_CharsDecimal)) {
                 try {
-                    unsigned long long ull = std::stoull(seedBuffer);
-                    mgr->seedValue = static_cast<unsigned int>(ull);
+                    unsigned long long parsed = std::stoull(rngBuffer);
+                    engine->rngSeedVal = static_cast<unsigned int>(parsed);
                 } catch (...) {
-                    mgr->seedValue = 1;
+                    engine->rngSeedVal = 1;
                 }
             }
-            
+
             ImGui::Unindent();
         }
 
         ImGui::NewLine();
         ImGui::EndChild();
     }
-    if (GUI::get()->s_font) ImGui::PopFont();
-    
+    if (MenuInterface::get()->smallTypeface) ImGui::PopFont();
+
     ImGui::End();
 }
 
-void RenderThemePanel() {
-    GUI* gui = GUI::get();
-    
-    ImGui::SetNextWindowSize(gui->themePanelSize, ImGuiCond_FirstUseEver);
+void DrawStylePanel() {
+    MenuInterface* ui = MenuInterface::get();
+
+    ImGui::SetNextWindowSize(ui->stylePanelDims, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(835, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(220, 250), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("theme", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-    
-    gui->themePanelSize = ImGui::GetWindowSize();
-    
-    float cappedScale = gui->fontSize;
+
+    ui->stylePanelDims = ImGui::GetWindowSize();
+
+    float cappedScale = ui->textScale;
     if (cappedScale > 1.3f) cappedScale = 1.3f;
     ImGui::SetWindowFontScale(cappedScale);
-    
-    if (gui->s_font) ImGui::PushFont(gui->s_font);
+
+    if (ui->smallTypeface) ImGui::PushFont(ui->smallTypeface);
 
     if (ImGui::BeginChild("ThemeContent", ImVec2(0, -40), false, ImGuiWindowFlags_HorizontalScrollbar)) {
         ImGui::Text("Text Color");
-        if (!gui->rgbTextColor) {
-            ImGui::ColorEdit4("##textColor", (float*)&gui->textColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        if (!ui->cyclingColors) {
+            ImGui::ColorEdit4("##textColor", (float*)&ui->fontColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
         }
         ImGui::SameLine();
-        ImGui::Checkbox("RGB##text", &gui->rgbTextColor);
+        ImGui::Checkbox("RGB##text", &ui->cyclingColors);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Enable rainbow cycling text color");
         }
-        
+
         ImGui::Text("Background Color");
-        ImGui::ColorEdit4("##bgColor", (float*)&gui->backgroundColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
-        
-        if (gui->rgbTextColor) {
+        ImGui::ColorEdit4("##bgColor", (float*)&ui->bgColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+
+        if (ui->cyclingColors) {
             ImGui::NewLine();
             ImGui::Text("RGB Speed");
-            ImGui::SliderFloat("##rgbSpeed", &gui->rgbSpeed, 0.1f, 5.0f, "%.1f");
+            ImGui::SliderFloat("##rgbSpeed", &ui->cycleRate, 0.1f, 5.0f, "%.1f");
         }
-        
+
         ImGui::NewLine();
         ImGui::Text("Text Size");
-        ImGui::SliderFloat("##fontSize", &gui->fontSize, 0.5f, 2.5f, "%.1f");
-        
+        ImGui::SliderFloat("##fontSize", &ui->textScale, 0.5f, 2.5f, "%.1f");
+
         ImGui::NewLine();
         ImGui::Text("Menu Opacity");
-        ImGui::SliderFloat("##opacity", &gui->menuOpacity, 0.1f, 1.0f, "%.1f");
-        
+        ImGui::SliderFloat("##opacity", &ui->windowAlpha, 0.1f, 1.0f, "%.1f");
+
         ImGui::EndChild();
     }
-    
-    if (gui->s_font) ImGui::PopFont();
+
+    if (ui->smallTypeface) ImGui::PopFont();
 
     if (ImGui::Button("Reset Theme", ImVec2(-1, 0))) {
-        gui->textColor = ImVec4(0.80f, 0.80f, 0.83f, 1.00f);
-        gui->backgroundColor = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
-        gui->menuOpacity = 1.0f;
-        gui->fontSize = 1.0f;
-        gui->rgbTextColor = false;
-        gui->rgbSpeed = 1.0f;
-        gui->themeResetRequested = true;
-        
-        gui->mainPanelSize = ImVec2(350, 525);
-        gui->infoPanelSize = ImVec2(200, 320);
-        gui->hackPanelSize = ImVec2(200, 380);
-        gui->themePanelSize = ImVec2(200, 320);
-        
+        ui->fontColor = ImVec4(0.80f, 0.80f, 0.83f, 1.00f);
+        ui->bgColor = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
+        ui->windowAlpha = 1.0f;
+        ui->textScale = 1.0f;
+        ui->cyclingColors = false;
+        ui->cycleRate = 1.0f;
+        ui->layoutReset = true;
+
+        ui->primaryPanelDims = ImVec2(350, 525);
+        ui->utilityPanelDims = ImVec2(200, 320);
+        ui->toolsPanelDims = ImVec2(200, 380);
+        ui->stylePanelDims = ImVec2(200, 320);
+
         ImGuiStyle* style = &ImGui::GetStyle();
-        style->Colors[ImGuiCol_Text] = gui->textColor;
-        style->Colors[ImGuiCol_WindowBg] = ImVec4(gui->backgroundColor.x, gui->backgroundColor.y, gui->backgroundColor.z, gui->menuOpacity);
-        style->Colors[ImGuiCol_PopupBg] = ImVec4(gui->backgroundColor.x * 1.1f, gui->backgroundColor.y * 1.1f, gui->backgroundColor.z * 1.1f, gui->menuOpacity);
+        style->Colors[ImGuiCol_Text] = ui->fontColor;
+        style->Colors[ImGuiCol_WindowBg] = ImVec4(ui->bgColor.x, ui->bgColor.y, ui->bgColor.z, ui->windowAlpha);
+        style->Colors[ImGuiCol_PopupBg] = ImVec4(ui->bgColor.x * 1.1f, ui->bgColor.y * 1.1f, ui->bgColor.z * 1.1f, ui->windowAlpha);
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Reset all theme settings to default");
     }
-    
+
     ImGui::End();
 }
 
-void GUI::renderMainPanel() {
-    ImGuiCond sizeCondition = themeResetRequested ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-    ImGui::SetNextWindowSize(mainPanelSize, sizeCondition);
-	ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+void MenuInterface::displayPrimaryPanel() {
+    ImGuiCond sizeRule = layoutReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+    ImGui::SetNextWindowSize(primaryPanelDims, sizeRule);
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(350, 500), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("info", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
-    float cappedScale = fontSize;
+    float cappedScale = textScale;
     if (cappedScale > 1.2f) cappedScale = 1.2f;
     ImGui::SetWindowFontScale(cappedScale);
 
-    mainPanelSize = ImGui::GetWindowSize();
+    primaryPanelDims = ImGui::GetWindowSize();
 
-    if (l_font) ImGui::PushFont(l_font);
+    if (largeTypeface) ImGui::PushFont(largeTypeface);
     ImGui::TextColored(ImVec4(1.f, 0.78f, 0.17f, 1.f), "ToastyReplay");
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.f), "v1.0.0-Beta");
-    if (l_font) ImGui::PopFont();
+    if (largeTypeface) ImGui::PopFont();
 
-    if (s_font) ImGui::PushFont(s_font);
+    if (smallTypeface) ImGui::PushFont(smallTypeface);
 
-    ToastyReplay* mgr = ToastyReplay::get();
+    ReplayEngine* engine = ReplayEngine::get();
 
     if (ImGui::BeginChild("MainContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        
-        if (mgr->state == PLAYBACK && mgr->currentReplay) {
+
+        if (engine->engineMode == MODE_EXECUTE && engine->activeMacro) {
             ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "PLAYING");
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), ": %s", mgr->currentReplay->name.c_str());
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), ": %s", engine->activeMacro->name.c_str());
             ImGui::SameLine();
-            ImGui::Text("| Inputs: %zu", mgr->currentReplay->inputs.size());
-            
+            ImGui::Text("| Inputs: %zu", engine->activeMacro->inputs.size());
+
             if (ImGui::Button("Stop Playback", ImVec2(150, 0))) {
-                mgr->state = NONE;
+                engine->engineMode = MODE_DISABLED;
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Stop playing the macro");
             }
-            
+
             ImGui::Separator();
             ImGui::NewLine();
         }
-        
-        if (mgr->state == RECORD && mgr->currentReplay) {
+
+        if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "RECORDING");
             ImGui::SameLine();
-            ImGui::Text("| Inputs: %zu", mgr->currentReplay->inputs.size());
-            
-            if (!tempReplayNameInitialized) {
-                strncpy(tempReplayName, mgr->currentReplay->name.c_str(), sizeof(tempReplayName) - 1);
-                tempReplayName[sizeof(tempReplayName) - 1] = '\0';
-                tempReplayNameInitialized = true;
+            ImGui::Text("| Inputs: %zu", engine->activeMacro->inputs.size());
+
+            if (!macroNameReady) {
+                strncpy(macroNameBuffer, engine->activeMacro->name.c_str(), sizeof(macroNameBuffer) - 1);
+                macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
+                macroNameReady = true;
             }
-            
+
             ImGui::Text("Macro Name:");
-            if (ImGui::InputText("##recordingName", tempReplayName, sizeof(tempReplayName))) {
-                mgr->currentReplay->name = tempReplayName;
+            if (ImGui::InputText("##recordingName", macroNameBuffer, sizeof(macroNameBuffer))) {
+                engine->activeMacro->name = macroNameBuffer;
             }
-            
+
             if (ImGui::Button("Save Macro", ImVec2(150, 0))) {
-                if (!mgr->currentReplay->inputs.empty()) {
-                    mgr->currentReplay->save();
-                    mgr->refreshReplays();
-                    log::info("Saved macro: {}", mgr->currentReplay->name);
+                if (!engine->activeMacro->inputs.empty()) {
+                    engine->activeMacro->persist();
+                    engine->reloadMacroList();
+                    log::info("Saved macro: {}", engine->activeMacro->name);
                 }
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Save the current recording to file");
             }
-            
+
             ImGui::SameLine();
             if (ImGui::Button("Stop Recording", ImVec2(150, 0))) {
-                delete mgr->currentReplay;
-                mgr->currentReplay = nullptr;
-                mgr->state = NONE;
-                tempReplayNameInitialized = false;
+                delete engine->activeMacro;
+                engine->activeMacro = nullptr;
+                engine->engineMode = MODE_DISABLED;
+                macroNameReady = false;
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Stop recording and discard unsaved inputs");
             }
-            
+
             ImGui::Separator();
             ImGui::NewLine();
         } else {
-            tempReplayNameInitialized = false;
+            macroNameReady = false;
         }
 
-        renderStateSwitcher();
+        displayModeSelector();
 
         ImGui::NewLine();
 
         ImGui::Text("Saved Replays");
 
-        std::string currentReplayName = (mgr->currentReplay && mgr->state != RECORD) ? mgr->currentReplay->name : "Select a replay...";
-        if (ImGui::BeginCombo("##ReplayCombo", currentReplayName.c_str())) {
-            auto savedReplaysCopy = mgr->savedReplays;
-            for (const auto& replayName : savedReplaysCopy) {
-                bool isSelected = (currentReplayName == replayName);
+        std::string currentMacroName = (engine->activeMacro && engine->engineMode != MODE_CAPTURE) ? engine->activeMacro->name : "Select a replay...";
+        if (ImGui::BeginCombo("##ReplayCombo", currentMacroName.c_str())) {
+            auto macroListCopy = engine->storedMacros;
+            for (const auto& macroName : macroListCopy) {
+                bool isSelected = (currentMacroName == macroName);
 
-                ImGui::PushID(replayName.c_str());
-                if (ImGui::Selectable(replayName.c_str(), isSelected, 0, ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
-                
-                    if (mgr->state != RECORD) {
-                        ReplayData* rec = ReplayData::fromFile(replayName);
-                        if (rec) {
-                            if (mgr->currentReplay) delete mgr->currentReplay;
-                            mgr->currentReplay = rec;
-                            mgr->state = PLAYBACK;
+                ImGui::PushID(macroName.c_str());
+                if (ImGui::Selectable(macroName.c_str(), isSelected, 0, ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
+
+                    if (engine->engineMode != MODE_CAPTURE) {
+                        MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
+                        if (loaded) {
+                            if (engine->activeMacro) delete engine->activeMacro;
+                            engine->activeMacro = loaded;
+                            engine->engineMode = MODE_EXECUTE;
                         }
                     }
                 }
 
                 ImGui::SameLine(ImGui::GetWindowWidth() - 35);
                 if (ImGui::Button("X", ImVec2(20, 0))) {
-                    auto path = Mod::get()->getSaveDir() / "replays" / (replayName + ".gdr");
+                    auto path = Mod::get()->getSaveDir() / "replays" / (macroName + ".gdr");
                     if (std::filesystem::exists(path)) {
                         std::filesystem::remove(path);
-                        mgr->refreshReplays();
+                        engine->reloadMacroList();
                     }
                 }
                 ImGui::PopID();
@@ -522,7 +522,7 @@ void GUI::renderMainPanel() {
         }
 
         if (ImGui::Button("Refresh List")) {
-            mgr->refreshReplays();
+            engine->reloadMacroList();
         }
 
         ImGui::SameLine();
@@ -533,40 +533,40 @@ void GUI::renderMainPanel() {
             }
         }
 
-        if (mgr->currentReplay) {
+        if (engine->activeMacro) {
             ImGui::NewLine();
-            ImGui::Text("Loaded: %s", mgr->currentReplay->name.c_str());
-            ImGui::Text("Inputs: %zu", mgr->currentReplay->inputs.size());
+            ImGui::Text("Loaded: %s", engine->activeMacro->name.c_str());
+            ImGui::Text("Inputs: %zu", engine->activeMacro->inputs.size());
 
-            if (mgr->state == PLAYBACK) {
-                ImGui::Checkbox("Ignore Manual Input", &mgr->ignoreManualInput);
+            if (engine->engineMode == MODE_EXECUTE) {
+                ImGui::Checkbox("Ignore Manual Input", &engine->userInputIgnored);
             }
 
-            if (mgr->state == RECORD || mgr->state == PLAYBACK) {
-                const char* accuracyModes[] = { "None", "Input Adjustments", "Frame Replacement" };
-                int currentMode = mgr->frameFixes ? 2 : (mgr->inputFixes ? 1 : 0);
+            if (engine->engineMode == MODE_CAPTURE || engine->engineMode == MODE_EXECUTE) {
+                const char* correctionModes[] = { "None", "Input Adjustments", "Frame Replacement" };
+                int currentCorrectionMode = engine->positionCorrection ? 2 : (engine->inputCorrection ? 1 : 0);
 
                 ImGui::Text("Accuracy Mode:");
-                if (ImGui::BeginCombo("##AccuracyMode", accuracyModes[currentMode])) {
-                    if (ImGui::Selectable("None", currentMode == 0)) {
-                        mgr->frameFixes = false;
-                        mgr->inputFixes = false;
+                if (ImGui::BeginCombo("##AccuracyMode", correctionModes[currentCorrectionMode])) {
+                    if (ImGui::Selectable("None", currentCorrectionMode == 0)) {
+                        engine->positionCorrection = false;
+                        engine->inputCorrection = false;
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("No position correction.");
                     }
 
-                    if (ImGui::Selectable("Input Adjustments", currentMode == 1)) {
-                        mgr->frameFixes = false;
-                        mgr->inputFixes = true;
+                    if (ImGui::Selectable("Input Adjustments", currentCorrectionMode == 1)) {
+                        engine->positionCorrection = false;
+                        engine->inputCorrection = true;
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("Records position on each click. Efficient and accurate for cube/ball modes");
                     }
 
-                    if (ImGui::Selectable("Frame Replacement", currentMode == 2)) {
-                        mgr->frameFixes = true;
-                        mgr->inputFixes = false;
+                    if (ImGui::Selectable("Frame Replacement", currentCorrectionMode == 2)) {
+                        engine->positionCorrection = true;
+                        engine->inputCorrection = false;
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("Records position continuously. Required for ship/wave and ufo modes");
@@ -575,8 +575,8 @@ void GUI::renderMainPanel() {
                     ImGui::EndCombo();
                 }
 
-                if (mgr->frameFixes) {
-                    ImGui::SliderInt("Frame Replacement Rate", &mgr->frameFixesLimit, 30, 240);
+                if (engine->positionCorrection) {
+                    ImGui::SliderInt("Frame Replacement Rate", &engine->correctionInterval, 30, 240);
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("Lower = Less Lag, Higher = More Accurate");
                     }
@@ -587,81 +587,81 @@ void GUI::renderMainPanel() {
         ImGui::EndChild();
     }
 
-    if (s_font) ImGui::PopFont();
+    if (smallTypeface) ImGui::PopFont();
 
     ImGui::End();
 }
 
-void GUI::renderWatermarkOverlay() {
-    ToastyReplay* mgr = ToastyReplay::get();
-    
-    bool shouldShowWatermark = visible || (PlayLayer::get() && mgr && mgr->state == PLAYBACK);
-    
-    if (!shouldShowWatermark) return;
-    
+void MenuInterface::displayOverlayBranding() {
+    ReplayEngine* engine = ReplayEngine::get();
+
+    bool shouldDisplay = shown || (PlayLayer::get() && engine && engine->engineMode == MODE_EXECUTE);
+
+    if (!shouldDisplay) return;
+
     ImGuiIO& io = ImGui::GetIO();
-    
+
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 30), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowBgAlpha(0.0f);
-    ImGui::Begin("##watermark", nullptr, 
-        ImGuiWindowFlags_NoDecoration | 
-        ImGuiWindowFlags_NoInputs | 
+    ImGui::Begin("##watermark", nullptr,
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_AlwaysAutoResize |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing |
         ImGuiWindowFlags_NoNav |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    
-    if (s_font) ImGui::PushFont(s_font);
-    
+
+    if (smallTypeface) ImGui::PushFont(smallTypeface);
+
     ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.17f, 0.8f), "ToastyReplay v1.0.0-Beta");
-    
-    if (s_font) ImGui::PopFont();
-    
+
+    if (smallTypeface) ImGui::PopFont();
+
     ImGui::End();
 }
 
-void GUI::renderer() {
-    ToastyReplay* mgr = ToastyReplay::get();
-    if (mgr) {
-        mgr->handleKeybinds();
+void MenuInterface::drawInterface() {
+    ReplayEngine* engine = ReplayEngine::get();
+    if (engine) {
+        engine->processHotkeys();
     }
 
-    renderWatermarkOverlay();
+    displayOverlayBranding();
 
-    if (!visible) {
-        if (lastVisible && mgr) {
-            mgr->refreshReplays();
+    if (!shown) {
+        if (previouslyShown && engine) {
+            engine->reloadMacroList();
         }
-        lastVisible = false;
+        previouslyShown = false;
         return;
     }
 
     log::info("GUI::renderer() - visible is true, rendering panels");
 
-    if (!lastVisible && mgr) {
-        mgr->refreshReplays();
-        lastVisible = true;
+    if (!previouslyShown && engine) {
+        engine->reloadMacroList();
+        previouslyShown = true;
     }
 
     ImGuiStyle* style = &ImGui::GetStyle();
-    ImVec4 currentTextColor = textColor;
-    if (rgbTextColor) {
-        currentTextColor = getRainbowColor(rgbSpeed);
+    ImVec4 activeFontColor = fontColor;
+    if (cyclingColors) {
+        activeFontColor = computeCycleColor(cycleRate);
     }
-    style->Colors[ImGuiCol_Text] = currentTextColor;
-    style->Colors[ImGuiCol_WindowBg] = ImVec4(backgroundColor.x, backgroundColor.y, backgroundColor.z, menuOpacity);
-    style->Colors[ImGuiCol_PopupBg] = ImVec4(backgroundColor.x * 1.1f, backgroundColor.y * 1.1f, backgroundColor.z * 1.1f, menuOpacity);
+    style->Colors[ImGuiCol_Text] = activeFontColor;
+    style->Colors[ImGuiCol_WindowBg] = ImVec4(bgColor.x, bgColor.y, bgColor.z, windowAlpha);
+    style->Colors[ImGuiCol_PopupBg] = ImVec4(bgColor.x * 1.1f, bgColor.y * 1.1f, bgColor.z * 1.1f, windowAlpha);
 
     PlatformToolbox::showCursor();
 
-    renderMainPanel();
-    RenderInfoPanel();
-    RenderHackPanel();
-    RenderThemePanel();
+    displayPrimaryPanel();
+    DrawUtilityPanel();
+    DrawToolsPanel();
+    DrawStylePanel();
 
-    if (keyCheckFailed) {
-        keyCheckFailed = false;
+    if (validationFailed) {
+        validationFailed = false;
         ImGui::OpenPopup("Key Check Failed");
     }
 
@@ -676,10 +676,10 @@ void GUI::renderer() {
         ImGui::EndPopup();
     }
 
-    themeResetRequested = false;
+    layoutReset = false;
 }
 
-void GUI::setup() {
+void MenuInterface::initialize() {
     ImGuiStyle* style = &ImGui::GetStyle();
 
     style->WindowPadding = ImVec2(15, 15);
@@ -694,10 +694,10 @@ void GUI::setup() {
     style->GrabMinSize = 5.0f;
     style->GrabRounding = 3.0f;
 
-    style->Colors[ImGuiCol_Text] = textColor;
+    style->Colors[ImGuiCol_Text] = fontColor;
     style->Colors[ImGuiCol_TextDisabled] = ImVec4(0.24f, 0.23f, 0.29f, 1.00f);
-    style->Colors[ImGuiCol_WindowBg] = ImVec4(backgroundColor.x, backgroundColor.y, backgroundColor.z, menuOpacity);
-    style->Colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.09f, menuOpacity);
+    style->Colors[ImGuiCol_WindowBg] = ImVec4(bgColor.x, bgColor.y, bgColor.z, windowAlpha);
+    style->Colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.09f, windowAlpha);
     style->Colors[ImGuiCol_Border] = ImVec4(0,0,0,0);
     style->Colors[ImGuiCol_BorderShadow] = ImVec4(0,0,0,0);
     style->Colors[ImGuiCol_FrameBg] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
@@ -733,26 +733,26 @@ void GUI::setup() {
     ImGuiIO& io = ImGui::GetIO();
 
     auto path = (Mod::get()->getResourcesDir() / "Roboto-Bold.ttf").string();
-    
+
     if (std::filesystem::exists(path)) {
-        s_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f);
-        l_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 28.0f);
-        vl_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 100.0f);
+        smallTypeface = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f);
+        largeTypeface = io.Fonts->AddFontFromFileTTF(path.c_str(), 28.0f);
+        extraLargeTypeface = io.Fonts->AddFontFromFileTTF(path.c_str(), 100.0f);
     } else {
-        s_font = io.Fonts->AddFontDefault();
-        l_font = io.Fonts->AddFontDefault();
-        vl_font = io.Fonts->AddFontDefault();
+        smallTypeface = io.Fonts->AddFontDefault();
+        largeTypeface = io.Fonts->AddFontDefault();
+        extraLargeTypeface = io.Fonts->AddFontDefault();
     }
     io.Fonts->Build();
 }
 
 $on_mod(Loaded) {
     log::info("ToastyReplay: Setting up ImGuiCocos from $on_mod(Loaded)");
-    
+
     ImGuiCocos::get().setup([] {
         log::info("ToastyReplay: ImGuiCocos setup callback running");
-        GUI::get()->setup();
+        MenuInterface::get()->initialize();
     }).draw([] {
-        GUI::get()->renderer();
+        MenuInterface::get()->drawInterface();
     });
 }

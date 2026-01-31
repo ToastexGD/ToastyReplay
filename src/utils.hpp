@@ -2,22 +2,22 @@
 #define _utils_hpp
 #include <vector>
 
-#define STRINGIFY(X) #X
+#define MAKE_STRING(X) #X
 
-template<typename T, typename U> constexpr std::pair<ptrdiff_t, size_t> makeMemberPair(U T::*member)
+template<typename T, typename U> constexpr std::pair<ptrdiff_t, size_t> createMemberOffset(U T::*field)
 {
-    return std::pair((ptrdiff_t)&((T*)nullptr->*member), sizeof(U));
+    return std::pair((ptrdiff_t)&((T*)nullptr->*field), sizeof(U));
 }
 
-template<typename T> std::vector<std::byte> getValue(T* instance, std::pair<ptrdiff_t, size_t> memberPair) {
-    std::vector<std::byte> out(memberPair.second);
-    std::memcpy((void*)out.data(), (void*)((uintptr_t)instance + memberPair.first), memberPair.second);
+template<typename T> std::vector<std::byte> extractFieldData(T* obj, std::pair<ptrdiff_t, size_t> fieldOffset) {
+    std::vector<std::byte> buffer(fieldOffset.second);
+    std::memcpy((void*)buffer.data(), (void*)((uintptr_t)obj + fieldOffset.first), fieldOffset.second);
 
-    return out;
+    return buffer;
 };
 
-template<typename T> void restoreValue(T* instance, std::pair<ptrdiff_t, size_t> memberPair, std::vector<std::byte> value) {
-    std::memcpy((void*)((uintptr_t)instance + memberPair.first), (void*)value.data(), memberPair.second);
+template<typename T> void applyFieldData(T* obj, std::pair<ptrdiff_t, size_t> fieldOffset, std::vector<std::byte> buffer) {
+    std::memcpy((void*)((uintptr_t)obj + fieldOffset.first), (void*)buffer.data(), fieldOffset.second);
 };
 
 #endif

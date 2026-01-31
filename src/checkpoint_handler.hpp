@@ -6,32 +6,32 @@
 
 using namespace geode::prelude;
 
-const int indexButton[6] = { 1, 2, 3, 1, 2, 3 };
+const int actionMapping[6] = { 1, 2, 3, 1, 2, 3 };
 
-const std::map<int, int> buttonIndex[2] = { { {1, 0}, {2, 1}, {3, 2} }, { {1, 3}, {2, 4}, {3, 5} } };
+const std::map<int, int> actionIndexLookup[2] = { { {1, 0}, {2, 1}, {3, 2} }, { {1, 3}, {2, 4}, {3, 5} } };
 
-const int sidesButtons[4] = { 1, 2, 4, 5 };
+const int lateralActions[4] = { 1, 2, 4, 5 };
 
-struct button {
-    int button;
-    bool player2;
-    bool down;
+struct ActionRecord {
+    int actionType;
+    bool secondPlayer;
+    bool pressed;
 };
 
-class InputPracticeFixes {
+class InputStateRestorer {
 public:
-    static void applyFixes(PlayLayer* pl, PlayerStateData p1Data, PlayerStateData p2Data, int frame);
+    static void restoreInputState(PlayLayer* pl, PhysicsSnapshot p1State, PhysicsSnapshot p2State, int tick);
 
-    static void eraseActions(int frame);
+    static void removeActions(int tick);
 
-    static std::vector<button> findButtons();
+    static std::vector<ActionRecord> detectActions();
 
-    static std::vector<int> fixInputs(std::vector<button> foundButtons, PlayLayer* pl, PlayerStateData p1Data, PlayerStateData p2Data, int frame);
+    static std::vector<int> correctInputs(std::vector<ActionRecord> detectedActions, PlayLayer* pl, PhysicsSnapshot p1State, PhysicsSnapshot p2State, int tick);
 };
 
-class PlayerPracticeFixes {
+class PlayerStateRestorer {
 public:
-    static void applyData(PlayerObject* player, PlayerStateData data, bool isPlayer2, bool isFakePlayer = false);
+    static void restoreState(PlayerObject* player, PhysicsSnapshot state, bool isSecondPlayer, bool isSimulated = false);
 
-    static PlayerStateData saveData(PlayerObject* player);
+    static PhysicsSnapshot captureState(PlayerObject* player);
 };
