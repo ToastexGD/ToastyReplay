@@ -918,8 +918,8 @@ void MenuInterface::drawHacksTab() {
                 engine->rngSeedVal = 1;
             }
         }
-        Widgets::ModuleCardEnd();
     }
+    Widgets::ModuleCardEnd();
 }
 
 void MenuInterface::drawSettingsTab() {

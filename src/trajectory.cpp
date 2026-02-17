@@ -100,8 +100,14 @@ void PathPreviewSystem::generatePath(PlayLayer* pl, PlayerObject* simPlayer, Pla
     applySimulatedState(simPlayer, playerState);
 
     pathSystem.pathCancelled = false;
+    pathSystem.simulatingHold = holding;
+    pathSystem.touchedRings.clear();
 
     int frameCount = ReplayEngine::get()->pathLength;
+
+    holding ? simPlayer->pushButton(static_cast<PlayerButton>(1)) : simPlayer->releaseButton(static_cast<PlayerButton>(1));
+    if (pl->m_levelSettings->m_platformerMode)
+        (mirrored ? !actualPlayer->m_isGoingLeft : actualPlayer->m_isGoingLeft) ? simPlayer->pushButton(static_cast<PlayerButton>(2)) : simPlayer->pushButton(static_cast<PlayerButton>(3));
 
     for (int i = 0; i < frameCount; i++) {
         CCPoint prevCoord = simPlayer->getPosition();
@@ -126,12 +132,6 @@ void PathPreviewSystem::generatePath(PlayLayer* pl, PlayerObject* simPlayer, Pla
             break;
         }
 
-        if (i == 0) {
-            holding ? simPlayer->pushButton(static_cast<PlayerButton>(1)) : simPlayer->releaseButton(static_cast<PlayerButton>(1));
-            if (pl->m_levelSettings->m_platformerMode)
-                (mirrored ? !actualPlayer->m_isGoingLeft : actualPlayer->m_isGoingLeft) ? simPlayer->pushButton(static_cast<PlayerButton>(2)) : simPlayer->pushButton(static_cast<PlayerButton>(3));
-        }
-
         simPlayer->update(pathSystem.tickDelta);
         simPlayer->updateRotation(pathSystem.tickDelta);
         simPlayer->updatePlayerScale();
@@ -148,6 +148,12 @@ void PathPreviewSystem::generatePath(PlayLayer* pl, PlayerObject* simPlayer, Pla
 
         pathSystem.getDrawNode()->drawSegment(prevCoord, simPlayer->getPosition(), 0.6f, lineColor);
     }
+
+    for (auto& [ring, wasActivated] : pathSystem.touchedRings) {
+        ring->m_activated = wasActivated;
+    }
+    pathSystem.touchedRings.clear();
+    pathSystem.simulatingHold = false;
 }
 
 void PathPreviewSystem::renderPlayerBounds(PlayerObject* player, CCDrawNode* drawNode) {
@@ -347,7 +353,7 @@ class $modify(PathPreviewBaseLayer, GJBaseGameLayer) {
             for (const auto& obj : *objects) {
                 if (!obj) continue;
 
-                if ((!collisionObjectTypes.contains(static_cast<int>(obj->m_objectType)) && !interactivePortalIds.contains(obj->m_objectID)) || pickupItemIds.contains(obj->m_objectID)) {
+                if ((!collisionObjectTypes.contains(static_cast<int>(obj->m_objectType)) && !interactivePortalIds.contains(obj->m_objectID) && !trajectoryInteractiveIds.contains(obj->m_objectID)) || pickupItemIds.contains(obj->m_objectID)) {
                     if (obj->m_isDisabled || obj->m_isDisabled2) continue;
 
                     excludedObjects.push_back(obj);
@@ -376,6 +382,8 @@ class $modify(PathPreviewBaseLayer, GJBaseGameLayer) {
     bool canBeActivatedByPlayer(PlayerObject* p0, EffectGameObject* p1) {
         if (pathSystem.generatingPath) {
             PathPreviewSystem::processPortalInteraction(p0, p1->m_objectID);
+            if (trajectoryInteractiveIds.contains(p1->m_objectID))
+                return GJBaseGameLayer::canBeActivatedByPlayer(p0, p1);
             return false;
         }
 
@@ -383,8 +391,12 @@ class $modify(PathPreviewBaseLayer, GJBaseGameLayer) {
     }
 
     void playerTouchedRing(PlayerObject* p0, RingObject* p1) {
-        if (!pathSystem.generatingPath)
+        if (!pathSystem.generatingPath) {
             GJBaseGameLayer::playerTouchedRing(p0, p1);
+        } else if (pathSystem.simulatingHold) {
+            pathSystem.touchedRings.push_back({ p1, p1->m_activated });
+            GJBaseGameLayer::playerTouchedRing(p0, p1);
+        }
     }
 
     void playerTouchedTrigger(PlayerObject* p0, EffectGameObject* p1) {
@@ -428,7 +440,7 @@ class $modify(PathPreviewPlayerObject, PlayerObject) {
     }
 
     void ringJump(RingObject* p0, bool p1) {
-        if (!pathSystem.generatingPath)
+        if (!pathSystem.generatingPath || pathSystem.simulatingHold)
             PlayerObject::ringJump(p0, p1);
     }
 };

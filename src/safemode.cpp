@@ -18,11 +18,6 @@ class $modify(ProtectedPlayLayer, PlayLayer) {
         if (engine->protectedMode)
             m_isTestMode = true;
 
-        if (m_isPracticeMode) {
-        } else {
-            engine->protectedMode = false;
-        }
-
         PlayLayer::levelComplete();
 
         m_isTestMode = originalTestMode;

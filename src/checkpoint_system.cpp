@@ -7,42 +7,30 @@
 #include <random>
 using namespace geode::prelude;
 
-#ifdef GEODE_IS_WINDOWS
-const uintptr_t rngMemoryOffset = 0x6a4e20;
-#endif
-
 void refreshRngState(bool isLevelStart = false) {
     ReplayEngine* engine = ReplayEngine::get();
     PlayLayer* pl = PlayLayer::get();
     if (!pl) return;
 
     if (engine->rngLocked) {
-        int computedSeed;
+        uint64_t computedSeed;
 
         if (!pl->m_player1->m_isDead) {
             std::mt19937 gen(engine->rngSeedVal + pl->m_gameState.m_currentProgress);
-            std::uniform_int_distribution<int> dist(10000, 999999999);
+            std::uniform_int_distribution<uint64_t> dist(10000, 999999999);
             computedSeed = dist(gen);
         } else {
             std::random_device rd;
             std::mt19937 gen(rd());
-            std::uniform_int_distribution<int> dist(1000, 999999999);
+            std::uniform_int_distribution<uint64_t> dist(1000, 999999999);
             computedSeed = dist(gen);
         }
 
-#ifdef GEODE_IS_WINDOWS
-        *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset) = computedSeed;
-#else
         GameToolbox::fast_srand(computedSeed);
-#endif
     }
 
     if (isLevelStart && engine->engineMode == MODE_CAPTURE) {
-#ifdef GEODE_IS_WINDOWS
-        engine->capturedRngState = *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset);
-#else
-        engine->capturedRngState = 0;
-#endif
+        engine->capturedRngState = GameToolbox::getfast_srand();
     }
 }
 
@@ -110,11 +98,7 @@ class $modify(RestorePointHandler, CheckpointObject) {
             tick,
             PhysicsSnapshot(),
             PhysicsSnapshot(),
-#ifdef GEODE_IS_WINDOWS
-            *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset),
-#else
-            0,
-#endif
+            GameToolbox::getfast_srand(),
             engine->lastTickIndex
         };
 
@@ -143,7 +127,6 @@ class $modify(MacroPlayLayer, PlayLayer) {
 
         refreshRngState(true);
 
-        engine->protectedMode = false;
         engine->executeIndex = 0;
         engine->correctionIndex = 0;
         engine->levelRestarting = false;
@@ -210,12 +193,9 @@ class $modify(MacroPlayLayer, PlayLayer) {
             engine->skipActionTick = tick + 1;
             engine->lastTickIndex = engine->storedRestorePoints[cp].priorTick;
 
-#ifdef GEODE_IS_WINDOWS
             if (engine->rngLocked) {
-                uintptr_t savedRng = engine->storedRestorePoints[cp].rngState;
-                *(uintptr_t*)((char*)geode::base::get() + rngMemoryOffset) = savedRng;
+                GameToolbox::fast_srand(engine->storedRestorePoints[cp].rngState);
             }
-#endif
 
             PlayLayer::loadFromCheckpoint(cp);
 
@@ -227,7 +207,6 @@ class $modify(MacroPlayLayer, PlayLayer) {
 
     void levelComplete() {
         ReplayEngine* engine = ReplayEngine::get();
-        engine->protectedMode = false;
 
         if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
             engine->activeMacro->name = fmt::format("{} - 100%", engine->activeMacro->levelInfo.name);
