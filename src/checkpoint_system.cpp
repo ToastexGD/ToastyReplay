@@ -2,6 +2,7 @@
 #include "replay.hpp"
 
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/CheckpointObject.hpp>
 #include <random>
 using namespace geode::prelude;
@@ -240,6 +241,7 @@ class $modify(MacroPlayLayer, PlayLayer) {
 
         if (engine->collisionBypass) {
             engine->bypassedCollisions++;
+            engine->noclipDeathBlocked = true;
 
             if (engine->collisionLimitActive && engine->collisionThreshold > 0.0f && engine->totalTickCount > 0) {
                 float hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
@@ -248,6 +250,7 @@ class $modify(MacroPlayLayer, PlayLayer) {
                     engine->totalTickCount = 0;
 
                     engine->collisionBypass = false;
+                    engine->noclipDeathBlocked = false;
                     PlayLayer::destroyPlayer(p0, p1);
                     engine->collisionBypass = true;
                     return;
@@ -272,5 +275,20 @@ class $modify(MacroPlayLayer, PlayLayer) {
         }
 
         PlayLayer::onQuit();
+    }
+};
+
+class $modify(NoclipBaseLayer, GJBaseGameLayer) {
+    int checkCollisions(PlayerObject* player, float dt, bool ignoreDamage) {
+        auto* engine = ReplayEngine::get();
+
+        if (engine->collisionBypass) {
+            engine->noclipDeathBlocked = false;
+            int result = GJBaseGameLayer::checkCollisions(player, dt, ignoreDamage);
+            engine->noclipDeathBlocked = false;
+            return result;
+        }
+
+        return GJBaseGameLayer::checkCollisions(player, dt, ignoreDamage);
     }
 };

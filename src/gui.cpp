@@ -5,53 +5,20 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <filesystem>
 #include <cmath>
+#include <algorithm>
 
 using namespace geode::prelude;
 
-void ReplayEngine::processHotkeys() {
-    bool keyPressed = (hotkey_tickStep != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_tickStep, false));
-    bool keyHeld = (hotkey_tickStep != 0 && ImGui::IsKeyDown((ImGuiKey)hotkey_tickStep));
-
-    if (keyPressed) {
-        if (!stepKeyActive) {
-            stepKeyActive = true;
-
-            if (!tickStepping) {
-                tickStepping = true;
-            } else {
-                singleTickStep = true;
-            }
-        }
-    } else if (keyHeld && tickStepping) {
-        singleTickStep = true;
-    } else {
-        stepKeyActive = false;
-    }
-
-    if (hotkey_audioPitch != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_audioPitch, false)) {
-        audioPitchEnabled = !audioPitchEnabled;
-    }
-
-    if (hotkey_protected != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_protected, false)) {
-        protectedMode = !protectedMode;
-    }
-
-    if (hotkey_pathPreview != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_pathPreview, false)) {
-        pathPreview = !pathPreview;
-    }
-
-    if (hotkey_collision != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_collision, false)) {
-        collisionBypass = !collisionBypass;
-    }
-
-    if (hotkey_rngLock != 0 && ImGui::IsKeyPressed((ImGuiKey)hotkey_rngLock, false)) {
-        rngLocked = !rngLocked;
-    }
+static ImVec4 lerpColor(const ImVec4& a, const ImVec4& b, float t) {
+    return ImVec4(
+        a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t
+    );
 }
 
-static ImVec4 computeCycleColor(float rate) {
+ImVec4 ThemeEngine::computeCycleColor(float rate) {
     static float hueVal = 0.0f;
-    hueVal += rate * 0.001f;
+    hueVal += rate * 0.0002f;
     if (hueVal > 1.0f) hueVal -= 1.0f;
 
     float h = hueVal * 6.0f;
@@ -69,688 +36,1243 @@ static ImVec4 computeCycleColor(float rate) {
     return ImVec4(r, g, b, 1.0f);
 }
 
-void MenuInterface::displayMacroDetails() {
-    ReplayEngine* engine = ReplayEngine::get();
+ImVec4 ThemeEngine::getAccent() {
+    return cyclingAccent ? computeCycleColor(cycleRate) : accentColor;
+}
 
-    if (engine->activeMacro) {
-        ImGui::Text("Currently Recording: ");
-        ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%s", engine->activeMacro->name.c_str());
+ImU32 ThemeEngine::getAccentU32(float alpha) {
+    ImVec4 c = getAccent();
+    c.w = alpha;
+    return ImGui::ColorConvertFloat4ToU32(c);
+}
+
+ImU32 ThemeEngine::getAccentDimU32(float factor) {
+    ImVec4 c = getAccent();
+    c.x *= factor; c.y *= factor; c.z *= factor;
+    return ImGui::ColorConvertFloat4ToU32(c);
+}
+
+ImU32 ThemeEngine::getTextU32() { return ImGui::ColorConvertFloat4ToU32(textPrimary); }
+ImU32 ThemeEngine::getTextSecondaryU32() { return ImGui::ColorConvertFloat4ToU32(textSecondary); }
+ImU32 ThemeEngine::getCardU32() { return ImGui::ColorConvertFloat4ToU32(cardColor); }
+
+void ThemeEngine::applyToImGuiStyle() {
+    ImGuiStyle* s = &ImGui::GetStyle();
+    ImVec4 accent = getAccent();
+
+    s->WindowPadding = ImVec2(16, 16);
+    s->WindowRounding = cornerRadius;
+    s->FramePadding = ImVec2(8, 6);
+    s->FrameRounding = 6.0f;
+    s->ItemSpacing = ImVec2(10, 6);
+    s->ItemInnerSpacing = ImVec2(8, 6);
+    s->IndentSpacing = 20.0f;
+    s->ScrollbarSize = 8.0f;
+    s->ScrollbarRounding = 4.0f;
+    s->GrabMinSize = 6.0f;
+    s->GrabRounding = 3.0f;
+    s->WindowBorderSize = 0.0f;
+
+    ImVec4 winBg = bgColor;
+    winBg.w = windowAlpha;
+
+    s->Colors[ImGuiCol_Text] = textPrimary;
+    s->Colors[ImGuiCol_TextDisabled] = textSecondary;
+    s->Colors[ImGuiCol_WindowBg] = winBg;
+    s->Colors[ImGuiCol_PopupBg] = ImVec4(bgColor.x + 0.02f, bgColor.y + 0.02f, bgColor.z + 0.02f, windowAlpha);
+    s->Colors[ImGuiCol_Border] = ImVec4(0.2f, 0.2f, 0.22f, 0.3f);
+    s->Colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
+    s->Colors[ImGuiCol_FrameBg] = ImVec4(0.10f, 0.10f, 0.13f, 1.0f);
+    s->Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.15f, 0.15f, 0.18f, 1.0f);
+    s->Colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.20f, 0.24f, 1.0f);
+    s->Colors[ImGuiCol_CheckMark] = accent;
+    s->Colors[ImGuiCol_SliderGrab] = accent;
+    s->Colors[ImGuiCol_SliderGrabActive] = accent;
+    s->Colors[ImGuiCol_Button] = ImVec4(0.13f, 0.13f, 0.16f, 1.0f);
+    s->Colors[ImGuiCol_ButtonHovered] = ImVec4(accent.x * 0.3f, accent.y * 0.3f, accent.z * 0.3f, 1.0f);
+    s->Colors[ImGuiCol_ButtonActive] = ImVec4(accent.x * 0.5f, accent.y * 0.5f, accent.z * 0.5f, 1.0f);
+    s->Colors[ImGuiCol_Header] = ImVec4(accent.x, accent.y, accent.z, 0.2f);
+    s->Colors[ImGuiCol_HeaderHovered] = ImVec4(accent.x, accent.y, accent.z, 0.3f);
+    s->Colors[ImGuiCol_HeaderActive] = ImVec4(accent.x, accent.y, accent.z, 0.4f);
+    s->Colors[ImGuiCol_ScrollbarBg] = ImVec4(0.05f, 0.05f, 0.07f, 0.3f);
+    s->Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.3f, 0.3f, 0.35f, 0.4f);
+    s->Colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.4f, 0.4f, 0.45f, 0.6f);
+    s->Colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.5f, 0.5f, 0.55f, 0.8f);
+    s->Colors[ImGuiCol_ResizeGrip] = ImVec4(0, 0, 0, 0);
+    s->Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0, 0, 0, 0.5f);
+}
+
+void ThemeEngine::resetDefaults() {
+    accentColor = ImVec4(0.65f, 0.20f, 0.85f, 1.0f);
+    bgColor = ImVec4(0.08f, 0.08f, 0.10f, 0.92f);
+    cardColor = ImVec4(0.12f, 0.12f, 0.15f, 1.0f);
+    textPrimary = ImVec4(0.93f, 0.93f, 0.95f, 1.0f);
+    textSecondary = ImVec4(0.55f, 0.55f, 0.60f, 1.0f);
+    windowAlpha = 0.92f;
+    cornerRadius = 10.0f;
+    textScale = 1.0f;
+    cyclingAccent = false;
+    cycleRate = 1.0f;
+}
+
+float AnimationState::easeOutCubic(float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    float inv = 1.0f - t;
+    return 1.0f - inv * inv * inv;
+}
+
+float AnimationState::easeInOutQuad(float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    return t < 0.5f ? 2.0f * t * t : 1.0f - (-2.0f * t + 2.0f) * (-2.0f * t + 2.0f) / 2.0f;
+}
+
+void AnimationState::update(float dt) {
+    float step = dt * animSpeed;
+
+    if (opening) {
+        openProgress += step;
+        if (openProgress >= 1.0f) { openProgress = 1.0f; opening = false; }
+    }
+    if (closing) {
+        openProgress -= step;
+        if (openProgress <= 0.0f) openProgress = 0.0f;
+    }
+
+    if (tabTransition < 1.0f) {
+        tabTransition += step * 1.5f;
+        if (tabTransition >= 1.0f) tabTransition = 1.0f;
     }
 }
 
-void MenuInterface::displayModeSelector() {
+MenuInterface* MenuInterface::get() {
+    static MenuInterface* singleton = new MenuInterface();
+    return singleton;
+}
+
+void ReplayEngine::processHotkeys() {}
+
+std::string getKeyName(int code) {
+    if (code == 0) return "None";
+    if (code >= 65 && code <= 90) return std::string(1, (char)code);
+    if (code >= 48 && code <= 57) return std::string(1, (char)code);
+    if (code >= 112 && code <= 123) return "F" + std::to_string(code - 111);
+    if (code == 32) return "Space";
+    if (code == 8) return "Bksp";
+    if (code == 9) return "Tab";
+    if (code == 13) return "Enter";
+    if (code == 16) return "Shift";
+    if (code == 17) return "Ctrl";
+    if (code == 18) return "Alt";
+    if (code == 27) return "Esc";
+    if (code == 37) return "Left";
+    if (code == 38) return "Up";
+    if (code == 39) return "Right";
+    if (code == 40) return "Down";
+    if (code == 46) return "Del";
+    if (code == 45) return "Ins";
+    if (code == 36) return "Home";
+    if (code == 35) return "End";
+    if (code == 33) return "PgUp";
+    if (code == 34) return "PgDn";
+    if (code == 192) return "`";
+    if (code == 189) return "-";
+    if (code == 187) return "=";
+    if (code == 219) return "[";
+    if (code == 221) return "]";
+    if (code == 220) return "\\";
+    if (code == 186) return ";";
+    if (code == 222) return "'";
+    if (code == 188) return ",";
+    if (code == 190) return ".";
+    if (code == 191) return "/";
+    return "Key" + std::to_string(code);
+}
+
+namespace Widgets {
+
+bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationState& anim) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const float width = 36.0f;
+    const float height = 18.0f;
+    const float radius = height * 0.5f;
+    float labelWidth = ImGui::CalcTextSize(label).x;
+
+    ImGui::InvisibleButton(label, ImVec2(width + 10.0f + labelWidth, height));
+    ImGuiID id = ImGui::GetItemID();
+    bool clicked = ImGui::IsItemClicked();
+    if (clicked) *value = !*value;
+
+    float& animT = anim.toggleAnims[id];
+    float target = *value ? 1.0f : 0.0f;
+    animT += (target - animT) * std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+
+    ImVec4 trackCol = lerpColor(ImVec4(0.25f, 0.25f, 0.28f, 1.0f), theme.getAccent(), animT);
+    dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+        ImGui::ColorConvertFloat4ToU32(trackCol), radius);
+
+    float knobX = pos.x + radius + animT * (width - height);
+    dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), radius - 2.0f, IM_COL32(255, 255, 255, 240));
+
+    dl->AddText(ImVec2(pos.x + width + 10, pos.y + 1), theme.getTextU32(), label);
+
+    return clicked;
+}
+
+bool StyledButton(const char* label, ImVec2 size, ThemeEngine& theme, AnimationState& anim) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    if (size.x <= 0) size.x = ImGui::GetContentRegionAvail().x;
+    if (size.y <= 0) size.y = 28;
+
+    ImGui::InvisibleButton(label, size);
+    ImGuiID id = ImGui::GetItemID();
+    bool clicked = ImGui::IsItemClicked();
+    bool hovered = ImGui::IsItemHovered();
+    bool held = ImGui::IsItemActive();
+
+    float& hoverT = anim.hoverAnims[id];
+    hoverT += ((hovered ? 1.0f : 0.0f) - hoverT) * std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+
+    ImVec4 accent = theme.getAccent();
+    ImVec4 btnColor = lerpColor(
+        ImVec4(0.13f, 0.13f, 0.16f, 1.0f),
+        ImVec4(accent.x * 0.25f, accent.y * 0.25f, accent.z * 0.25f, 1.0f),
+        hoverT
+    );
+    if (held) { btnColor.x += 0.05f; btnColor.y += 0.05f; btnColor.z += 0.05f; }
+
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+        ImGui::ColorConvertFloat4ToU32(btnColor), 6.0f);
+
+    if (hoverT > 0.01f) {
+        dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+            theme.getAccentU32(0.3f * hoverT), 6.0f, 0, 1.0f);
+    }
+
+    ImVec2 textSize = ImGui::CalcTextSize(label);
+    dl->AddText(
+        ImVec2(pos.x + (size.x - textSize.x) * 0.5f, pos.y + (size.y - textSize.y) * 0.5f),
+        theme.getTextU32(), label
+    );
+
+    return clicked;
+}
+
+bool StyledSliderFloat(const char* label, float* value, float vmin, float vmax, ThemeEngine& theme) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float availWidth = ImGui::GetContentRegionAvail().x;
+
+    char valBuf[64];
+    snprintf(valBuf, sizeof(valBuf), "%.2f", *value);
+    dl->AddText(pos, theme.getTextSecondaryU32(), label);
+    ImVec2 valSize = ImGui::CalcTextSize(valBuf);
+    dl->AddText(ImVec2(pos.x + availWidth - valSize.x, pos.y), theme.getTextU32(), valBuf);
+    ImGui::Dummy(ImVec2(0, 20));
+
+    pos = ImGui::GetCursorScreenPos();
+    const float trackH = 4.0f;
+    const float knobR = 7.0f;
+    float trackY = pos.y + knobR;
+
+    dl->AddRectFilled(
+        ImVec2(pos.x, trackY - trackH / 2), ImVec2(pos.x + availWidth, trackY + trackH / 2),
+        IM_COL32(40, 40, 45, 255), trackH / 2
+    );
+
+    float frac = (*value - vmin) / (vmax - vmin);
+    float fillX = pos.x + frac * availWidth;
+    dl->AddRectFilled(
+        ImVec2(pos.x, trackY - trackH / 2), ImVec2(fillX, trackY + trackH / 2),
+        theme.getAccentU32(), trackH / 2
+    );
+
+    for (int i = 2; i >= 0; i--) {
+        dl->AddCircleFilled(ImVec2(fillX, trackY), knobR + i * 3.0f, theme.getAccentU32(0.06f * (3 - i)));
+    }
+
+    dl->AddCircleFilled(ImVec2(fillX, trackY), knobR, IM_COL32(255, 255, 255, 240));
+    dl->AddCircle(ImVec2(fillX, trackY), knobR, theme.getAccentU32(0.5f), 0, 1.5f);
+
+    ImGui::InvisibleButton(label, ImVec2(availWidth, knobR * 2 + 4));
+    if (ImGui::IsItemActive()) {
+        float mouseX = ImGui::GetIO().MousePos.x;
+        *value = vmin + std::clamp((mouseX - pos.x) / availWidth, 0.0f, 1.0f) * (vmax - vmin);
+        return true;
+    }
+    return false;
+}
+
+bool StyledSliderInt(const char* label, int* value, int vmin, int vmax, ThemeEngine& theme) {
+    float fv = (float)*value;
+    bool changed = StyledSliderFloat(label, &fv, (float)vmin, (float)vmax, theme);
+    *value = (int)std::round(fv);
+    return changed;
+}
+
+void SectionHeader(const char* text, ThemeEngine& theme) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float width = ImGui::GetContentRegionAvail().x;
+
+    dl->AddText(pos, theme.getAccentU32(), text);
+    float textH = ImGui::CalcTextSize(text).y;
+    dl->AddRectFilled(
+        ImVec2(pos.x, pos.y + textH + 3), ImVec2(pos.x + width, pos.y + textH + 4),
+        theme.getAccentU32(0.3f)
+    );
+
+    ImGui::Dummy(ImVec2(0, textH + 10));
+}
+
+bool ModuleCard(const char* name, const char* description, bool* enabled,
+                ThemeEngine& theme, AnimationState& anim) {
+    ImGuiID id = ImGui::GetID(name);
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float width = ImGui::GetContentRegionAvail().x;
+    float height = description ? 50.0f : 36.0f;
+
+    bool hovered = ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + width, pos.y + height));
+    float& hoverT = anim.hoverAnims[id];
+    hoverT += ((hovered ? 1.0f : 0.0f) - hoverT) * std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+
+    ImVec4 cardBase = theme.cardColor;
+    cardBase.x += hoverT * 0.03f;
+    cardBase.y += hoverT * 0.03f;
+    cardBase.z += hoverT * 0.03f;
+    dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+        ImGui::ColorConvertFloat4ToU32(cardBase), 6.0f);
+
+    if (*enabled) {
+        dl->AddRectFilled(pos, ImVec2(pos.x + 3, pos.y + height), theme.getAccentU32(), 3.0f);
+    }
+
+    ImU32 nameCol = *enabled ? theme.getAccentU32() : theme.getTextU32();
+    dl->AddText(ImVec2(pos.x + 14, pos.y + (description ? 8 : 10)), nameCol, name);
+
+    if (description) {
+        dl->AddText(ImVec2(pos.x + 14, pos.y + 28), theme.getTextSecondaryU32(), description);
+    }
+
+    float toggleW = 36.0f, toggleH = 18.0f;
+    float toggleX = pos.x + width - toggleW - 12;
+    float toggleY = pos.y + (height - toggleH) / 2;
+    float toggleR = toggleH * 0.5f;
+
+    float& toggleT = anim.toggleAnims[id];
+    toggleT += ((*enabled ? 1.0f : 0.0f) - toggleT) * std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+
+    ImVec4 trackCol = lerpColor(ImVec4(0.25f, 0.25f, 0.28f, 1.0f), theme.getAccent(), toggleT);
+    dl->AddRectFilled(
+        ImVec2(toggleX, toggleY), ImVec2(toggleX + toggleW, toggleY + toggleH),
+        ImGui::ColorConvertFloat4ToU32(trackCol), toggleR
+    );
+
+    float knobX = toggleX + toggleR + toggleT * (toggleW - toggleH);
+    dl->AddCircleFilled(ImVec2(knobX, toggleY + toggleR), toggleR - 2.0f, IM_COL32(255, 255, 255, 240));
+
+    ImGui::InvisibleButton(name, ImVec2(width, height));
+    bool clicked = ImGui::IsItemClicked();
+    if (clicked) *enabled = !*enabled;
+
+    ImGui::Dummy(ImVec2(0, 4));
+    return clicked;
+}
+
+bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
+                     ThemeEngine& theme, AnimationState& anim) {
+    bool clicked = ModuleCard(name, description, enabled, theme, anim);
+    if (*enabled) {
+        ImGui::Indent(14);
+        ImGui::Dummy(ImVec2(0, 2));
+    }
+    return clicked;
+}
+
+void ModuleCardEnd() {
+    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::Unindent(14);
+}
+
+void StatusBadge(const char* text, ImVec4 color) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 textSize = ImGui::CalcTextSize(text);
+    float padX = 8, padY = 4;
+
+    ImVec4 bgCol(color.x * 0.2f, color.y * 0.2f, color.z * 0.2f, 0.8f);
+    dl->AddRectFilled(pos, ImVec2(pos.x + textSize.x + padX * 2, pos.y + textSize.y + padY * 2),
+        ImGui::ColorConvertFloat4ToU32(bgCol), 4.0f);
+    dl->AddRect(pos, ImVec2(pos.x + textSize.x + padX * 2, pos.y + textSize.y + padY * 2),
+        ImGui::ColorConvertFloat4ToU32(color), 4.0f, 0, 1.0f);
+    dl->AddText(ImVec2(pos.x + padX, pos.y + padY), ImGui::ColorConvertFloat4ToU32(color), text);
+
+    ImGui::Dummy(ImVec2(textSize.x + padX * 2, textSize.y + padY * 2));
+}
+
+bool PillButton(const char* label, bool active, float width, ThemeEngine& theme, AnimationState& anim) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float height = 28.0f;
+
+    ImGui::InvisibleButton(label, ImVec2(width, height));
+    ImGuiID id = ImGui::GetItemID();
+    bool clicked = ImGui::IsItemClicked();
+    bool hovered = ImGui::IsItemHovered();
+
+    float& hoverT = anim.hoverAnims[id];
+    hoverT += ((hovered ? 1.0f : 0.0f) - hoverT) * std::min(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+
+    if (active) {
+        dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+            theme.getAccentU32(0.85f), 14.0f);
+    } else {
+        ImVec4 base(0.15f, 0.15f, 0.18f, 1.0f);
+        base.x += hoverT * 0.05f; base.y += hoverT * 0.05f; base.z += hoverT * 0.05f;
+        dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+            ImGui::ColorConvertFloat4ToU32(base), 14.0f);
+    }
+
+    ImVec2 textSize = ImGui::CalcTextSize(label);
+    ImVec2 textPos(pos.x + (width - textSize.x) * 0.5f, pos.y + (height - textSize.y) * 0.5f);
+    dl->AddText(textPos, active ? IM_COL32(255, 255, 255, 255) : theme.getTextSecondaryU32(), label);
+
+    return clicked;
+}
+
+void KeybindButton(const char* label, int* keyCode, ThemeEngine& theme, AnimationState& anim) {
+    MenuInterface* ui = MenuInterface::get();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float width = ImGui::GetContentRegionAvail().x;
+    float height = 32.0f;
+
+    bool isRebinding = (ui->rebindTarget == keyCode);
+    std::string keyText = isRebinding ? "..." : getKeyName(*keyCode);
+
+    dl->AddText(ImVec2(pos.x + 8, pos.y + (height - ImGui::CalcTextSize(label).y) / 2),
+        theme.getTextU32(), label);
+
+    ImVec2 txtSize = ImGui::CalcTextSize(keyText.c_str());
+    float btnW = std::max(txtSize.x + 20.0f, 50.0f);
+    float btnH = 24.0f;
+    float btnX = pos.x + width - btnW - 8;
+    float btnY = pos.y + (height - btnH) / 2;
+
+    ImU32 btnCol = isRebinding ? theme.getAccentU32(0.3f) : IM_COL32(25, 25, 30, 255);
+    dl->AddRectFilled(ImVec2(btnX, btnY), ImVec2(btnX + btnW, btnY + btnH), btnCol, 4.0f);
+    dl->AddRect(ImVec2(btnX, btnY), ImVec2(btnX + btnW, btnY + btnH),
+        isRebinding ? theme.getAccentU32(0.6f) : IM_COL32(50, 50, 55, 255), 4.0f, 0, 1.0f);
+    dl->AddText(ImVec2(btnX + (btnW - txtSize.x) / 2, btnY + (btnH - txtSize.y) / 2),
+        isRebinding ? theme.getAccentU32() : theme.getTextU32(), keyText.c_str());
+
+    ImGui::InvisibleButton(label, ImVec2(width, height));
+    if (ImGui::IsItemClicked(0)) {
+        if (isRebinding)
+            ui->rebindTarget = nullptr;
+        else
+            ui->rebindTarget = keyCode;
+    }
+    if (ImGui::IsItemClicked(1)) {
+        *keyCode = 0;
+        if (isRebinding)
+            ui->rebindTarget = nullptr;
+    }
+}
+
+}
+
+void MenuInterface::switchTab(int newTab) {
+    if (newTab == activeTab) return;
+    previousTab = activeTab;
+    activeTab = newTab;
+    anim.tabTransition = 0.0f;
+}
+
+void MenuInterface::drawBackdrop() {
+    if (anim.openProgress <= 0.0f) return;
+
+    float t = anim.easeOutCubic(anim.openProgress);
+    ImDrawList* bgDraw = ImGui::GetBackgroundDrawList();
+    ImVec2 ds = ImGui::GetIO().DisplaySize;
+
+    bgDraw->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(0, 0, 0, (int)(100 * t)));
+
+    float vigSize = 250.0f;
+    ImU32 vigCol = IM_COL32(0, 0, 0, (int)(50 * t));
+    ImU32 trans = IM_COL32(0, 0, 0, 0);
+    bgDraw->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(ds.x, vigSize), vigCol, vigCol, trans, trans);
+    bgDraw->AddRectFilledMultiColor(ImVec2(0, ds.y - vigSize), ds, trans, trans, vigCol, vigCol);
+}
+
+void MenuInterface::drawTitleBar() {
+    if (fontTitle) ImGui::PushFont(fontTitle);
+    ImGui::TextColored(theme.getAccent(), "ToastyReplay");
+    ImGui::SameLine();
+    if (fontTitle) ImGui::PopFont();
+
+    if (fontSmall) ImGui::PushFont(fontSmall);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10);
+    ImGui::TextColored(ImVec4(theme.textSecondary), "v1.1.0");
+    if (fontSmall) ImGui::PopFont();
+
+    ImGui::Dummy(ImVec2(0, 4));
+}
+
+void MenuInterface::drawTabBar() {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 windowPos = ImGui::GetWindowPos();
+    float windowWidth = ImGui::GetWindowWidth();
+    float padX = ImGui::GetStyle().WindowPadding.x;
+
+    const char* tabNames[] = { "Replay", "Tools", "Hacks", "Settings" };
+    const int tabCount = 4;
+    float contentWidth = windowWidth - padX * 2;
+    float tabWidth = contentWidth / tabCount;
+    float tabHeight = 32.0f;
+    float tabY = ImGui::GetCursorScreenPos().y;
+
+    dl->AddRectFilled(
+        ImVec2(windowPos.x + padX, tabY),
+        ImVec2(windowPos.x + windowWidth - padX, tabY + tabHeight),
+        IM_COL32(15, 15, 18, 255), 6.0f
+    );
+
+    if (fontBody) ImGui::PushFont(fontBody);
+
+    for (int i = 0; i < tabCount; i++) {
+        ImVec2 tabMin(windowPos.x + padX + i * tabWidth, tabY);
+        ImVec2 tabMax(tabMin.x + tabWidth, tabY + tabHeight);
+
+        bool hovered = ImGui::IsMouseHoveringRect(tabMin, tabMax);
+        bool isActive = (activeTab == i);
+
+        if (isActive) {
+            dl->AddRectFilled(tabMin, tabMax, IM_COL32(25, 25, 30, 255),
+                i == 0 ? 6.0f : (i == tabCount - 1 ? 6.0f : 0.0f));
+        } else if (hovered) {
+            dl->AddRectFilled(tabMin, tabMax, IM_COL32(20, 20, 24, 255));
+        }
+
+        if (isActive) {
+            dl->AddRectFilled(
+                ImVec2(tabMin.x + 8, tabMax.y - 2),
+                ImVec2(tabMax.x - 8, tabMax.y),
+                theme.getAccentU32(), 1.0f
+            );
+        }
+
+        ImVec2 textSize = ImGui::CalcTextSize(tabNames[i]);
+        ImVec2 textPos(tabMin.x + (tabWidth - textSize.x) * 0.5f, tabMin.y + (tabHeight - textSize.y) * 0.5f);
+        dl->AddText(textPos, isActive ? theme.getAccentU32() : theme.getTextSecondaryU32(), tabNames[i]);
+
+        if (hovered && ImGui::IsMouseClicked(0))
+            switchTab(i);
+    }
+
+    if (fontBody) ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, tabHeight + 8));
+}
+
+void MenuInterface::drawTabContent() {
+    float t = anim.easeOutCubic(anim.tabTransition);
+
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (1.0f - t) * 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, t);
+
+    if (fontBody) ImGui::PushFont(fontBody);
+
+    switch (activeTab) {
+        case 0: drawReplayTab(); break;
+        case 1: drawToolsTab(); break;
+        case 2: drawHacksTab(); break;
+        case 3: drawSettingsTab(); break;
+    }
+
+    if (fontBody) ImGui::PopFont();
+    ImGui::PopStyleVar();
+}
+
+void MenuInterface::drawStatusBar() {
+    ReplayEngine* engine = ReplayEngine::get();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 windowPos = ImGui::GetWindowPos();
+    ImVec2 windowSize = ImGui::GetWindowSize();
+    float padX = ImGui::GetStyle().WindowPadding.x;
+    float barH = 24.0f;
+    float barY = windowPos.y + windowSize.y - barH - 8;
+
+    dl->AddRectFilled(
+        ImVec2(windowPos.x + padX, barY),
+        ImVec2(windowPos.x + windowSize.x - padX, barY + barH),
+        IM_COL32(12, 12, 15, 255), 4.0f
+    );
+
+    if (fontSmall) ImGui::PushFont(fontSmall);
+
+    char statusBuf[256];
+    int frame = PlayLayer::get() ? PlayLayer::get()->m_gameState.m_currentProgress : 0;
+    snprintf(statusBuf, sizeof(statusBuf), "TPS: %.0f    Speed: %.2fx    Frame: %d",
+        engine->tickRate, engine->gameSpeed, frame);
+
+    ImVec2 textSize = ImGui::CalcTextSize(statusBuf);
+    dl->AddText(
+        ImVec2(windowPos.x + padX + 10, barY + (barH - textSize.y) / 2),
+        theme.getTextSecondaryU32(), statusBuf
+    );
+
+    if (fontSmall) ImGui::PopFont();
+}
+
+void MenuInterface::drawReplayTab() {
     ReplayEngine* engine = ReplayEngine::get();
 
-    if (ImGui::RadioButton("Disable", engine->engineMode == MODE_DISABLED)) {
+    Widgets::SectionHeader("Mode", theme);
+
+    float pillW = (ImGui::GetContentRegionAvail().x - 20) / 3.0f;
+
+    if (Widgets::PillButton("Disable", engine->engineMode == MODE_DISABLED, pillW, theme, anim)) {
         if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
             delete engine->activeMacro;
             engine->activeMacro = nullptr;
         }
         engine->engineMode = MODE_DISABLED;
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Disable recording and playback");
-    }
-    ImGui::SameLine();
-
-    if (ImGui::RadioButton("Record", engine->engineMode == MODE_CAPTURE)) {
-        if (PlayLayer::get()) {
+    ImGui::SameLine(0, 10);
+    if (Widgets::PillButton("Record", engine->engineMode == MODE_CAPTURE, pillW, theme, anim)) {
+        if (PlayLayer::get())
             engine->beginCapture(PlayLayer::get()->m_level);
-        } else {
+        else
             engine->engineMode = MODE_CAPTURE;
-        }
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Record your inputs to create a replay");
+    ImGui::SameLine(0, 10);
+    if (Widgets::PillButton("Playback", engine->engineMode == MODE_EXECUTE, pillW, theme, anim)) {
+        if (engine->engineMode == MODE_EXECUTE)
+            engine->haltExecution();
+        else if (engine->activeMacro)
+            engine->beginExecution();
     }
 
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Playback", engine->engineMode == MODE_EXECUTE)) {
-        if (engine->activeMacro) {
-            engine->engineMode = MODE_EXECUTE;
-        } else {
+    ImGui::Dummy(ImVec2(0, 8));
+
+    if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
+        Widgets::StatusBadge("RECORDING", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        ImGui::SameLine();
+        ImGui::Text("Inputs: %zu", engine->activeMacro->inputs.size());
+        ImGui::Dummy(ImVec2(0, 4));
+
+        if (!macroNameReady) {
+            strncpy(macroNameBuffer, engine->activeMacro->name.c_str(), sizeof(macroNameBuffer) - 1);
+            macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
+            macroNameReady = true;
+        }
+
+        ImGui::Text("Macro Name:");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##recordingName", macroNameBuffer, sizeof(macroNameBuffer)))
+            engine->activeMacro->name = macroNameBuffer;
+
+        ImGui::Dummy(ImVec2(0, 4));
+        float btnW = (ImGui::GetContentRegionAvail().x - 10) / 2.0f;
+
+        if (Widgets::StyledButton("Save Macro", ImVec2(btnW, 30), theme, anim)) {
+            if (!engine->activeMacro->inputs.empty()) {
+                engine->activeMacro->persist();
+                engine->reloadMacroList();
+            }
+        }
+        ImGui::SameLine(0, 10);
+        if (Widgets::StyledButton("Stop", ImVec2(btnW, 30), theme, anim)) {
+            delete engine->activeMacro;
+            engine->activeMacro = nullptr;
             engine->engineMode = MODE_DISABLED;
-        }
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Play back a saved replay");
-    }
-}
-
-void DrawUtilityPanel() {
-    ReplayEngine* engine = ReplayEngine::get();
-
-    ImGuiCond sizeRule = MenuInterface::get()->layoutReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-    ImGui::SetNextWindowSize(MenuInterface::get()->utilityPanelDims, sizeRule);
-    ImGui::SetNextWindowPos(ImVec2(385, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(220, 300), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::Begin("utilities", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-
-    MenuInterface::get()->utilityPanelDims = ImGui::GetWindowSize();
-
-    float cappedScale = MenuInterface::get()->textScale;
-    if (cappedScale > 1.3f) cappedScale = 1.3f;
-    ImGui::SetWindowFontScale(cappedScale);
-
-    if (MenuInterface::get()->smallTypeface) ImGui::PushFont(MenuInterface::get()->smallTypeface);
-
-    if (ImGui::BeginChild("InfoContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGui::Text("TPS: ");
-        ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%.0f", engine->tickRate);
-
-        ImGui::Text("Speed: ");
-        ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%.2f", engine->gameSpeed);
-
-        ImGui::Text("Frame: ");
-        ImGui::SameLine();
-        ImGui::TextColored({ 0,255,255,255 }, "%i", PlayLayer::get() ? PlayLayer::get()->m_gameState.m_currentProgress : 0);
-
-
-        static float tempTickRate = engine->tickRate;
-        ImGui::Text("Set TPS: ");
-        ImGui::InputFloat("##tps", &tempTickRate);
-        if (ImGui::Button("Apply TPS")) {
-            if (engine->engineMode == MODE_DISABLED || !PlayLayer::get()) engine->tickRate = tempTickRate;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Set ticks per second (physics rate)");
-        }
-
-        ImGui::NewLine();
-
-        static float tempGameSpeed = 1;
-        ImGui::Text("Set Speed: ");
-        ImGui::InputFloat("##speed", &tempGameSpeed);
-        if (ImGui::Button("Apply Speedhack")) {
-            engine->gameSpeed = tempGameSpeed;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Change game speed multiplier");
-        }
-        ImGui::EndChild();
-    }
-    if (MenuInterface::get()->smallTypeface) ImGui::PopFont();
-
-    ImGui::End();
-}
-
-void DrawToolsPanel() {
-    ReplayEngine* engine = ReplayEngine::get();
-
-    ImGui::SetNextWindowSize(MenuInterface::get()->toolsPanelDims, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(610, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(220, 200), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::Begin("hacks", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-
-    MenuInterface::get()->toolsPanelDims = ImGui::GetWindowSize();
-
-    float cappedScale = MenuInterface::get()->textScale;
-    if (cappedScale > 1.3f) cappedScale = 1.3f;
-    ImGui::SetWindowFontScale(cappedScale);
-
-    if (MenuInterface::get()->smallTypeface) ImGui::PushFont(MenuInterface::get()->smallTypeface);
-
-    if (ImGui::BeginChild("HackContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGui::Checkbox("Frame Advance", &engine->tickStepping);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Pause the game and advance frame by frame");
-        }
-
-        ImGui::Checkbox("Speedhack Audio", &engine->audioPitchEnabled);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Apply speedhack to game audio as well");
-        }
-
-        ImGui::Checkbox("Safe Mode", &engine->protectedMode);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Prevents stats and percentage gain");
-        }
-
-        ImGui::Checkbox("Show Trajectory", &engine->pathPreview);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Display predicted player trajectory");
-        }
-
-        if (engine->pathPreview) {
-            ImGui::Indent();
-            static int pathLen = 312;
-            ImGui::Text("Trajectory Length");
-            if (ImGui::InputInt("##trajLength", &pathLen, 10, 50)) {
-                if (pathLen < 50) pathLen = 50;
-                if (pathLen > 480) pathLen = 480;
-                engine->pathLength = pathLen;
-            }
-            ImGui::Unindent();
-        }
-
-        ImGui::Checkbox("Noclip", &engine->collisionBypass);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Disable player collision with obstacles");
-        }
-
-        if (engine->collisionBypass) {
-            ImGui::Indent();
-
-            float hitRate = 100.0f;
-            if (engine->totalTickCount > 0) {
-                hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
-            }
-
-            ImVec4 hitRateColor;
-            if (hitRate >= 90.0f) {
-                hitRateColor = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
-            } else if (hitRate >= 70.0f) {
-                hitRateColor = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
-            } else {
-                hitRateColor = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
-            }
-
-            ImGui::Text("Accuracy: ");
-            ImGui::SameLine();
-            ImGui::TextColored(hitRateColor, "%.2f%%", hitRate);
-
-            ImGui::Text("Deaths: %d | Frames: %d", engine->bypassedCollisions, engine->totalTickCount);
-
-            ImGui::Checkbox("Accuracy Limit", &engine->collisionLimitActive);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Kill player if accuracy drops below limit");
-            }
-
-            if (engine->collisionLimitActive) {
-                ImGui::Text("Min Accuracy:");
-
-                const char* thresholdOptions[] = { "Disabled", "50%", "60%", "70%", "75%", "80%", "85%", "90%", "95%", "99%" };
-                float thresholdValues[] = { 0.0f, 50.0f, 60.0f, 70.0f, 75.0f, 80.0f, 85.0f, 90.0f, 95.0f, 99.0f };
-
-                int currentIdx = 0;
-                for (int i = 0; i < 10; i++) {
-                    if (std::abs(engine->collisionThreshold - thresholdValues[i]) < 0.1f) {
-                        currentIdx = i;
-                        break;
-                    }
-                }
-
-                if (ImGui::Combo("##accuracyLimit", &currentIdx, thresholdOptions, 10)) {
-                    engine->collisionThreshold = thresholdValues[currentIdx];
-                }
-            }
-
-            ImGui::Unindent();
-        }
-
-        ImGui::Checkbox("Seed", &engine->rngLocked);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Use a fixed seed for consistent RNG");
-        }
-
-        if (engine->rngLocked) {
-            ImGui::Indent();
-
-            static char rngBuffer[32] = "1";
-            static bool rngBufferInit = false;
-            if (!rngBufferInit) {
-                snprintf(rngBuffer, sizeof(rngBuffer), "%u", engine->rngSeedVal);
-                rngBufferInit = true;
-            }
-
-            ImGui::Text("Seed Value:");
-            if (ImGui::InputText("##seedValue", rngBuffer, sizeof(rngBuffer), ImGuiInputTextFlags_CharsDecimal)) {
-                try {
-                    unsigned long long parsed = std::stoull(rngBuffer);
-                    engine->rngSeedVal = static_cast<unsigned int>(parsed);
-                } catch (...) {
-                    engine->rngSeedVal = 1;
-                }
-            }
-
-            ImGui::Unindent();
-        }
-
-        ImGui::NewLine();
-        ImGui::EndChild();
-    }
-    if (MenuInterface::get()->smallTypeface) ImGui::PopFont();
-
-    ImGui::End();
-}
-
-void DrawStylePanel() {
-    MenuInterface* ui = MenuInterface::get();
-
-    ImGui::SetNextWindowSize(ui->stylePanelDims, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(835, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(220, 250), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::Begin("theme", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-
-    ui->stylePanelDims = ImGui::GetWindowSize();
-
-    float cappedScale = ui->textScale;
-    if (cappedScale > 1.3f) cappedScale = 1.3f;
-    ImGui::SetWindowFontScale(cappedScale);
-
-    if (ui->smallTypeface) ImGui::PushFont(ui->smallTypeface);
-
-    if (ImGui::BeginChild("ThemeContent", ImVec2(0, -40), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-        ImGui::Text("Text Color");
-        if (!ui->cyclingColors) {
-            ImGui::ColorEdit4("##textColor", (float*)&ui->fontColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
-        }
-        ImGui::SameLine();
-        ImGui::Checkbox("RGB##text", &ui->cyclingColors);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Enable rainbow cycling text color");
-        }
-
-        ImGui::Text("Background Color");
-        ImGui::ColorEdit4("##bgColor", (float*)&ui->bgColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
-
-        if (ui->cyclingColors) {
-            ImGui::NewLine();
-            ImGui::Text("RGB Speed");
-            ImGui::SliderFloat("##rgbSpeed", &ui->cycleRate, 0.1f, 5.0f, "%.1f");
-        }
-
-        ImGui::NewLine();
-        ImGui::Text("Text Size");
-        ImGui::SliderFloat("##fontSize", &ui->textScale, 0.5f, 2.5f, "%.1f");
-
-        ImGui::NewLine();
-        ImGui::Text("Menu Opacity");
-        ImGui::SliderFloat("##opacity", &ui->windowAlpha, 0.1f, 1.0f, "%.1f");
-
-        ImGui::EndChild();
-    }
-
-    if (ui->smallTypeface) ImGui::PopFont();
-
-    if (ImGui::Button("Reset Theme", ImVec2(-1, 0))) {
-        ui->fontColor = ImVec4(0.80f, 0.80f, 0.83f, 1.00f);
-        ui->bgColor = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
-        ui->windowAlpha = 1.0f;
-        ui->textScale = 1.0f;
-        ui->cyclingColors = false;
-        ui->cycleRate = 1.0f;
-        ui->layoutReset = true;
-
-        ui->primaryPanelDims = ImVec2(350, 525);
-        ui->utilityPanelDims = ImVec2(200, 320);
-        ui->toolsPanelDims = ImVec2(200, 380);
-        ui->stylePanelDims = ImVec2(200, 320);
-
-        ImGuiStyle* style = &ImGui::GetStyle();
-        style->Colors[ImGuiCol_Text] = ui->fontColor;
-        style->Colors[ImGuiCol_WindowBg] = ImVec4(ui->bgColor.x, ui->bgColor.y, ui->bgColor.z, ui->windowAlpha);
-        style->Colors[ImGuiCol_PopupBg] = ImVec4(ui->bgColor.x * 1.1f, ui->bgColor.y * 1.1f, ui->bgColor.z * 1.1f, ui->windowAlpha);
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Reset all theme settings to default");
-    }
-
-    ImGui::End();
-}
-
-void MenuInterface::displayPrimaryPanel() {
-    ImGuiCond sizeRule = layoutReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-    ImGui::SetNextWindowSize(primaryPanelDims, sizeRule);
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(350, 500), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::Begin("info", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
-
-    float cappedScale = textScale;
-    if (cappedScale > 1.2f) cappedScale = 1.2f;
-    ImGui::SetWindowFontScale(cappedScale);
-
-    primaryPanelDims = ImGui::GetWindowSize();
-
-    if (largeTypeface) ImGui::PushFont(largeTypeface);
-    ImGui::TextColored(ImVec4(1.f, 0.78f, 0.17f, 1.f), "ToastyReplay");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.f), "v1.0.0-Beta");
-    if (largeTypeface) ImGui::PopFont();
-
-    if (smallTypeface) ImGui::PushFont(smallTypeface);
-
-    ReplayEngine* engine = ReplayEngine::get();
-
-    if (ImGui::BeginChild("MainContent", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar)) {
-
-        if (engine->engineMode == MODE_EXECUTE && engine->activeMacro) {
-            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "PLAYING");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), ": %s", engine->activeMacro->name.c_str());
-            ImGui::SameLine();
-            ImGui::Text("| Inputs: %zu", engine->activeMacro->inputs.size());
-
-            if (ImGui::Button("Stop Playback", ImVec2(150, 0))) {
-                engine->engineMode = MODE_DISABLED;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Stop playing the macro");
-            }
-
-            ImGui::Separator();
-            ImGui::NewLine();
-        }
-
-        if (engine->engineMode == MODE_CAPTURE && engine->activeMacro) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "RECORDING");
-            ImGui::SameLine();
-            ImGui::Text("| Inputs: %zu", engine->activeMacro->inputs.size());
-
-            if (!macroNameReady) {
-                strncpy(macroNameBuffer, engine->activeMacro->name.c_str(), sizeof(macroNameBuffer) - 1);
-                macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
-                macroNameReady = true;
-            }
-
-            ImGui::Text("Macro Name:");
-            if (ImGui::InputText("##recordingName", macroNameBuffer, sizeof(macroNameBuffer))) {
-                engine->activeMacro->name = macroNameBuffer;
-            }
-
-            if (ImGui::Button("Save Macro", ImVec2(150, 0))) {
-                if (!engine->activeMacro->inputs.empty()) {
-                    engine->activeMacro->persist();
-                    engine->reloadMacroList();
-                    log::info("Saved macro: {}", engine->activeMacro->name);
-                }
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Save the current recording to file");
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("Stop Recording", ImVec2(150, 0))) {
-                delete engine->activeMacro;
-                engine->activeMacro = nullptr;
-                engine->engineMode = MODE_DISABLED;
-                macroNameReady = false;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Stop recording and discard unsaved inputs");
-            }
-
-            ImGui::Separator();
-            ImGui::NewLine();
-        } else {
             macroNameReady = false;
         }
+        ImGui::Dummy(ImVec2(0, 4));
+    } else {
+        macroNameReady = false;
+    }
 
-        displayModeSelector();
+    if (engine->engineMode == MODE_EXECUTE && engine->activeMacro) {
+        Widgets::StatusBadge("PLAYING", ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        ImGui::SameLine();
+        ImGui::Text("%s | Inputs: %zu", engine->activeMacro->name.c_str(), engine->activeMacro->inputs.size());
+        ImGui::Dummy(ImVec2(0, 4));
 
-        ImGui::NewLine();
+        if (Widgets::StyledButton("Stop Playback", ImVec2(-1, 30), theme, anim))
+            engine->engineMode = MODE_DISABLED;
 
-        ImGui::Text("Saved Replays");
+        ImGui::Dummy(ImVec2(0, 4));
+    }
 
-        std::string currentMacroName = (engine->activeMacro && engine->engineMode != MODE_CAPTURE) ? engine->activeMacro->name : "Select a replay...";
-        if (ImGui::BeginCombo("##ReplayCombo", currentMacroName.c_str())) {
-            auto macroListCopy = engine->storedMacros;
-            for (const auto& macroName : macroListCopy) {
-                bool isSelected = (currentMacroName == macroName);
+    Widgets::SectionHeader("Saved Replays", theme);
 
-                ImGui::PushID(macroName.c_str());
-                if (ImGui::Selectable(macroName.c_str(), isSelected, 0, ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
+    std::string currentMacroName = (engine->activeMacro && engine->engineMode != MODE_CAPTURE)
+        ? engine->activeMacro->name : "Select a replay...";
 
-                    if (engine->engineMode != MODE_CAPTURE) {
-                        MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
-                        if (loaded) {
-                            if (engine->activeMacro) delete engine->activeMacro;
-                            engine->activeMacro = loaded;
-                            engine->engineMode = MODE_EXECUTE;
-                        }
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##ReplayCombo", currentMacroName.c_str())) {
+        auto macroListCopy = engine->storedMacros;
+        for (const auto& macroName : macroListCopy) {
+            bool isSelected = (currentMacroName == macroName);
+            ImGui::PushID(macroName.c_str());
+
+            if (ImGui::Selectable(macroName.c_str(), isSelected, 0,
+                ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
+                if (engine->engineMode != MODE_CAPTURE) {
+                    MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
+                    if (loaded) {
+                        if (engine->activeMacro) delete engine->activeMacro;
+                        engine->activeMacro = loaded;
                     }
                 }
+            }
 
-                ImGui::SameLine(ImGui::GetWindowWidth() - 35);
-                if (ImGui::Button("X", ImVec2(20, 0))) {
-                    auto path = Mod::get()->getSaveDir() / "replays" / (macroName + ".gdr");
-                    if (std::filesystem::exists(path)) {
-                        std::filesystem::remove(path);
-                        engine->reloadMacroList();
-                    }
+            ImGui::SameLine(ImGui::GetWindowWidth() - 35);
+            if (ImGui::Button("X", ImVec2(20, 0))) {
+                auto path = Mod::get()->getSaveDir() / "replays" / (macroName + ".gdr");
+                if (std::filesystem::exists(path)) {
+                    std::filesystem::remove(path);
+                    engine->reloadMacroList();
                 }
-                ImGui::PopID();
+            }
+            ImGui::PopID();
 
-                if (isSelected) {
-                    ImGui::SetItemDefaultFocus();
-                }
+            if (isSelected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::Dummy(ImVec2(0, 4));
+    float btnW = (ImGui::GetContentRegionAvail().x - 10) / 2.0f;
+
+    if (Widgets::StyledButton("Refresh", ImVec2(btnW, 28), theme, anim))
+        engine->reloadMacroList();
+
+    ImGui::SameLine(0, 10);
+    if (Widgets::StyledButton("Open Folder", ImVec2(btnW, 28), theme, anim)) {
+        auto dir = Mod::get()->getSaveDir() / "replays";
+        if (std::filesystem::exists(dir) || std::filesystem::create_directory(dir))
+            utils::file::openFolder(dir);
+    }
+
+    if (engine->activeMacro && engine->engineMode != MODE_CAPTURE) {
+        ImGui::Dummy(ImVec2(0, 4));
+        Widgets::SectionHeader("Loaded Macro", theme);
+        ImGui::Text("Name: %s", engine->activeMacro->name.c_str());
+        ImGui::Text("Inputs: %zu", engine->activeMacro->inputs.size());
+
+        if (engine->engineMode == MODE_EXECUTE) {
+            ImGui::Dummy(ImVec2(0, 4));
+            Widgets::ToggleSwitch("Ignore Manual Input", &engine->userInputIgnored, theme, anim);
+        }
+    }
+
+    if (engine->activeMacro && (engine->engineMode == MODE_CAPTURE || engine->engineMode == MODE_EXECUTE)) {
+        ImGui::Dummy(ImVec2(0, 8));
+        Widgets::SectionHeader("Accuracy", theme);
+
+        const char* correctionModes[] = { "None", "Input Adjustments", "Frame Replacement" };
+        int currentMode = engine->positionCorrection ? 2 : (engine->inputCorrection ? 1 : 0);
+
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##AccuracyMode", correctionModes[currentMode])) {
+            if (ImGui::Selectable("None", currentMode == 0)) {
+                engine->positionCorrection = false;
+                engine->inputCorrection = false;
+            }
+            if (ImGui::Selectable("Input Adjustments", currentMode == 1)) {
+                engine->positionCorrection = false;
+                engine->inputCorrection = true;
+            }
+            if (ImGui::Selectable("Frame Replacement", currentMode == 2)) {
+                engine->positionCorrection = true;
+                engine->inputCorrection = false;
             }
             ImGui::EndCombo();
         }
 
-        if (ImGui::Button("Refresh List")) {
-            engine->reloadMacroList();
+        if (engine->positionCorrection) {
+            ImGui::Dummy(ImVec2(0, 4));
+            Widgets::StyledSliderInt("Replacement Rate", &engine->correctionInterval, 30, 240, theme);
         }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Open Replays Folder")) {
-            auto dir = Mod::get()->getSaveDir() / "replays";
-            if (std::filesystem::exists(dir) || std::filesystem::create_directory(dir)) {
-                utils::file::openFolder(dir);
-            }
-        }
-
-        if (engine->activeMacro) {
-            ImGui::NewLine();
-            ImGui::Text("Loaded: %s", engine->activeMacro->name.c_str());
-            ImGui::Text("Inputs: %zu", engine->activeMacro->inputs.size());
-
-            if (engine->engineMode == MODE_EXECUTE) {
-                ImGui::Checkbox("Ignore Manual Input", &engine->userInputIgnored);
-            }
-
-            if (engine->engineMode == MODE_CAPTURE || engine->engineMode == MODE_EXECUTE) {
-                const char* correctionModes[] = { "None", "Input Adjustments", "Frame Replacement" };
-                int currentCorrectionMode = engine->positionCorrection ? 2 : (engine->inputCorrection ? 1 : 0);
-
-                ImGui::Text("Accuracy Mode:");
-                if (ImGui::BeginCombo("##AccuracyMode", correctionModes[currentCorrectionMode])) {
-                    if (ImGui::Selectable("None", currentCorrectionMode == 0)) {
-                        engine->positionCorrection = false;
-                        engine->inputCorrection = false;
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("No position correction.");
-                    }
-
-                    if (ImGui::Selectable("Input Adjustments", currentCorrectionMode == 1)) {
-                        engine->positionCorrection = false;
-                        engine->inputCorrection = true;
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Records position on each click. Efficient and accurate for cube/ball modes");
-                    }
-
-                    if (ImGui::Selectable("Frame Replacement", currentCorrectionMode == 2)) {
-                        engine->positionCorrection = true;
-                        engine->inputCorrection = false;
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Records position continuously. Required for ship/wave and ufo modes");
-                    }
-
-                    ImGui::EndCombo();
-                }
-
-                if (engine->positionCorrection) {
-                    ImGui::SliderInt("Frame Replacement Rate", &engine->correctionInterval, 30, 240);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Lower = Less Lag, Higher = More Accurate");
-                    }
-                }
-            }
-        }
-
-        ImGui::EndChild();
     }
-
-    if (smallTypeface) ImGui::PopFont();
-
-    ImGui::End();
 }
 
-void MenuInterface::displayOverlayBranding() {
+void MenuInterface::drawToolsTab() {
     ReplayEngine* engine = ReplayEngine::get();
 
-    bool shouldDisplay = shown || (PlayLayer::get() && engine && engine->engineMode == MODE_EXECUTE);
+    Widgets::SectionHeader("TPS Control", theme);
+    ImGui::TextColored(theme.getAccent(), "Current: %.0f TPS", engine->tickRate);
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
+    ImGui::InputFloat("##tps", &tempTickRate, 0, 0, "%.0f");
+    ImGui::SameLine(0, 6);
+    if (Widgets::StyledButton("Apply##tps", ImVec2(78, 28), theme, anim)) {
+        if (engine->engineMode == MODE_DISABLED || !PlayLayer::get())
+            engine->tickRate = tempTickRate;
+    }
 
-    if (!shouldDisplay) return;
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Speed Control", theme);
+    ImGui::TextColored(theme.getAccent(), "Current: %.2fx", engine->gameSpeed);
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
+    ImGui::InputFloat("##speed", &tempGameSpeed, 0, 0, "%.2f");
+    ImGui::SameLine(0, 6);
+    if (Widgets::StyledButton("Apply##spd", ImVec2(78, 28), theme, anim))
+        engine->gameSpeed = tempGameSpeed;
 
+    ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Features", theme);
+
+    Widgets::ModuleCard("Frame Advance", "Pause and step frame-by-frame",
+        &engine->tickStepping, theme, anim);
+
+    Widgets::ModuleCard("Speedhack Audio", "Apply speed changes to game audio",
+        &engine->audioPitchEnabled, theme, anim);
+}
+
+void MenuInterface::drawHacksTab() {
+    ReplayEngine* engine = ReplayEngine::get();
+
+    Widgets::ModuleCard("Safe Mode", "Prevents stats and percentage gain",
+        &engine->protectedMode, theme, anim);
+
+    Widgets::ModuleCardBegin("Show Trajectory", "Display predicted player path",
+        &engine->pathPreview, theme, anim);
+    if (engine->pathPreview) {
+        Widgets::StyledSliderInt("Trajectory Length", &engine->pathLength, 50, 480, theme);
+        Widgets::ModuleCardEnd();
+    }
+
+    Widgets::ModuleCardBegin("Show Hitboxes", "Display collision bounds for objects",
+        &engine->showHitboxes, theme, anim);
+    if (engine->showHitboxes) {
+        Widgets::ToggleSwitch("On Death Only", &engine->hitboxOnDeath, theme, anim);
+        Widgets::ToggleSwitch("Draw Trail", &engine->hitboxTrail, theme, anim);
+
+        if (engine->hitboxTrail)
+            Widgets::StyledSliderInt("Trail Length", &engine->hitboxTrailLength, 10, 600, theme);
+
+        Widgets::ModuleCardEnd();
+    }
+
+    Widgets::ModuleCardBegin("Noclip", "Disable collision with obstacles",
+        &engine->collisionBypass, theme, anim);
+    if (engine->collisionBypass) {
+        float hitRate = 100.0f;
+        if (engine->totalTickCount > 0)
+            hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
+
+        ImVec4 hitColor;
+        if (hitRate >= 90.0f) hitColor = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
+        else if (hitRate >= 70.0f) hitColor = ImVec4(1.0f, 1.0f, 0.3f, 1.0f);
+        else hitColor = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+
+        ImGui::Text("Accuracy: ");
+        ImGui::SameLine();
+        ImGui::TextColored(hitColor, "%.2f%%", hitRate);
+        ImGui::Text("Deaths: %d | Frames: %d", engine->bypassedCollisions, engine->totalTickCount);
+
+        ImGui::Dummy(ImVec2(0, 4));
+        Widgets::ToggleSwitch("Accuracy Limit", &engine->collisionLimitActive, theme, anim);
+
+        if (engine->collisionLimitActive) {
+            const char* thresholdOptions[] = { "Disabled", "50%", "60%", "70%", "75%", "80%", "85%", "90%", "95%", "99%" };
+            float thresholdValues[] = { 0.0f, 50.0f, 60.0f, 70.0f, 75.0f, 80.0f, 85.0f, 90.0f, 95.0f, 99.0f };
+
+            int currentIdx = 0;
+            for (int i = 0; i < 10; i++) {
+                if (std::abs(engine->collisionThreshold - thresholdValues[i]) < 0.1f) {
+                    currentIdx = i; break;
+                }
+            }
+
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::Combo("##accuracyLimit", &currentIdx, thresholdOptions, 10))
+                engine->collisionThreshold = thresholdValues[currentIdx];
+        }
+        Widgets::ModuleCardEnd();
+    }
+
+    Widgets::ModuleCardBegin("RNG Lock", "Use fixed seed for consistent RNG",
+        &engine->rngLocked, theme, anim);
+    if (engine->rngLocked) {
+        if (!rngBufferInit) {
+            snprintf(rngBuffer, sizeof(rngBuffer), "%u", engine->rngSeedVal);
+            rngBufferInit = true;
+        }
+
+        ImGui::Text("Seed Value:");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##seedValue", rngBuffer, sizeof(rngBuffer), ImGuiInputTextFlags_CharsDecimal)) {
+            try {
+                unsigned long long parsed = std::stoull(rngBuffer);
+                engine->rngSeedVal = static_cast<unsigned int>(parsed);
+            } catch (...) {
+                engine->rngSeedVal = 1;
+            }
+        }
+        Widgets::ModuleCardEnd();
+    }
+}
+
+void MenuInterface::drawSettingsTab() {
+    Widgets::SectionHeader("Accent Color", theme);
+
+    if (!theme.cyclingAccent) {
+        ImGui::ColorEdit4("##accentColor", (float*)&theme.accentColor,
+            ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        ImGui::SameLine();
+    }
+    Widgets::ToggleSwitch("RGB Cycling", &theme.cyclingAccent, theme, anim);
+
+    if (theme.cyclingAccent) {
+        ImGui::Dummy(ImVec2(0, 4));
+        Widgets::StyledSliderFloat("Cycle Speed", &theme.cycleRate, 0.1f, 5.0f, theme);
+    }
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Colors", theme);
+
+    ImGui::Text("Background");
+    ImGui::ColorEdit4("##bgColor", (float*)&theme.bgColor,
+        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Text("Card Color");
+    ImGui::ColorEdit4("##cardColor", (float*)&theme.cardColor,
+        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Text("Text Color");
+    ImGui::ColorEdit4("##textColor", (float*)&theme.textPrimary,
+        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Appearance", theme);
+
+    Widgets::StyledSliderFloat("Menu Opacity", &theme.windowAlpha, 0.1f, 1.0f, theme);
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::StyledSliderFloat("Corner Radius", &theme.cornerRadius, 0.0f, 20.0f, theme);
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::StyledSliderFloat("Animation Speed", &anim.animSpeed, 2.0f, 20.0f, theme);
+
+    ImGui::Dummy(ImVec2(0, 8));
+    ImGui::Text("Open Animation");
+    const char* animDirNames[] = { "Center", "From Left", "From Right", "From Top", "From Bottom" };
+    int currentDir = (int)anim.openDirection;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo("##animDir", &currentDir, animDirNames, 5))
+        anim.openDirection = (AnimDirection)currentDir;
+
+    ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Keybinds", theme);
+
+    if (fontSmall) ImGui::PushFont(fontSmall);
+    ImGui::TextColored(theme.textSecondary, "Click to rebind, right-click to clear");
+    if (fontSmall) ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 4));
+
+    Widgets::KeybindButton("Menu Toggle", &keybinds.menu, theme, anim);
+    Widgets::KeybindButton("Frame Advance", &keybinds.frameAdvance, theme, anim);
+    Widgets::KeybindButton("Frame Step", &keybinds.frameStep, theme, anim);
+    Widgets::KeybindButton("Replay Toggle", &keybinds.replayToggle, theme, anim);
+    Widgets::KeybindButton("Noclip", &keybinds.noclip, theme, anim);
+    Widgets::KeybindButton("Safe Mode", &keybinds.safeMode, theme, anim);
+    Widgets::KeybindButton("Trajectory", &keybinds.trajectory, theme, anim);
+    Widgets::KeybindButton("Audio Pitch", &keybinds.audioPitch, theme, anim);
+    Widgets::KeybindButton("RNG Lock", &keybinds.rngLock, theme, anim);
+    Widgets::KeybindButton("Hitboxes", &keybinds.hitboxes, theme, anim);
+
+    ImGui::Dummy(ImVec2(0, 12));
+    if (Widgets::StyledButton("Reset to Defaults", ImVec2(-1, 32), theme, anim)) {
+        theme.resetDefaults();
+        anim.animSpeed = 8.0f;
+        anim.openDirection = ANIM_CENTER;
+        keybinds = KeybindSet();
+        saveSettings();
+    }
+}
+
+static void saveColor(const char* prefix, const ImVec4& col) {
+    auto* mod = Mod::get();
+    mod->setSavedValue(std::string(prefix) + "_r", col.x);
+    mod->setSavedValue(std::string(prefix) + "_g", col.y);
+    mod->setSavedValue(std::string(prefix) + "_b", col.z);
+    mod->setSavedValue(std::string(prefix) + "_a", col.w);
+}
+
+static ImVec4 loadColor(const char* prefix, const ImVec4& def) {
+    auto* mod = Mod::get();
+    return ImVec4(
+        mod->getSavedValue<float>(std::string(prefix) + "_r", def.x),
+        mod->getSavedValue<float>(std::string(prefix) + "_g", def.y),
+        mod->getSavedValue<float>(std::string(prefix) + "_b", def.z),
+        mod->getSavedValue<float>(std::string(prefix) + "_a", def.w)
+    );
+}
+
+void MenuInterface::saveSettings() {
+    auto* mod = Mod::get();
+    auto* eng = ReplayEngine::get();
+
+    saveColor("theme_accent", theme.accentColor);
+    saveColor("theme_bg", theme.bgColor);
+    saveColor("theme_card", theme.cardColor);
+    saveColor("theme_text", theme.textPrimary);
+    saveColor("theme_text2", theme.textSecondary);
+    mod->setSavedValue("theme_opacity", theme.windowAlpha);
+    mod->setSavedValue("theme_radius", theme.cornerRadius);
+    mod->setSavedValue("theme_cycling", theme.cyclingAccent);
+    mod->setSavedValue("theme_cycle_rate", theme.cycleRate);
+
+    mod->setSavedValue("anim_speed", anim.animSpeed);
+    mod->setSavedValue("anim_direction", (int)anim.openDirection);
+
+    mod->setSavedValue("key_menu", keybinds.menu);
+    mod->setSavedValue("key_frame_advance", keybinds.frameAdvance);
+    mod->setSavedValue("key_frame_step", keybinds.frameStep);
+    mod->setSavedValue("key_replay_toggle", keybinds.replayToggle);
+    mod->setSavedValue("key_noclip", keybinds.noclip);
+    mod->setSavedValue("key_safe_mode", keybinds.safeMode);
+    mod->setSavedValue("key_trajectory", keybinds.trajectory);
+    mod->setSavedValue("key_audio_pitch", keybinds.audioPitch);
+    mod->setSavedValue("key_rng_lock", keybinds.rngLock);
+    mod->setSavedValue("key_hitboxes", keybinds.hitboxes);
+
+    mod->setSavedValue("hack_hitboxes", eng->showHitboxes);
+    mod->setSavedValue("hack_hitbox_death", eng->hitboxOnDeath);
+    mod->setSavedValue("hack_hitbox_trail", eng->hitboxTrail);
+    mod->setSavedValue("hack_hitbox_trail_len", eng->hitboxTrailLength);
+    mod->setSavedValue("hack_trajectory", eng->pathPreview);
+    mod->setSavedValue("hack_trajectory_len", eng->pathLength);
+    mod->setSavedValue("hack_noclip", eng->collisionBypass);
+    mod->setSavedValue("hack_rng_lock", eng->rngLocked);
+    mod->setSavedValue("hack_rng_seed", eng->rngSeedVal);
+    mod->setSavedValue("hack_safe_mode", eng->protectedMode);
+    mod->setSavedValue("hack_audio_pitch", eng->audioPitchEnabled);
+    mod->setSavedValue("eng_tick_rate", (float)eng->tickRate);
+    mod->setSavedValue("eng_speed", (float)eng->gameSpeed);
+}
+
+void MenuInterface::loadSettings() {
+    auto* mod = Mod::get();
+    auto* eng = ReplayEngine::get();
+
+    theme.accentColor = loadColor("theme_accent", ImVec4(0.65f, 0.20f, 0.85f, 1.0f));
+    theme.bgColor = loadColor("theme_bg", ImVec4(0.08f, 0.08f, 0.10f, 0.92f));
+    theme.cardColor = loadColor("theme_card", ImVec4(0.12f, 0.12f, 0.15f, 1.0f));
+    theme.textPrimary = loadColor("theme_text", ImVec4(0.93f, 0.93f, 0.95f, 1.0f));
+    theme.textSecondary = loadColor("theme_text2", ImVec4(0.55f, 0.55f, 0.60f, 1.0f));
+    theme.windowAlpha = mod->getSavedValue<float>("theme_opacity", 0.92f);
+    theme.cornerRadius = mod->getSavedValue<float>("theme_radius", 10.0f);
+    theme.cyclingAccent = mod->getSavedValue<bool>("theme_cycling", false);
+    theme.cycleRate = mod->getSavedValue<float>("theme_cycle_rate", 1.0f);
+
+    anim.animSpeed = mod->getSavedValue<float>("anim_speed", 8.0f);
+    anim.openDirection = (AnimDirection)mod->getSavedValue<int>("anim_direction", ANIM_CENTER);
+
+    keybinds.menu = mod->getSavedValue<int>("key_menu", 0x42);
+    keybinds.frameAdvance = mod->getSavedValue<int>("key_frame_advance", 0x56);
+    keybinds.frameStep = mod->getSavedValue<int>("key_frame_step", 0x43);
+    keybinds.replayToggle = mod->getSavedValue<int>("key_replay_toggle", 0);
+    keybinds.noclip = mod->getSavedValue<int>("key_noclip", 0);
+    keybinds.safeMode = mod->getSavedValue<int>("key_safe_mode", 0);
+    keybinds.trajectory = mod->getSavedValue<int>("key_trajectory", 0);
+    keybinds.audioPitch = mod->getSavedValue<int>("key_audio_pitch", 0);
+    keybinds.rngLock = mod->getSavedValue<int>("key_rng_lock", 0);
+    keybinds.hitboxes = mod->getSavedValue<int>("key_hitboxes", 0);
+
+    eng->showHitboxes = mod->getSavedValue<bool>("hack_hitboxes", false);
+    eng->hitboxOnDeath = mod->getSavedValue<bool>("hack_hitbox_death", false);
+    eng->hitboxTrail = mod->getSavedValue<bool>("hack_hitbox_trail", false);
+    eng->hitboxTrailLength = mod->getSavedValue<int>("hack_hitbox_trail_len", 240);
+    eng->pathPreview = mod->getSavedValue<bool>("hack_trajectory", false);
+    eng->pathLength = mod->getSavedValue<int>("hack_trajectory_len", 312);
+    eng->collisionBypass = mod->getSavedValue<bool>("hack_noclip", false);
+    eng->rngLocked = mod->getSavedValue<bool>("hack_rng_lock", false);
+    eng->rngSeedVal = mod->getSavedValue<int>("hack_rng_seed", 1);
+    eng->protectedMode = mod->getSavedValue<bool>("hack_safe_mode", false);
+    eng->audioPitchEnabled = mod->getSavedValue<bool>("hack_audio_pitch", true);
+    eng->tickRate = mod->getSavedValue<float>("eng_tick_rate", 240.f);
+    eng->gameSpeed = mod->getSavedValue<float>("eng_speed", 1.0f);
+
+    tempTickRate = (float)eng->tickRate;
+    tempGameSpeed = (float)eng->gameSpeed;
+}
+
+void MenuInterface::drawMainWindow() {
+    float t = anim.easeOutCubic(anim.openProgress);
     ImGuiIO& io = ImGui::GetIO();
 
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 30), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowBgAlpha(0.0f);
-    ImGui::Begin("##watermark", nullptr,
-        ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoNav |
+    float winW = 520.0f, winH = 480.0f;
+    bool animating = anim.opening || anim.closing || anim.openProgress < 1.0f;
+
+    if (!windowPosInitialized) {
+        windowPos = ImVec2((io.DisplaySize.x - winW) / 2.0f, (io.DisplaySize.y - winH) / 2.0f);
+        windowPosInitialized = true;
+    }
+
+    ImVec2 drawPos = windowPos;
+    if (animating) {
+        float invT = 1.0f - t;
+        float slideOffset = 80.0f * invT;
+        switch (anim.openDirection) {
+            case ANIM_CENTER: {
+                float scale = 0.8f + 0.2f * t;
+                float scaledW = winW * scale;
+                float scaledH = winH * scale;
+                drawPos.x = windowPos.x + (winW - scaledW) / 2.0f;
+                drawPos.y = windowPos.y + (winH - scaledH) / 2.0f;
+                ImGui::SetNextWindowSize(ImVec2(scaledW, scaledH));
+                break;
+            }
+            case ANIM_FROM_LEFT:
+                drawPos.x = windowPos.x - slideOffset;
+                ImGui::SetNextWindowSize(ImVec2(winW, winH));
+                break;
+            case ANIM_FROM_RIGHT:
+                drawPos.x = windowPos.x + slideOffset;
+                ImGui::SetNextWindowSize(ImVec2(winW, winH));
+                break;
+            case ANIM_FROM_TOP:
+                drawPos.y = windowPos.y - slideOffset;
+                ImGui::SetNextWindowSize(ImVec2(winW, winH));
+                break;
+            case ANIM_FROM_BOTTOM:
+                drawPos.y = windowPos.y + slideOffset;
+                ImGui::SetNextWindowSize(ImVec2(winW, winH));
+                break;
+        }
+        ImGui::SetNextWindowPos(drawPos);
+    } else {
+        ImGui::SetNextWindowSize(ImVec2(winW, winH));
+    }
+
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, t);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme.cornerRadius);
+
+    ImGui::Begin("##ToastyReplay", nullptr,
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    if (smallTypeface) ImGui::PushFont(smallTypeface);
+    if (!animating) {
+        windowPos = ImGui::GetWindowPos();
+    }
 
-    ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.17f, 0.8f), "ToastyReplay v1.0.0-Beta");
+    drawTitleBar();
+    drawTabBar();
 
-    if (smallTypeface) ImGui::PopFont();
+    float statusBarH = 36.0f;
+    float remainH = ImGui::GetContentRegionAvail().y - statusBarH;
+    ImGui::BeginChild("##TabContent", ImVec2(0, remainH), false);
+    drawTabContent();
+    ImGui::EndChild();
+
+    drawStatusBar();
 
     ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 void MenuInterface::drawInterface() {
     ReplayEngine* engine = ReplayEngine::get();
-    if (engine) {
-        engine->processHotkeys();
-    }
+    if (engine) engine->processHotkeys();
 
-    displayOverlayBranding();
+    float dt = ImGui::GetIO().DeltaTime;
+    anim.update(dt);
 
-    if (!shown) {
-        if (previouslyShown && engine) {
-            engine->reloadMacroList();
-        }
+    if (anim.closing && anim.openProgress <= 0.0f) {
+        shown = false;
+        anim.closing = false;
+        anim.openProgress = 0.0f;
+        saveSettings();
+        if (previouslyShown && engine) engine->reloadMacroList();
         previouslyShown = false;
-        return;
+        auto pl = PlayLayer::get();
+        if (pl && !pl->m_isPaused)
+            PlatformToolbox::hideCursor();
     }
 
-    log::info("GUI::renderer() - visible is true, rendering panels");
+    bool shouldShowWatermark = shown || anim.openProgress > 0.0f ||
+        (PlayLayer::get() && engine && engine->engineMode == MODE_EXECUTE);
+    if (shouldShowWatermark) {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 30),
+            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowBgAlpha(0.0f);
+        ImGui::Begin("##watermark", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+            ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    if (!previouslyShown && engine) {
+        if (fontSmall) ImGui::PushFont(fontSmall);
+        ImVec4 a = theme.getAccent();
+        ImGui::TextColored(ImVec4(a.x, a.y, a.z, 0.6f), "ToastyReplay v1.1.0");
+        if (fontSmall) ImGui::PopFont();
+
+        ImGui::End();
+    }
+
+    if (!shown && anim.openProgress <= 0.0f)
+        return;
+
+    if (shown && !previouslyShown && engine) {
         engine->reloadMacroList();
         previouslyShown = true;
     }
 
-    ImGuiStyle* style = &ImGui::GetStyle();
-    ImVec4 activeFontColor = fontColor;
-    if (cyclingColors) {
-        activeFontColor = computeCycleColor(cycleRate);
-    }
-    style->Colors[ImGuiCol_Text] = activeFontColor;
-    style->Colors[ImGuiCol_WindowBg] = ImVec4(bgColor.x, bgColor.y, bgColor.z, windowAlpha);
-    style->Colors[ImGuiCol_PopupBg] = ImVec4(bgColor.x * 1.1f, bgColor.y * 1.1f, bgColor.z * 1.1f, windowAlpha);
+    if (shown && !anim.closing)
+        PlatformToolbox::showCursor();
 
-    PlatformToolbox::showCursor();
-
-    displayPrimaryPanel();
-    DrawUtilityPanel();
-    DrawToolsPanel();
-    DrawStylePanel();
-
-    if (validationFailed) {
-        validationFailed = false;
-        ImGui::OpenPopup("Key Check Failed");
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(500, 140), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x / 2 - 250, ImGui::GetIO().DisplaySize.y / 2 - 70), ImGuiCond_Always);
-    if (ImGui::BeginPopupModal("Key Check Failed", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::Text("Your key is invalid or has been linked to a different computer.");
-        ImGui::Text("Please enter a valid key or contact support.");
-        if (ImGui::Button("OK")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    layoutReset = false;
+    theme.applyToImGuiStyle();
+    drawBackdrop();
+    drawMainWindow();
 }
 
 void MenuInterface::initialize() {
-    ImGuiStyle* style = &ImGui::GetStyle();
-
-    style->WindowPadding = ImVec2(15, 15);
-    style->WindowRounding = 5.0f;
-    style->FramePadding = ImVec2(5, 5);
-    style->FrameRounding = 4.0f;
-    style->ItemSpacing = ImVec2(12, 8);
-    style->ItemInnerSpacing = ImVec2(8, 6);
-    style->IndentSpacing = 25.0f;
-    style->ScrollbarSize = 15.0f;
-    style->ScrollbarRounding = 9.0f;
-    style->GrabMinSize = 5.0f;
-    style->GrabRounding = 3.0f;
-
-    style->Colors[ImGuiCol_Text] = fontColor;
-    style->Colors[ImGuiCol_TextDisabled] = ImVec4(0.24f, 0.23f, 0.29f, 1.00f);
-    style->Colors[ImGuiCol_WindowBg] = ImVec4(bgColor.x, bgColor.y, bgColor.z, windowAlpha);
-    style->Colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.09f, windowAlpha);
-    style->Colors[ImGuiCol_Border] = ImVec4(0,0,0,0);
-    style->Colors[ImGuiCol_BorderShadow] = ImVec4(0,0,0,0);
-    style->Colors[ImGuiCol_FrameBg] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
-    style->Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.24f, 0.23f, 0.29f, 1.00f);
-    style->Colors[ImGuiCol_FrameBgActive] = ImVec4(0.56f, 0.56f, 0.58f, 1.00f);
-    style->Colors[ImGuiCol_TitleBg] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
-    style->Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(1.00f, 0.98f, 0.95f, 0.75f);
-    style->Colors[ImGuiCol_TitleBgActive] = ImVec4(0.07f, 0.07f, 0.09f, 1.00f);
-    style->Colors[ImGuiCol_MenuBarBg] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
-    style->Colors[ImGuiCol_ScrollbarBg] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
-    style->Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.80f, 0.80f, 0.83f, 0.31f);
-    style->Colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.56f, 0.56f, 0.58f, 1.00f);
-    style->Colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
-    style->Colors[ImGuiCol_CheckMark] = ImVec4(0.80f, 0.80f, 0.83f, 0.31f);
-    style->Colors[ImGuiCol_SliderGrab] = ImVec4(0.80f, 0.80f, 0.83f, 0.31f);
-    style->Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
-    style->Colors[ImGuiCol_Button] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
-    style->Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.23f, 0.29f, 1.00f);
-    style->Colors[ImGuiCol_ButtonActive] = ImVec4(0.56f, 0.56f, 0.58f, 1.00f);
-    style->Colors[ImGuiCol_Header] = ImVec4(0.10f, 0.09f, 0.12f, 1.00f);
-    style->Colors[ImGuiCol_HeaderHovered] = ImVec4(0.56f, 0.56f, 0.58f, 1.00f);
-    style->Colors[ImGuiCol_HeaderActive] = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
-    style->Colors[ImGuiCol_ResizeGrip] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    style->Colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.56f, 0.56f, 0.58f, 1.00f);
-    style->Colors[ImGuiCol_ResizeGripActive] = ImVec4(0.06f, 0.05f, 0.07f, 1.00f);
-    style->Colors[ImGuiCol_PlotLines] = ImVec4(0.40f, 0.39f, 0.38f, 0.63f);
-    style->Colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.25f, 1.00f, 0.00f, 1.00f);
-    style->Colors[ImGuiCol_PlotHistogram] = ImVec4(0.40f, 0.39f, 0.38f, 0.63f);
-    style->Colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.25f, 1.00f, 0.00f, 1.00f);
-    style->Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.25f, 1.00f, 0.00f, 0.43f);
-    style->Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(1.00f, 0.98f, 0.95f, 0.73f);
-
     ImGuiIO& io = ImGui::GetIO();
 
-    auto path = (Mod::get()->getResourcesDir() / "Roboto-Bold.ttf").string();
+    auto boldPath = (Mod::get()->getResourcesDir() / "Roboto-Bold.ttf").string();
+    auto regularPath = (Mod::get()->getResourcesDir() / "Roboto-Regular.ttf").string();
 
-    if (std::filesystem::exists(path)) {
-        smallTypeface = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f);
-        largeTypeface = io.Fonts->AddFontFromFileTTF(path.c_str(), 28.0f);
-        extraLargeTypeface = io.Fonts->AddFontFromFileTTF(path.c_str(), 100.0f);
+    bool hasRegular = std::filesystem::exists(regularPath);
+    bool hasBold = std::filesystem::exists(boldPath);
+
+    const char* bodyFont = hasRegular ? regularPath.c_str() : (hasBold ? boldPath.c_str() : nullptr);
+    const char* headFont = hasBold ? boldPath.c_str() : nullptr;
+
+    if (bodyFont) {
+        fontBody = io.Fonts->AddFontFromFileTTF(bodyFont, 16.0f);
+        fontSmall = io.Fonts->AddFontFromFileTTF(bodyFont, 13.0f);
     } else {
-        smallTypeface = io.Fonts->AddFontDefault();
-        largeTypeface = io.Fonts->AddFontDefault();
-        extraLargeTypeface = io.Fonts->AddFontDefault();
+        fontBody = io.Fonts->AddFontDefault();
+        fontSmall = io.Fonts->AddFontDefault();
     }
+
+    if (headFont) {
+        fontHeading = io.Fonts->AddFontFromFileTTF(headFont, 20.0f);
+        fontTitle = io.Fonts->AddFontFromFileTTF(headFont, 28.0f);
+    } else {
+        fontHeading = io.Fonts->AddFontDefault();
+        fontTitle = io.Fonts->AddFontDefault();
+    }
+
     io.Fonts->Build();
+    loadSettings();
+    theme.applyToImGuiStyle();
 }
 
 $on_mod(Loaded) {
-    log::info("ToastyReplay: Setting up ImGuiCocos from $on_mod(Loaded)");
-
     ImGuiCocos::get().setup([] {
-        log::info("ToastyReplay: ImGuiCocos setup callback running");
         MenuInterface::get()->initialize();
     }).draw([] {
         MenuInterface::get()->drawInterface();

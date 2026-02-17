@@ -49,11 +49,17 @@ public:
     bool collisionBypass = false;
     bool collisionLimitActive = false;
     float collisionThreshold = 0.0f;
+    bool noclipDeathBlocked = false;
 
     bool safeMode = false;
     bool showTrajectory = false;
     bool trajectoryBothSides = false;
     bool creatingTrajectory = false;
+
+    bool showHitboxes = false;
+    bool hitboxOnDeath = false;
+    bool hitboxTrail = false;
+    int hitboxTrailLength = 240;
 
     int bypassedCollisions = 0;
     int totalTickCount = 0;
@@ -100,6 +106,7 @@ public:
     int hotkey_pathPreview = 0;
     int hotkey_collision = 0;
     int hotkey_rngLock = 0;
+    int hotkey_hitboxes = 0;
 
     void reloadMacroList() {
         storedMacros.clear();

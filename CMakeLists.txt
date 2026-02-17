@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
@@ -18,6 +18,7 @@ file(GLOB SOURCES
     src/trajectory.cpp
     src/safemode.cpp
     src/watermark.cpp
+    src/hitboxes.cpp
 )
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
@@ -38,7 +39,8 @@ set(GEODE_BINDINGS_REPO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/bindings" CACHE PATH "
 add_subdirectory($ENV{GEODE_SDK} $ENV{GEODE_SDK}/build)
 
 CPMAddPackage("gh:maxnut/GDReplayFormat#9c32b5529067901418ea6e4dfbd36437dc8712bc")
-CPMAddPackage("gh:matcool/gd-imgui-cocos#8973953519fa05d81c61634e585559ab87ca559d")
+set(IMGUI_VERSION "v1.91.4" CACHE STRING "Pin imgui version" FORCE)
+CPMAddPackage("gh:matcool/gd-imgui-cocos#97643336209b760a3d59d83b770546b1cfef4e7d")
 target_compile_definitions(${PROJECT_NAME} PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")
 
 if (WIN32)

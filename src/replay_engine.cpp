@@ -29,13 +29,13 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
     bool macroInput = false;
   };
 
-  void processCommands(float dt) {
+  void processCommands(float dt, bool isHalfTick, bool isLastTick) {
     auto* engine = ReplayEngine::get();
 
     PlayLayer* pl = PlayLayer::get();
 
     if (!pl) {
-      return GJBaseGameLayer::processCommands(dt);
+      return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
     }
 
     refreshRngState();
@@ -56,11 +56,11 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
       }
 
       if (engine->lastTickIndex == tick && tick != 0 && engine->activeMacro)
-        return GJBaseGameLayer::processCommands(dt);
+        return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
 
     }
 
-    GJBaseGameLayer::processCommands(dt);
+    GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
 
     if (engine->engineMode == MODE_DISABLED)
       return;
@@ -176,14 +176,14 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
     size_t& inputIdx = engine->executeIndex;
     auto& inputList = engine->activeMacro->inputs;
 
-    while (inputIdx < inputList.size() && tick >= inputList[inputIdx].tick) {
+    while (inputIdx < inputList.size() && tick >= (int)inputList[inputIdx].frame) {
       auto input = inputList[inputIdx];
 
       if (tick != engine->respawnTickIndex) {
         if (flipControls())
-          input.secondPlayer = !input.secondPlayer;
+          input.player2 = !input.player2;
 
-        GJBaseGameLayer::handleButton(input.pressed, input.actionType, input.secondPlayer);
+        GJBaseGameLayer::handleButton(input.down, input.button, input.player2);
       }
 
       inputIdx++;
