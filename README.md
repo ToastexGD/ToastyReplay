@@ -49,3 +49,5 @@ https://discord.gg/JWkVm7cUhH
 https://github.com/ToastexGD/ToastyReplay/issues
 
 Thanks everyone! <3
+
+All cashed disabled files and FMOD header temp files are gone.
