@@ -18,7 +18,7 @@ jobs:
       - name: Use pinned Geode SDK and build
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: v4.10.0
+          sdk: v5.0.0-beta.2
           bindings: geode-sdk/bindings
           bindings-ref: main
           target: Win64
