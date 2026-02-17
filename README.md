@@ -24,6 +24,14 @@ Key Mechanics
 
 * Noclip accuracy now has limits and decimals! Very easy to use.
 
+**Show Hitboxes**
+
+* Ability to view hitbox trail, on death, and normal hitboxes.
+
+**Keybind and settngs**
+
+* Changeable animations, speeds, colors, and keybinds!
+
 Extended information
 --
 
