@@ -1,3 +1,0 @@
-[submodule "bindings"]
-	path = bindings
-	url = https://github.com/geode-sdk/bindings.git
