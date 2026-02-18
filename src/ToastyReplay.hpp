@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 using namespace geode::prelude;
 
@@ -99,6 +100,7 @@ public:
     int lastSaveTick = 0;
 
     std::vector<std::string> storedMacros;
+    std::unordered_set<std::string> incompatibleMacros;
 
     int hotkey_tickStep = 0x56;
     int hotkey_audioPitch = 0;
@@ -110,11 +112,39 @@ public:
 
     void reloadMacroList() {
         storedMacros.clear();
+        incompatibleMacros.clear();
         auto dir = geode::prelude::Mod::get()->getSaveDir() / "replays";
         if (std::filesystem::exists(dir)) {
             for (auto& entry : std::filesystem::directory_iterator(dir)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".gdr") {
-                    storedMacros.push_back(entry.path().stem().string());
+                if (!entry.is_regular_file()) continue;
+                std::string stem = entry.path().stem().string();
+
+                if (entry.path().extension() != ".gdr") {
+                    storedMacros.push_back(stem);
+                    incompatibleMacros.insert(stem);
+                    continue;
+                }
+
+                std::ifstream input(entry.path(), std::ios::binary);
+                if (!input.is_open()) {
+                    storedMacros.push_back(stem);
+                    incompatibleMacros.insert(stem);
+                    continue;
+                }
+
+                input.seekg(0, std::ios::end);
+                auto fileSize = input.tellg();
+                input.seekg(0, std::ios::beg);
+                std::vector<uint8_t> bytes(fileSize);
+                input.read(reinterpret_cast<char*>(bytes.data()), fileSize);
+                input.close();
+
+                try {
+                    MacroSequence::importData(bytes);
+                    storedMacros.push_back(stem);
+                } catch (...) {
+                    storedMacros.push_back(stem);
+                    incompatibleMacros.insert(stem);
                 }
             }
         }

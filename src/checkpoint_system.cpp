@@ -219,7 +219,8 @@ class $modify(MacroPlayLayer, PlayLayer) {
         ReplayEngine* engine = ReplayEngine::get();
 
         if (engine->collisionBypass) {
-            engine->bypassedCollisions++;
+            if (!engine->noclipDeathBlocked)
+                engine->bypassedCollisions++;
             engine->noclipDeathBlocked = true;
 
             if (engine->collisionLimitActive && engine->collisionThreshold > 0.0f && engine->totalTickCount > 0) {

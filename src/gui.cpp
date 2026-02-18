@@ -719,26 +719,43 @@ void MenuInterface::drawReplayTab() {
         auto macroListCopy = engine->storedMacros;
         for (const auto& macroName : macroListCopy) {
             bool isSelected = (currentMacroName == macroName);
+            bool isIncompatible = engine->incompatibleMacros.count(macroName) > 0;
             ImGui::PushID(macroName.c_str());
 
-            if (ImGui::Selectable(macroName.c_str(), isSelected, 0,
-                ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
-                if (engine->engineMode != MODE_CAPTURE) {
-                    MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
-                    if (loaded) {
-                        if (engine->activeMacro) delete engine->activeMacro;
-                        engine->activeMacro = loaded;
+            if (isIncompatible) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
+                ImGui::Selectable(macroName.c_str(), false, ImGuiSelectableFlags_Disabled,
+                    ImVec2(ImGui::GetContentRegionAvail().x - 30, 0));
+                ImGui::PopStyleColor();
+                ImGui::SameLine(ImGui::GetWindowWidth() - 120);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+                ImGui::Text("Incompatible");
+                ImGui::PopStyleColor();
+            } else {
+                if (ImGui::Selectable(macroName.c_str(), isSelected, 0,
+                    ImVec2(ImGui::GetContentRegionAvail().x - 30, 0))) {
+                    if (engine->engineMode != MODE_CAPTURE) {
+                        MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
+                        if (loaded) {
+                            if (engine->activeMacro) delete engine->activeMacro;
+                            engine->activeMacro = loaded;
+                        }
                     }
                 }
             }
 
             ImGui::SameLine(ImGui::GetWindowWidth() - 35);
             if (ImGui::Button("X", ImVec2(20, 0))) {
-                auto path = Mod::get()->getSaveDir() / "replays" / (macroName + ".gdr");
-                if (std::filesystem::exists(path)) {
-                    std::filesystem::remove(path);
-                    engine->reloadMacroList();
+                auto dir = Mod::get()->getSaveDir() / "replays";
+                bool deleted = false;
+                for (auto& entry : std::filesystem::directory_iterator(dir)) {
+                    if (entry.is_regular_file() && entry.path().stem().string() == macroName) {
+                        std::filesystem::remove(entry.path());
+                        deleted = true;
+                        break;
+                    }
                 }
+                if (deleted) engine->reloadMacroList();
             }
             ImGui::PopID();
 
@@ -868,6 +885,7 @@ void MenuInterface::drawHacksTab() {
         float hitRate = 100.0f;
         if (engine->totalTickCount > 0)
             hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
+        if (hitRate < 0.0f) hitRate = 0.0f;
 
         ImVec4 hitColor;
         if (hitRate >= 90.0f) hitColor = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
@@ -880,22 +898,19 @@ void MenuInterface::drawHacksTab() {
         ImGui::Text("Deaths: %d | Frames: %d", engine->bypassedCollisions, engine->totalTickCount);
 
         ImGui::Dummy(ImVec2(0, 4));
-        Widgets::ToggleSwitch("Accuracy Limit", &engine->collisionLimitActive, theme, anim);
-
         if (engine->collisionLimitActive) {
-            const char* thresholdOptions[] = { "Disabled", "50%", "60%", "70%", "75%", "80%", "85%", "90%", "95%", "99%" };
-            float thresholdValues[] = { 0.0f, 50.0f, 60.0f, 70.0f, 75.0f, 80.0f, 85.0f, 90.0f, 95.0f, 99.0f };
-
-            int currentIdx = 0;
-            for (int i = 0; i < 10; i++) {
-                if (std::abs(engine->collisionThreshold - thresholdValues[i]) < 0.1f) {
-                    currentIdx = i; break;
-                }
-            }
-
+            char label[64];
+            snprintf(label, sizeof(label), "Accuracy Limit (%.1f%%)", engine->collisionThreshold);
+            Widgets::ToggleSwitch(label, &engine->collisionLimitActive, theme, anim);
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::Combo("##accuracyLimit", &currentIdx, thresholdOptions, 10))
-                engine->collisionThreshold = thresholdValues[currentIdx];
+            if (ImGui::InputFloat("##accuracyLimit", &engine->collisionThreshold, 0, 0, "%.1f")) {
+                if (engine->collisionThreshold < 1.0f) engine->collisionThreshold = 1.0f;
+                if (engine->collisionThreshold > 100.0f) engine->collisionThreshold = 100.0f;
+            }
+        } else {
+            Widgets::ToggleSwitch("Accuracy Limit", &engine->collisionLimitActive, theme, anim);
+            if (engine->collisionLimitActive && engine->collisionThreshold < 1.0f)
+                engine->collisionThreshold = 80.0f;
         }
         Widgets::ModuleCardEnd();
     }

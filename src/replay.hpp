@@ -341,11 +341,14 @@ struct MacroSequence : gdr::Replay<MacroSequence, MacroAction> {
             input.read(reinterpret_cast<char*>(bytes.data()), fileSize);
             input.close();
 
-            MacroSequence* result = new MacroSequence();
-            *result = MacroSequence::importData(bytes);
-            result->name = filename;
-
-            return result;
+            try {
+                MacroSequence* result = new MacroSequence();
+                *result = MacroSequence::importData(bytes);
+                result->name = filename;
+                return result;
+            } catch (...) {
+                return nullptr;
+            }
         }
 
         return nullptr;
