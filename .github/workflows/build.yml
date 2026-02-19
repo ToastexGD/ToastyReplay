@@ -1,0 +1,28 @@
+name: Build Geode Mod
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  build:
+    name: Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: 'recursive'
+
+      - name: Build the mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          cli: "latest"
+          sdk: "nightly"
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: Build Output
+          path: build/*.geode

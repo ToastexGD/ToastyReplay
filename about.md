@@ -1,10 +1,7 @@
-# ToastyReplay
----
-
 ### Geometry Dash's Most accurate Replay bot.
 - Replay any level regardless of RNG or FPS at a frame perfect level!
 
-Key Mechanics 
+Key Mechanics
 --
 **Replay Menu**
 * Replay any level that is recorded using the gdr and other macro formats.
@@ -26,9 +23,9 @@ Key Mechanics
 Extended information
 --
 
-credits go to: 
+credits go to:
 
-- [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features. 
+- [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features.
 - [Zilko](https://github.com/Zilko) for inspiring me (from [xdBot](https://github.com/Zilko/xdBot))
 - [Jarvisdevil](https://github.com/thejarvisdevil) for helping me put my braincells together.
 - [NinXout](https://github.com/ninXout) for inspiration similar to Eclipse Menu. (Received help for my hitbox implementation)
