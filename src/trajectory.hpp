@@ -72,6 +72,7 @@ public:
     static void processPortalInteraction(PlayerObject* player, int portalId);
     static SimulatedPlayerState capturePlayerState(PlayerObject* player);
     static void applySimulatedState(PlayerObject* player, SimulatedPlayerState state);
+    static bool stateChanged(const SimulatedPlayerState& a, const SimulatedPlayerState& b);
 
     static cocos2d::ccColor4F colorFromRGB(cocos2d::ccColor3B rgb) {
         return ccc4f(rgb.r / 255.f, rgb.g / 255.f, rgb.b / 255.f, 1.f);
@@ -88,7 +89,6 @@ public:
     bool simulatingHold = false;
     bool pathCancelled = false;
 
-    std::vector<std::pair<RingObject*, bool>> touchedRings;
 
     float collisionRotation = 0.f;
     float tickDelta = 1.f / 240.f;
@@ -101,6 +101,10 @@ public:
 
     cocos2d::CCPoint p1PathPoints[480];
     cocos2d::CCPoint p2PathPoints[480];
+
+    SimulatedPlayerState cachedP1State{};
+    SimulatedPlayerState cachedP2State{};
+    bool trajectoryDirty = true;
 };
 
 #endif

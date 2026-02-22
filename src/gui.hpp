@@ -17,6 +17,9 @@ struct ThemeEngine {
 
     bool cyclingAccent = false;
     float cycleRate = 1.0f;
+    float blurStrength = 0.5f;
+    bool cursorGlow = true;
+    float glowRadius = 120.0f;
 
     ImVec4 computeCycleColor(float rate);
     ImVec4 getAccent();
@@ -47,9 +50,13 @@ struct AnimationState {
 
     std::unordered_map<ImGuiID, float> toggleAnims;
     std::unordered_map<ImGuiID, float> hoverAnims;
+    struct ModuleAnimData { float progress = 0.0f; float height = 0.0f; };
+    std::unordered_map<const void*, ModuleAnimData> moduleAnims;
 
     float animSpeed = 8.0f;
     AnimDirection openDirection = ANIM_CENTER;
+    ImVec2 smoothCursorPos = ImVec2(0, 0);
+    bool cursorPosInitialized = false;
 
     void update(float dt);
     float easeOutCubic(float t);
@@ -110,6 +117,7 @@ public:
 
 private:
     void drawBackdrop();
+    void drawCursorGlow();
     void drawMainWindow();
     void drawTitleBar();
     void drawTabBar();

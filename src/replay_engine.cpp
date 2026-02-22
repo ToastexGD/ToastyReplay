@@ -34,18 +34,21 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
     PlayLayer* pl = PlayLayer::get();
 
-    if (!pl) {
+    if (!pl)
       return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
-    }
 
     refreshRngState();
 
+    int tick = computeCurrentTick();
+    bool isCBS = engine->activeMacro && engine->activeMacro->cbfEnabled;
+
+    if (tick != engine->lastTickIndex)
+      engine->tickStartStep = m_currentStep;
+
+    int stepDelta = m_currentStep - engine->tickStartStep;
+
     if (engine->engineMode != MODE_DISABLED) {
 
-      if (!engine->initialRun) {
-      }
-
-      int tick = computeCurrentTick();
       if (tick > 2 && engine->initialRun && engine->activeMacro) {
         engine->initialRun = false;
 
@@ -55,8 +58,10 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
           return pl->resetLevel();
       }
 
-      if (engine->lastTickIndex == tick && tick != 0 && engine->activeMacro)
-        return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+      if (engine->lastTickIndex == tick && tick != 0 && engine->activeMacro) {
+        if (!isCBS || engine->engineMode != MODE_EXECUTE || engine->lastStepDelta == stepDelta)
+          return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+      }
 
     }
 
@@ -65,21 +70,24 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
     if (engine->engineMode == MODE_DISABLED)
       return;
 
-    int tick = computeCurrentTick();
+    bool isNewTick = (tick != engine->lastTickIndex);
     engine->lastTickIndex = tick;
+    engine->lastStepDelta = stepDelta;
 
-    if (engine->activeMacro && engine->levelRestarting && !m_levelEndAnimationStarted) {
-      if ((m_levelSettings->m_platformerMode && engine->engineMode != MODE_DISABLED))
-        return pl->resetLevelFromStart();
-      else
-        return pl->resetLevel();
+    if (isNewTick) {
+      if (engine->activeMacro && engine->levelRestarting && !m_levelEndAnimationStarted) {
+        if (m_levelSettings->m_platformerMode && engine->engineMode != MODE_DISABLED)
+          return pl->resetLevelFromStart();
+        else
+          return pl->resetLevel();
+      }
+
+      if (engine->engineMode == MODE_CAPTURE)
+        processCapture(tick);
     }
 
-    if (engine->engineMode == MODE_CAPTURE)
-      processCapture(tick);
-
     if (engine->engineMode == MODE_EXECUTE)
-      processExecution(tick);
+      processExecution(tick, stepDelta);
 
   }
 
@@ -159,7 +167,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
   }
 
-  void processExecution(int tick) {
+  void processExecution(int tick, int stepDelta) {
     auto* engine = ReplayEngine::get();
     if (m_levelEndAnimationStarted) return;
 
@@ -175,8 +183,18 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
     size_t& inputIdx = engine->executeIndex;
     auto& inputList = engine->activeMacro->inputs;
+    bool isCBS = engine->activeMacro->cbfEnabled;
 
-    while (inputIdx < inputList.size() && tick >= (int)inputList[inputIdx].frame) {
+    while (inputIdx < inputList.size()) {
+      int inputTick = (int)inputList[inputIdx].frame;
+
+      if (inputTick > tick) break;
+
+      if (isCBS && inputTick == tick) {
+        int inputStep = static_cast<int>(inputList[inputIdx].stepOffset);
+        if (inputStep > stepDelta) break;
+      }
+
       auto input = inputList[inputIdx];
 
       if (tick != engine->respawnTickIndex) {
@@ -191,9 +209,6 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
     engine->respawnTickIndex = -1;
     m_fields->macroInput = false;
-
-    if (inputIdx == inputList.size()) {
-    }
 
     if ((!engine->positionCorrection && !engine->inputCorrection) || !PlayLayer::get()) return;
 
@@ -287,7 +302,12 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
       player2 = false;
 
     if (!engine->captureIgnored && !engine->simulatingPath && !m_player1->m_isDead) {
-      engine->activeMacro->recordAction(tick, button, player2, hold);
+      int recordTick = tick;
+      float offset = 0.0f;
+      if (engine->cbfRecordingEnabled && engine->activeMacro && engine->activeMacro->cbfEnabled) {
+        offset = static_cast<float>(m_currentStep - engine->tickStartStep);
+      }
+      engine->activeMacro->recordAction(recordTick, button, player2, hold, offset);
       engine->macroInputActive = true;
     }
   }

@@ -1,5 +1,6 @@
 #include "ToastyReplay.hpp"
 #include "replay.hpp"
+#include "trajectory.hpp"
 
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
@@ -216,11 +217,47 @@ class $modify(MacroPlayLayer, PlayLayer) {
     }
 
     void destroyPlayer(PlayerObject* p0, GameObject* p1) {
+        if (PathPreviewSystem::get().generatingPath) {
+            PlayLayer::destroyPlayer(p0, p1);
+            return;
+        }
+
         ReplayEngine* engine = ReplayEngine::get();
 
         if (engine->collisionBypass) {
-            if (!engine->noclipDeathBlocked)
+            if (p1 == m_anticheatSpike) {
+                PlayLayer::destroyPlayer(p0, p1);
+                return;
+            }
+
+            if (!engine->noclipDeathBlocked) {
                 engine->bypassedCollisions++;
+                if (engine->noclipDeathFlash) {
+                    auto* scene = CCDirector::sharedDirector()->getRunningScene();
+                    if (scene) {
+                        auto* overlay = static_cast<CCLayerColor*>(scene->getChildByTag(39182));
+                        if (!overlay) {
+                            auto winSize = CCDirector::sharedDirector()->getWinSize();
+                            overlay = CCLayerColor::create(ccc4(
+                                (int)(engine->noclipDeathColorR * 255),
+                                (int)(engine->noclipDeathColorG * 255),
+                                (int)(engine->noclipDeathColorB * 255), 0));
+                            overlay->setContentSize(winSize);
+                            overlay->setTag(39182);
+                            overlay->setZOrder(9999);
+                            overlay->setPosition(0, 0);
+                            scene->addChild(overlay);
+                        }
+                        overlay->setColor(ccc3(
+                            (int)(engine->noclipDeathColorR * 255),
+                            (int)(engine->noclipDeathColorG * 255),
+                            (int)(engine->noclipDeathColorB * 255)));
+                        overlay->stopAllActions();
+                        overlay->setOpacity(100);
+                        overlay->runAction(CCFadeTo::create(0.25f, 0));
+                    }
+                }
+            }
             engine->noclipDeathBlocked = true;
 
             if (engine->collisionLimitActive && engine->collisionThreshold > 0.0f && engine->totalTickCount > 0) {
@@ -262,12 +299,8 @@ class $modify(NoclipBaseLayer, GJBaseGameLayer) {
     int checkCollisions(PlayerObject* player, float dt, bool ignoreDamage) {
         auto* engine = ReplayEngine::get();
 
-        if (engine->collisionBypass) {
+        if (engine->collisionBypass)
             engine->noclipDeathBlocked = false;
-            int result = GJBaseGameLayer::checkCollisions(player, dt, ignoreDamage);
-            engine->noclipDeathBlocked = false;
-            return result;
-        }
 
         return GJBaseGameLayer::checkCollisions(player, dt, ignoreDamage);
     }

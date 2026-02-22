@@ -51,6 +51,11 @@ public:
     bool collisionLimitActive = false;
     float collisionThreshold = 0.0f;
     bool noclipDeathBlocked = false;
+    bool noclipDeathFlash = true;
+    float noclipFlashAlpha = 0.0f;
+    float noclipDeathColorR = 1.0f;
+    float noclipDeathColorG = 0.0f;
+    float noclipDeathColorB = 0.0f;
 
     bool safeMode = false;
     bool showTrajectory = false;
@@ -99,8 +104,14 @@ public:
     int sessionCounter = 0;
     int lastSaveTick = 0;
 
+    bool cbfRecordingEnabled = false;
+    bool cbfMacroLoaded = false;
+    int tickStartStep = 0;
+    int lastStepDelta = -1;
+
     std::vector<std::string> storedMacros;
     std::unordered_set<std::string> incompatibleMacros;
+    std::unordered_set<std::string> cbfMacros;
 
     int hotkey_tickStep = 0x56;
     int hotkey_audioPitch = 0;
@@ -113,6 +124,7 @@ public:
     void reloadMacroList() {
         storedMacros.clear();
         incompatibleMacros.clear();
+        cbfMacros.clear();
         auto dir = geode::prelude::Mod::get()->getSaveDir() / "replays";
         if (std::filesystem::exists(dir)) {
             for (auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -140,8 +152,10 @@ public:
                 input.close();
 
                 try {
-                    MacroSequence::importData(bytes);
+                    MacroSequence temp = MacroSequence::importData(bytes);
                     storedMacros.push_back(stem);
+                    if (temp.cbfEnabled)
+                        cbfMacros.insert(stem);
                 } catch (...) {
                     storedMacros.push_back(stem);
                     incompatibleMacros.insert(stem);
@@ -153,6 +167,11 @@ public:
     void beginCapture(GJGameLevel* level) {
         engineMode = MODE_CAPTURE;
         initializeMacro(level);
+        if (activeMacro && cbfRecordingEnabled) {
+            activeMacro->cbfEnabled = true;
+            positionCorrection = true;
+            inputCorrection = false;
+        }
     }
 
     void initializeMacro(GJGameLevel* level) {
@@ -175,8 +194,30 @@ public:
         initialRun = true;
         respawnTickIndex = -1;
 
+        if (activeMacro->accuracyMode == 2) {
+            positionCorrection = true;
+            inputCorrection = false;
+            correctionInterval = activeMacro->savedCorrectionInterval;
+        } else if (activeMacro->accuracyMode == 1) {
+            positionCorrection = false;
+            inputCorrection = true;
+        } else {
+            positionCorrection = false;
+            inputCorrection = false;
+        }
+
+        if (activeMacro->cbfEnabled) {
+            positionCorrection = true;
+            inputCorrection = false;
+            cbfMacroLoaded = true;
+            GameManager::get()->setGameVariable("0177", true);
+        }
+
         PlayLayer* pl = PlayLayer::get();
         if (pl) {
+            if (auto* endLayer = pl->getChildByType<EndLevelLayer>(0)) {
+                endLayer->removeFromParentAndCleanup(true);
+            }
             if (pl->m_isPracticeMode) {
                 pl->togglePracticeMode(false);
             }
@@ -185,6 +226,10 @@ public:
     }
 
     void haltExecution() {
+        if (cbfMacroLoaded && !cbfRecordingEnabled) {
+            GameManager::get()->setGameVariable("0177", false);
+        }
+        cbfMacroLoaded = false;
         engineMode = MODE_DISABLED;
     }
 

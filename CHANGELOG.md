@@ -1,5 +1,19 @@
 # Changelog
 
+##v1.2.0
+
+- Added CBF compatability with recording and playback sub-tick precision.
+- Added Noclip death flash (customizable colors)
+- Added background menu blur.
+
+- Fixed Noclip slope physics being broken due to an internal property issue.
+- Fixed Trajectory from corrupting player2 physics.
+- Fixed Trajectory for player2 allowing it to be different for both players.
+- Fixed Noclip accuracy deaths from going into negatives.
+- Fixed menu not closing when playing back menu.
+- Fixed versioning being completely broken.
+- ported to v5.0.0-beta.3 of Geode
+
 ## v1.1.1
 
 - Fixed any other file crashing the replay when loaded.

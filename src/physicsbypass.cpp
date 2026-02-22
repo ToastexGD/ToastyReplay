@@ -3,6 +3,9 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <imgui-cocos.hpp>
+#include <algorithm>
+#include <vector>
+#include <utility>
 using namespace geode::prelude;
 
 class $modify(TickControlPlayLayer, PlayLayer) {
@@ -52,6 +55,7 @@ class $modify(PhysicsControlLayer, GJBaseGameLayer) {
             engine->renderingDisabled = !shouldRender;
 
             if (engine->collisionBypass) engine->totalTickCount++;
+
             GJBaseGameLayer::update(targetDelta);
         }
 

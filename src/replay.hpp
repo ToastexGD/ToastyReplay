@@ -281,22 +281,62 @@ struct MacroAction : gdr::Input {
     int actionType = 0;
     bool secondPlayer = false;
     bool pressed = false;
+    float stepOffset = 0.0f;
 
     MacroAction() = default;
 
-    MacroAction(int t, int action, bool isSecondPlayer, bool isPressed)
-        : Input(t, action, isSecondPlayer, isPressed), tick(t), actionType(action), secondPlayer(isSecondPlayer), pressed(isPressed) {}
+    MacroAction(int t, int action, bool isSecondPlayer, bool isPressed, float offset = 0.0f)
+        : Input(t, action, isSecondPlayer, isPressed),
+          tick(t), actionType(action), secondPlayer(isSecondPlayer),
+          pressed(isPressed), stepOffset(offset) {}
+
+    void parseExtension(gdr::json::object_t obj) override {
+        if (obj.count("cbf_offset"))
+            stepOffset = obj.at("cbf_offset").get<float>();
+    }
+
+    gdr::json::object_t saveExtension() const override {
+        gdr::json::object_t ext;
+        if (stepOffset != 0.0f)
+            ext["cbf_offset"] = stepOffset;
+        return ext;
+    }
 };
 
 struct MacroSequence : gdr::Replay<MacroSequence, MacroAction> {
     std::string name;
     std::vector<PositionCorrection> corrections;
+    bool cbfEnabled = false;
+    int accuracyMode = 0;
+    int savedCorrectionInterval = 240;
 
     MacroSequence() : Replay("ToastyReplay", MOD_VERSION) {}
 
-    void persist() {
+    void parseExtension(gdr::json::object_t obj) override {
+        if (obj.count("cbf_enabled"))
+            cbfEnabled = obj.at("cbf_enabled").get<bool>();
+        if (obj.count("accuracy_mode"))
+            accuracyMode = obj.at("accuracy_mode").get<int>();
+        if (obj.count("correction_interval"))
+            savedCorrectionInterval = obj.at("correction_interval").get<int>();
+    }
+
+    gdr::json::object_t saveExtension() const override {
+        gdr::json::object_t ext;
+        if (cbfEnabled)
+            ext["cbf_enabled"] = true;
+        if (accuracyMode != 0)
+            ext["accuracy_mode"] = accuracyMode;
+        if (accuracyMode == 2)
+            ext["correction_interval"] = savedCorrectionInterval;
+        return ext;
+    }
+
+    void persist(int accMode = 0, int corrInterval = 240) {
         author = GJAccountManager::get()->m_username;
         duration = inputs.size() > 0 ? inputs.back().frame / framerate : 0;
+        accuracyMode = accMode;
+        savedCorrectionInterval = corrInterval;
 
         auto dir = geode::prelude::Mod::get()->getSaveDir() / "replays";
         if (!std::filesystem::exists(dir)) {
@@ -360,9 +400,9 @@ struct MacroSequence : gdr::Replay<MacroSequence, MacroAction> {
         }), inputs.end());
     }
 
-    void recordAction(int tick, int actionType, bool secondPlayer, bool pressed) {
-        log::info("Adding input: frame: {}, button: {}, player2: {}, down: {}", tick, actionType, secondPlayer, pressed);
-        inputs.emplace_back(tick, actionType, secondPlayer, pressed);
+    void recordAction(int tick, int actionType, bool secondPlayer, bool pressed, float offset = 0.0f) {
+        log::info("Adding input: frame: {}, button: {}, player2: {}, down: {}, offset: {}", tick, actionType, secondPlayer, pressed, offset);
+        inputs.emplace_back(tick, actionType, secondPlayer, pressed, offset);
     }
 };
 

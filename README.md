@@ -20,19 +20,28 @@ Key Mechanics
 
 * Access to **Frame Replacements** which records the exact physics of every frame in the recording. This is able to create 100% accurate replays.
 
+**Click between Steps (native GD)**
+
+* Full support for gd's built in Click Between Steps setting. inputs are recorded with sub-step precision and played back at the exact same step delta. no external mods needed for this one.
+
 **Noclip (with accuracy)**
 
 * Noclip accuracy now has limits and decimals! Very easy to use.
+* **On Death Color** - screen flashes a customizable color when noclip blocks a death. has a color picker and everything, its pretty cool.
+
+**Backdrop Blur**
+
+* Menu has a blur effect behind it when opened, controllable with a slider in settings. makes it look clean.
 
 **Show Hitboxes**
 
 * Ability to view hitbox trail, on death, and normal hitboxes.
 
-**Keybind and settngs**
+**Keybinds and settngs**
 
 * Changeable animations, speeds, colors, and keybinds!
 
-How it everything works... (Only for v1.1.1)
+How it everything works... (updated for v1.2.0)
 --
 
 ### Replay Engine
@@ -54,7 +63,8 @@ struct MacroAction : gdr::Input {
     int tick;            // frame number
     int actionType;      // 1 = jump, 2 = left, 3 = right
     bool secondPlayer;
-    bool pressed;        // down or up 
+    bool pressed;        // down or up
+    float stepOffset;    // sub-step delta for Click Between steps (0 if CBS off)
 };
 ```
 
@@ -133,6 +143,22 @@ accuracy = 100.0 * (1.0 - bypassedCollisions / totalTickCount)
 
 If `collisionLimitActive` is set and the accuracy drops below the `collisionThreshold`, noclip temporarily disables and the player gets viciously spiked.
 
+**On Death Color** - when enabled, a `CCLayerColor` overlay flashes the picked color on the screen whenever noclip blocks a death. uses `CCFadeTo` to fade out over 0.25 seconds so its not annoying. color is fully customizable from the noclip settings. basically like megahack but built in lol
+
+### Click Between Steps (native)
+
+When gd's native Click Between Steps setting is enabled (game variable "0177"), inputs can happen between physics ticks. The engine tracks this using `GJBaseGameLayer::m_currentStep`:
+
+```
+stepDelta = m_currentStep - tickStartStep
+```
+
+during recording, each input captures its step delta within the current tick. during playback, inputs only fire when both the tick AND the step delta match, so the exact sub-step timing from the original run is preserved.
+
+CBF macros are tagged in the replay list with a red "CBF" label. the engine automatically enables/disables the Click Between Steps game variable when loading CBF macros so you dont have to toggle it manually.
+
+This replaced the old syzzi Click Between Frames mod integration. no external mods needed anymore, its all native now.
+
 ### Trajectory  (Player Path Preview - PPP) I like abreviating things tehe
 
 Creates some invisible cloned `PlayerObject`s on level load. Each frame, the system:
@@ -174,7 +200,7 @@ Loading a checkpoint truncs all recorded actions and fixes after that tick, rest
 
 ### RNG Lock
 
-Locks the game's internal `randomState` using a seed derived from user input plus current level progress:
+Locks the game's internal `randomState` using a seed from user input plus current level progress:
 
 ```cpp
 std::mt19937 gen(rngSeedVal + currentProgress);
@@ -186,7 +212,7 @@ This makes levels with random trigger stuff set identically across attempts.
 
 ### Safe Mode
 
-Hooks three functions to prevent progress from being saved:
+Hooks the three functions to prevent progress from being saved:
 
 - `PlayLayer::levelComplete` → sets `m_isTestMode = true` before calling the original
 - `PlayLayer::showNewBest` → blocks the call entirely
@@ -208,13 +234,9 @@ float easeOutCubic(float t) {
 }
 ```
 
-Menu entrance direction is changeable (center scale, move from any edge). Toggle switches and move states are individually animated per the widget using tracked `ImGuiID` maps. 
+Menu entrance direction is changeable (center scale, move from any edge). Toggle switches and move states are individually animated per the widget using tracked `ImGuiID` maps.
 
-### CBF Integration
-
-If [Click Between Frames](https://github.com/syzzi/click-between-frames) Or the is installed, the engine enables its toggle when recording or playing back, and disables it when the engine is off. Hooked through `PlayLayer::resetLevel`.
-
-(WILL CHANGE WITH CBF and CLICK BETWEEN STEPS/On Steps SUPPORT)
+**Backdrop Blur** - when the menu opens it draws layered semi-transparent rectangles on the background to simulate a blur effect. intensity is controllable with a slider from 0 to 1. theres also a vignette effect on the edges because it looked cool. the blur color matches your background color setting so it blends in nicely.
 
 ---
 

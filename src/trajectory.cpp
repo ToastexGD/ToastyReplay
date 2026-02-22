@@ -71,6 +71,24 @@ void PathPreviewSystem::applySimulatedState(PlayerObject* player, SimulatedPlaye
     player->m_objectType = state.objType;
 }
 
+bool PathPreviewSystem::stateChanged(const SimulatedPlayerState& a, const SimulatedPlayerState& b) {
+    return a.position.x != b.position.x || a.position.y != b.position.y
+        || a.verticalVelocity != b.verticalVelocity
+        || a.rotation != b.rotation
+        || a.gravityInverted != b.gravityInverted
+        || a.movementSpeed != b.movementSpeed
+        || a.grounded != b.grounded
+        || a.scale != b.scale
+        || a.dashing != b.dashing
+        || a.inShipMode != b.inShipMode
+        || a.inUfoMode != b.inUfoMode
+        || a.inBallMode != b.inBallMode
+        || a.inWaveMode != b.inWaveMode
+        || a.inRobotMode != b.inRobotMode
+        || a.inSpiderMode != b.inSpiderMode
+        || a.inSwingMode != b.inSwingMode;
+}
+
 void PathPreviewSystem::refreshPreview(PlayLayer* pl) {
     if (!pathSystem.simulatedPlayer1 || !pathSystem.simulatedPlayer2) return;
 
@@ -82,12 +100,12 @@ void PathPreviewSystem::refreshPreview(PlayLayer* pl) {
 
     if (pathSystem.simulatedPlayer1 && pl->m_player1) {
         generatePath(pl, pathSystem.simulatedPlayer1, pl->m_player1, true);
-        generatePath(pl, pathSystem.simulatedPlayer2, pl->m_player1, false);
+        generatePath(pl, pathSystem.simulatedPlayer1, pl->m_player1, false);
     }
 
-    if (pl->m_gameState.m_isDualMode && pl->m_player2) {
+    if (pl->m_gameState.m_isDualMode && pathSystem.simulatedPlayer2 && pl->m_player2) {
         generatePath(pl, pathSystem.simulatedPlayer2, pl->m_player2, true);
-        generatePath(pl, pathSystem.simulatedPlayer1, pl->m_player2, false);
+        generatePath(pl, pathSystem.simulatedPlayer2, pl->m_player2, false);
     }
 
     pathSystem.generatingPath = false;
@@ -101,7 +119,6 @@ void PathPreviewSystem::generatePath(PlayLayer* pl, PlayerObject* simPlayer, Pla
 
     pathSystem.pathCancelled = false;
     pathSystem.simulatingHold = holding;
-    pathSystem.touchedRings.clear();
 
     int frameCount = ReplayEngine::get()->pathLength;
 
@@ -149,10 +166,6 @@ void PathPreviewSystem::generatePath(PlayLayer* pl, PlayerObject* simPlayer, Pla
         pathSystem.getDrawNode()->drawSegment(prevCoord, simPlayer->getPosition(), 0.6f, lineColor);
     }
 
-    for (auto& [ring, wasActivated] : pathSystem.touchedRings) {
-        ring->m_activated = wasActivated;
-    }
-    pathSystem.touchedRings.clear();
     pathSystem.simulatingHold = false;
 }
 
@@ -276,7 +289,32 @@ class $modify(PathPreviewPlayLayer, PlayLayer) {
         if (!pathSystem.getDrawNode() || pathSystem.generatingPath) return;
 
         if (ReplayEngine::get()->pathPreview) {
-            PathPreviewSystem::refreshPreview(this);
+            if (pathSystem.trajectoryDirty) {
+                PathPreviewSystem::refreshPreview(this);
+                pathSystem.trajectoryDirty = false;
+                if (m_player1) pathSystem.cachedP1State = PathPreviewSystem::capturePlayerState(m_player1);
+                if (m_player2) pathSystem.cachedP2State = PathPreviewSystem::capturePlayerState(m_player2);
+            } else {
+                bool changed = false;
+                if (m_player1) {
+                    SimulatedPlayerState cur = PathPreviewSystem::capturePlayerState(m_player1);
+                    if (PathPreviewSystem::stateChanged(cur, pathSystem.cachedP1State)) {
+                        pathSystem.cachedP1State = cur;
+                        changed = true;
+                    }
+                }
+                if (m_player2 && m_gameState.m_isDualMode) {
+                    SimulatedPlayerState cur = PathPreviewSystem::capturePlayerState(m_player2);
+                    if (PathPreviewSystem::stateChanged(cur, pathSystem.cachedP2State)) {
+                        pathSystem.cachedP2State = cur;
+                        changed = true;
+                    }
+                }
+                if (changed) PathPreviewSystem::refreshPreview(this);
+            }
+        } else {
+            pathSystem.trajectoryDirty = true;
+            pathSystem.disablePreview();
         }
     }
 
@@ -287,6 +325,7 @@ class $modify(PathPreviewPlayLayer, PlayLayer) {
         pathSystem.simulatedPlayer2 = nullptr;
         pathSystem.pathCancelled = false;
         pathSystem.generatingPath = false;
+        pathSystem.trajectoryDirty = true;
 
         pathSystem.simulatedPlayer1 = PlayerObject::create(1, 1, this, this, true);
         pathSystem.simulatedPlayer1->retain();
@@ -353,7 +392,7 @@ class $modify(PathPreviewBaseLayer, GJBaseGameLayer) {
             for (const auto& obj : *objects) {
                 if (!obj) continue;
 
-                if ((!collisionObjectTypes.contains(static_cast<int>(obj->m_objectType)) && !interactivePortalIds.contains(obj->m_objectID) && !trajectoryInteractiveIds.contains(obj->m_objectID)) || pickupItemIds.contains(obj->m_objectID)) {
+                if ((!collisionObjectTypes.contains(static_cast<int>(obj->m_objectType)) && !interactivePortalIds.contains(obj->m_objectID)) || pickupItemIds.contains(obj->m_objectID)) {
                     if (obj->m_isDisabled || obj->m_isDisabled2) continue;
 
                     excludedObjects.push_back(obj);
@@ -382,8 +421,6 @@ class $modify(PathPreviewBaseLayer, GJBaseGameLayer) {
     bool canBeActivatedByPlayer(PlayerObject* p0, EffectGameObject* p1) {
         if (pathSystem.generatingPath) {
             PathPreviewSystem::processPortalInteraction(p0, p1->m_objectID);
-            if (trajectoryInteractiveIds.contains(p1->m_objectID))
-                return GJBaseGameLayer::canBeActivatedByPlayer(p0, p1);
             return false;
         }
 
@@ -394,8 +431,7 @@ class $modify(PathPreviewBaseLayer, GJBaseGameLayer) {
         if (!pathSystem.generatingPath) {
             GJBaseGameLayer::playerTouchedRing(p0, p1);
         } else if (pathSystem.simulatingHold) {
-            pathSystem.touchedRings.push_back({ p1, p1->m_activated });
-            GJBaseGameLayer::playerTouchedRing(p0, p1);
+            p0->ringJump(p1, false);
         }
     }
 
@@ -426,7 +462,8 @@ class $modify(PathPreviewPlayerObject, PlayerObject) {
 
     void update(float dt) {
         PlayerObject::update(dt);
-        pathSystem.tickDelta = dt;
+        if (!pathSystem.generatingPath)
+            pathSystem.tickDelta = dt;
     }
 
     void playSpiderDashEffect(cocos2d::CCPoint p0, cocos2d::CCPoint p1) {
