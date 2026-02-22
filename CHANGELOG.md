@@ -1,6 +1,6 @@
 # Changelog
 
-##v1.2.0
+## v1.2.0
 
 - Added CBF compatability with recording and playback sub-tick precision.
 - Added Noclip death flash (customizable colors)
