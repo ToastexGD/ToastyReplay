@@ -2,13 +2,13 @@
 
 ## v1.2.0
 
-- Added CBF compatability with recording and playback sub-tick precision.
+- Added CBF compatibility with recording and playback sub-tick precision.
 - Added Noclip death flash (customizable colors)
 - Added background menu blur.
 
 - Fixed Noclip slope physics being broken due to an internal property issue.
 - Fixed Trajectory from corrupting player2 physics.
-- Fixed Trajectory for player2 allowing it to be different for both players.
+- Fixed Trajectory for player2, allowing it to be different for both players.
 - Fixed Noclip accuracy deaths from going into negatives.
 - Fixed menu not closing when playing back menu.
 - Fixed versioning being completely broken.
