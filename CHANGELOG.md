@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.1
+
+- Fixed crashes.
+- Added Geode v5 support.
+
 ## v1.2.0
 
 - Added CBF compatibility with recording and playback sub-tick precision.
