@@ -20,7 +20,7 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           cli: "latest"
-          sdk: "5.0.0-beta.3"
+          sdk: "5.0.0"
 
       - uses: actions/upload-artifact@v4
         with:
