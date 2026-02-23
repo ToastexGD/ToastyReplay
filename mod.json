@@ -14,5 +14,5 @@
 	"resources": {
 		"files": ["resources/*.ttf"]
 	},
-	"tags": ["Gameplay", "Utility", "Cheat"]
+	"tags": ["gameplay", "utility", "cheat"]
 }
