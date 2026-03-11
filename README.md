@@ -236,8 +236,6 @@ float easeOutCubic(float t) {
 
 Menu entrance direction is changeable (center scale, move from any edge). Toggle switches and move states are individually animated per the widget using tracked `ImGuiID` maps.
 
-**Backdrop Blur** - when the menu opens it draws layered semi-transparent rectangles on the background to simulate a blur effect. intensity is controllable with a slider from 0 to 1. theres also a vignette effect on the edges because it looked cool. the blur color matches your background color setting so it blends in nicely.
-
 ---
 
 Extended information
@@ -246,12 +244,14 @@ Extended information
 credits go to: 
 
 - [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features. 
-- [Zilko](https://github.com/Zilko) for inspiring me (from [xdBot](https://github.com/Zilko/xdBot))
-- [Jarvisdevil](https://github.com/thejarvisdevil) for helping me put my braincells together.
+- [Zilko](https://github.com/Zilko) for inspiring me (from [xdBot](https://github.com/Zilko/xdBot)) and the idea for (Coin Tracking)
+- [Jarvisdevil](https://github.com/thejarvisdevil) for being a great mentor and helping me figure out specific bugs.
 - [NinXout](https://github.com/ninXout) for inspiration similar to Eclipse Menu. (Received help for my hitbox implementation)
+- [C++ and c++ Together Discords](https://discord.gg/WeBHv6b4WS) helping me learn c++ and their amazing guides.
+- [GDH by Toby](https://github.com/TobyAdd/GDH/blob/main/LICENSE) being an amazing opensource reference to fix up my trajectory, hitboxes, and a bunch of other bugs I was experiencing.
 - And of course, [Geode](https://github.com/geode-sdk) for the amazing framework this is built upon.
 
-* Monthly updates will be added to improve customization, add features, and most importantly squash bugs! If you find any bugs please report them in my discord. or in my issues page on the ToastyReplay Repository.
+* Monthly updates will be added to improve customization, add features, and most importantly, squash bugs! If you find any bugs please report them in my discord. or in my issues page on the ToastyReplay Repository.
 
 https://discord.gg/JWkVm7cUhH
 https://github.com/ToastexGD/ToastyReplay/issues
