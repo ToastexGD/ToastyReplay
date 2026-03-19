@@ -16,13 +16,6 @@ static int computeCurrentTick() {
     return tick;
 }
 
-static bool flipControls() {
-    PlayLayer* pl = PlayLayer::get();
-    if (!pl) return GameManager::get()->getGameVariable("0010");
-
-    return pl->m_levelSettings->m_platformerMode ? false : GameManager::get()->getGameVariable("0010");
-}
-
 class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
   struct Fields {
@@ -198,9 +191,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
       auto input = inputList[inputIdx];
 
       if (tick != engine->respawnTickIndex) {
-        if (flipControls())
-          input.player2 = !input.player2;
-
+        
         GJBaseGameLayer::handleButton(input.down, input.button, input.player2);
       }
 
@@ -297,8 +288,8 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
     }
 
     GJBaseGameLayer::handleButton(hold, button, player2);
-
-    if (!m_levelSettings->m_twoPlayerMode)
+      //Quick 2player fix for GMDsurge ;)
+    if (!m_levelSettings->m_twoPlayerMode && !m_gameState.m_isDualMode)
       player2 = false;
 
     if (!engine->captureIgnored && !engine->simulatingPath && !m_player1->m_isDead) {
