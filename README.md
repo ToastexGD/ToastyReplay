@@ -2,258 +2,550 @@
 
 # ToastyReplay
 
-</div>
+<img src="./logo.png" width="200"/>
 
-<p align="center">
-  <img src="./logo.png" width="200"/>
-</p>
+**Geometry Dash's most accurate replay bot.**
+
+Record, playback, edit, and render frame-perfect macros with 100% accuracy.
+
+[![Geode](https://img.shields.io/badge/Geode-v5.3.0-blue?style=flat-square)](https://geode-sdk.org)
+[![GD](https://img.shields.io/badge/GD-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
+[![Version](https://img.shields.io/badge/version-v1.3.0-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
+
+</div>
 
 ---
 
-### Geometry Dash's Most accurate Replay bot.
-- Replay any level regardless of RNG or FPS at a frame perfect level!
+## Features
 
-Key Mechanics 
---
-**Replay Menu**
-* Replay any level that is recorded using the gdr and other macro formats.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-* Access to **Frame Replacements** which records the exact physics of every frame in the recording. This is able to create 100% accurate replays.
+### Recording & Playback
+- Frame-perfect macro recording at any TPS
+- Two native formats: **TTR** (A compact binary made by me) and **GDR** (legacy format which had previous support)
+- Full two-player and normal replay support (Platformer soon trust)
+- Practice mode recording with checkpoint snapshots
+- Start position support with tick offset
 
-**Click between Steps (native GD)**
+</td>
+<td width="50%" valign="top">
 
-* Full support for gd's built in Click Between Steps setting. inputs are recorded with sub-step precision and played back at the exact same step delta. no external mods needed for this one.
+### Accuracy Modes
+- **Vanilla** for standard frame-by-frame (No sub-step compatability)
+- **CBS** (Click Between Steps) for native sub-step timing (ingame option)
+- **CBF** (Click Between Frames) via Syzzi's mod 
 
-**Noclip (with accuracy)**
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-* Noclip accuracy now has limits and decimals! Very easy to use.
-* **On Death Color** - screen flashes a customizable color when noclip blocks a death. has a color picker and everything, its pretty cool.
+### Frame Editor
+- Visual timeline with drag and edit input segments
+- Zoom, scroll, and overview bar for ease of access
+- Per-player input lanes (for 1 and 2 player)
+- Full undo/redo stack ability (200 in depth)
+- Drag edges to resize holds, move segments to retime inputs
+- Each input is frame changeable, Macro editor will NEVER support CBS/CBF macros.
 
-**Backdrop Blur**
+</td>
+<td width="50%" valign="top">
 
-* Menu has a blur effect behind it when opened, controllable with a slider in settings. makes it look clean.
+### Video Rendering
+- FFmpeg API export (720p to 4K, any FPS)
+- Configurable codec, bitrate, and pixel format
+- in game audio, click sounds, or both
+- Volume controls and music fade support (Music fade may break on high TPS)
+- Hide end screen / level complete popup
+- Extended fallback for FFmpeg.exe for extra customizability.
 
-**Show Hitboxes**
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-* Ability to view hitbox trail, on death, and normal hitboxes.
+### Click Sounds
+- Custom click pack ability with hard/soft clicks and releases
+- Separate packs for Player 1 and Player 2
+- Softness slider, click delay randomization (For SpaceUK)
+- Background noise loop option
 
-**Keybinds and settngs**
+</td>
+<td width="50%" valign="top">
 
-* Changeable animations, speeds, colors, and keybinds!
+### Hacks & Tools
+- **Noclip** with accuracy %, Death limits, and customizable death flash.
+- **Hitboxes** (always-on, on-death, or trail mode)
+- **Trajectory** preview (300 frames ahead as a max)
+- **Safe Mode**, **Layout Mode**, **No Mirror**
+- **Autoclicker** with per-player configuration (1 and 2 player)
+- **RNG Lock** for random triggers (duhh)
+- **Speed Control** with audio pitch sync
+- **Frame Advance** (tick-by-tick/frame-by-frame stepping)
 
-How it everything works... (updated for v1.2.0)
---
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-### Replay Engine
+### Online
+- Discord login with macro uploading
+- Bug report submission from in-game
+- Cloud macro sharing (to my discord)
 
-The engine runs in one of three modes that I created:
+</td>
+<td width="50%" valign="top">
+
+### Customization
+- built-in themes + full custom colors
+- Rebindable hotkeys for every feature
+- Glow cycle animation
+- Animated menu transitions
+
+</td>
+</tr>
+</table>
+
+---
+
+## How It Works
+
+> Everything below is updated for **v1.3.0**. If you want the quick version, just read the Features table above. (I hid the stuff below into dropdowns to save your eyes)
+
+---
+
+<details>
+<summary><h3>Replay Engine</h3></summary>
+
+The engine has three modes. crazy stuff am I right?
 
 ```cpp
 enum MacroMode {
-    MODE_DISABLED,  // off (pretty obvious)
-    MODE_CAPTURE,   // recording inputs
-    MODE_EXECUTE    // playing back inputs
+    MODE_DISABLED,  // go away
+    MODE_CAPTURE,   // recording your inputs
+    MODE_EXECUTE    // playing them back
 };
 ```
 
-Every input is stored as a `MacroAction`, which extends to [gdr](https://github.com/geode-sdk/GDReplayFormat):
+Every input gets stored as a `MacroAction` extending [TTR] or [GDR](https://github.com/geode-sdk/GDReplayFormat):
 
 ```cpp
 struct MacroAction : gdr::Input {
-    int tick;            // frame number
-    int actionType;      // 1 = jump, 2 = left, 3 = right
-    bool secondPlayer;
-    bool pressed;        // down or up
-    float stepOffset;    // sub-step delta for Click Between steps (0 if CBS off)
+    int tick;            // what frame the icon is on
+    int actionType;      // 1 = jump, 2 = left, 3 = right (2 and 3 are useless rn anyway)
+    bool secondPlayer;   // player 2 thingie
+    bool pressed;        // button held down or up.
+    float stepOffset;    // sub-step delta for CBS (0 is off)
 };
 ```
 
-Tick is calculated from the level time:
+Tick number comes from level time:
 
 ```
-tick = (int)(levelTime * tickRate) + 1 
+tick = (int)(levelTime * tickRate) + 1
 ```
 
-At 240 TPS, one second of gameplay = 240 ticks. (This is blantantly obvious im just keeping it for documentation purposes)
-
-During `MODE_CAPTURE`, every time the `handleButton` is called, it records a `MacroAction` into the active macro. During `MODE_EXECUTE`, `processCommands` functions through stored/cached actions and fires `handleButton` when the current tick matches:
-(Required to click inputs at the precice actions, Should be 100% accurate.)
+During recording, every `handleButton` call saves a `MacroAction`. During playback, `processCommands` walks through the stored actions and fires them when the tick fits:
 
 ```cpp
+// fire every action whose tick has arrived
 while (inputIdx < inputList.size() && tick >= inputList[inputIdx].frame) {
     auto input = inputList[inputIdx];
     GJBaseGameLayer::handleButton(input.down, input.button, input.player2);
-    inputIdx++;
+    inputIdx++;  // next one
 }
 ```
 
-Replays are saved as .gdr files in the mod's save directory under `replays/`. This is
-also viewable from the Open Folder button on the Replay tab.
+Replays live as `.ttr` or `.gdr` files in the mod's save directory under `replays/`.
 
-### Frame Replacement (Best Accuracy Mode imo)
+</details>
 
-Three correction modes:
+---
 
-| Mode | what it does |
-|------|-------------|
-| None | No correction of inputs, raw input calculation only |
-| Input Adjustments | caches the position snapshots on each input (Very Unreliable) |
-| Frame Replacement | caches the position snapshots every `N` ticks (default 240) |
+<details>
+<summary><h3>TTR Format (v1.3.0+)</h3></summary>
 
-During recording, position corrections are stored to keep physics acurate:
-
-```cpp
-struct PositionCorrection {
-    int tick;
-    PositionSnapshot player1Data;  // position plus the rotation
-    PositionSnapshot player2Data;
-};
-```
-
-During playback, the engine teleports the player to the recorded position and rotation at each correction tick. This is what makes the replays frame perfect even though there are technicalities.
-
-### Physics Bypass (TPS)
-
-The engine hooks `GJBaseGameLayer::update` with a fixed time step accumulator:
+The new native format. Compact binary with zlib compression. Way smaller than GDR files. (Yes I compressed it)
 
 ```
-targetDelta = 1.0 / tickRate
+Header: "TTR\0" format version (currently 4) + flags
+Payload: compressed of metadata + inputs + anchors 
 ```
 
-Each frame, `dt` is added to the accumulation. The game steps forward in a fixed `targetDelta` chunk until the accumulation is empty. And only the last step renders visuals (the rest skip `updateVisibility` which improves lag I guess? idk).
+**Flags stored per-macro:**
 
-Speed control hooks `CCScheduler::update` and scales the delta:
-(Don't lock delta using external client it will break.)
+| Flag | What I mean |
+|------|--------------|
+| `TTR_FLAG_ACCURACY_CBS` | Recorded with Click Between Steps |
+| `TTR_FLAG_ACCURACY_CBF` | Recorded with Click Between Frames |
+| `TTR_FLAG_FROM_START_POS` | Started from a custom start position |
+| `TTR_FLAG_PLATFORMER` | Platformer mode level |
+| `TTR_FLAG_TWO_PLAYER` | Two-player level |
+| `TTR_FLAG_RNG_LOCKED` | RNG was locked during recording |
 
-```cpp
-void update(float dt) {
-    CCScheduler::update(dt * gameSpeed);
-}
-```
+**Metadata includes:** author, level name, level ID, framerate, duration, game version, and a unix timestamp of when it was recorded. (Level ID is 0 if in the editor or playback)
 
-Frame advance (`tickStepping`) freezes the accumulation and only steps once per key press. (variation depending on the current Physics.)
+**Playback Anchors** are checkpoint snapshots saved every 240 ticks (1 second). They store both players' full state (position, velocity, rotation, gravity, holds) plus the RNG seed. During playback the engine compares live state against anchors to catch and correct physics drift.  
 
-### Noclip + Accuracy
+GDR is still supported for backward compatibility. The replay list automatically detects the format.
 
-Noclip hooks `PlayLayer::destroyPlayer` and blocks the death call. Each blocked death updates `bypassedCollisions`, and `totalTickCount` tracks the total amount of ticks elapsed.
+</details>
 
-```
-accuracy = 100.0 * (1.0 - bypassedCollisions / totalTickCount)
-```
+---
 
-If `collisionLimitActive` is set and the accuracy drops below the `collisionThreshold`, noclip temporarily disables and the player gets viciously spiked.
+<details>
+<summary><h3>Accuracy Modes</h3></summary>
 
-**On Death Color** - when enabled, a `CCLayerColor` overlay flashes the picked color on the screen whenever noclip blocks a death. uses `CCFadeTo` to fade out over 0.25 seconds so its not annoying. color is fully customizable from the noclip settings. basically like megahack but built in lol
+Three tiers of input precision:
 
-### Click Between Steps (native)
+| Mode | How it works | External mod needed? |
+|------|-------------|---------------------|
+| **Vanilla** | Standard frame-by-frame. One input per tick. | No |
+| **CBS** (Click Between Steps) | Uses GD's native `m_currentStep` to record sub-step timing. Inputs Fire at the exact step delta within a tick. | No |
+| **CBF** (Click Between Frames) | Micro precision timing via syzzi's Click Between Frames mod. This is real tuff | Yes (`syzzi.click_between_frames`) |
 
-When gd's native Click Between Steps setting is enabled (game variable "0177"), inputs can happen between physics ticks. The engine tracks this using `GJBaseGameLayer::m_currentStep`:
+For CBS, the engine tracks where in the tick the input happened:
 
 ```
 stepDelta = m_currentStep - tickStartStep
 ```
 
-during recording, each input captures its step delta within the current tick. during playback, inputs only fire when both the tick AND the step delta match, so the exact sub-step timing from the original run is preserved.
+During playback, both the tick AND the step delta have to match before the input fires. This preserves the exact sub-step timing from the original run.
 
-CBF macros are tagged in the replay list with a red "CBF" label. the engine automatically enables/disables the Click Between Steps game variable when loading CBF macros so you dont have to toggle it manually.
+The input timing system (new in v1.3.0) queues the sheer raw inputs with microsecond timestamps and converts them to fractional step phases. Up to 32 pending inputs can be queued at once.
 
-This replaced the old syzzi Click Between Frames mod integration. no external mods needed anymore, its all native now.
+Macros are tagged in the replay list so you know what accuracy mode they were recorded with. The engine auto-toggles the CBS game variable when loading those macros so you dont have to do it manually.
 
-### Trajectory  (Player Path Preview - PPP) I like abreviating things tehe
+</details>
 
-Creates some invisible cloned `PlayerObject`s on level load. Each frame, the system:
+---
 
-1. Copies the real player's full state onto the clone
-2. Simulates `N` frames ahead (default is 312) by calling `checkCollisions` plus `update` and `updateRotation`
-3. Draws lines between each simulated position (Broken with 2 player im aware)
+<details>
+<summary><h3>Physics Bypass (TPS Control)</h3></summary>
 
-Green = holding jump, red = released, yellow = overlap between hold/release paths. Lines fade out over the last 40 frames. (Inaccuracy is apparent, do NOT use Trajectory if you don't use Show Hitboxes.)
+Hooks `GJBaseGameLayer::update` with a fixed timestep accumulator:
 
-Portal interactions (speed changes, size changes) are handled during simulation. Ring states are saved before simulation and restored after so the preview doesn't affect actual gameplay. (Cashing for orbs on p2 layer. This is broken fixed in v1.2.0)
+```
+targetDelta = 1.0 / tickRate
+```
 
-### Hitboxes
+Each frame, `dt` gets added to the accumulator. The game steps forward in `targetDelta` chunks until the accumulator is drained. Only the last step renders visuals (the rest skip `updateVisibility` which helps with performance. I mean I would assume but my high end PC is to good).
 
-So Hitboxes Hooks `GJBaseGameLayer::updateDebugDraw` to render the player, spikes and collision rectangles/squares. Player hitboxes are rotated using a 2D rotation around the rects center:
+Speed control hooks `CCScheduler::update` and scales delta:
+
+```cpp
+void update(float dt) {
+    // dont use an external client to lock delta. it WILL break.
+    CCScheduler::update(dt * gameSpeed);
+}
+```
+
+**Frame Advance** freezes the accumulator and only steps once per key press. Hold the step key for continuous stepping. Great for debugging or placing precise inputs.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Checkpoint System</h3></summary>
+
+When you place a checkpoint during recording, the engine snapshots everything:
+
+```cpp
+struct CheckpointStateBundle {
+    int priorTick;                  // where we were
+    PlayerStateBundle player1State; // position, velocity, rotation, gravity, holds
+    PlayerStateBundle player2State; // same thing but for player 2
+    uintptr_t rngState;            // gotta keep the randomness consistent
+    uint8_t latchMasks[2];         // which buttons were being held
+};
+```
+
+`PlayerStateBundle` captures kinematics (position, velocity, rotation), flags (upside down, holding), and environment state (gravity, dual mode, 2-player). It's a lot of fields. Like, a LOT.
+
+Loading a checkpoint truncs all recorded actions after that tick, restores the RNG, and resets the defferred input tracking. This lets you record in practice mode without corrupting the macro. The engine also handles start position detection and validates tick offsets when loading macros recorded from non-zero positions.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Noclip + Accuracy</h3></summary>
+
+Hooks `PlayLayer::destroyPlayer` and says stop. Each blocked death bumps `bypassedCollisions`, and `totalTickCount` tracks total ticks elapsed:
+
+```
+accuracy = 100.0 * (1.0 - bypassedCollisions / totalTickCount)
+```
+
+If `collisionLimitActive` is on and accuracy drops below `collisionThreshold`, noclip turns off and you get absolutely destroyed. Skill issue.
+
+**On Death Flash** overlays a `CCLayerColor` that flashes your chosen color whenever noclip blocks a death. Fades out over 0.25s. Color is fully customizable (RGB picker). Basically megahack but built in.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Trajectory Preview</h3></summary>
+
+Creates invisible cloned `PlayerObject`s on level load. Every frame:
+
+1. Copy the real player's full state onto the clone
+2. Simulate `N` frames ahead (default 312) via `checkCollisions` + `update` + `updateRotation`
+3. Draw lines between each simulated position
+
+**Color coding:**
+- **Green** = holding jump
+- **Red** = released
+- **Yellow** = where hold and release paths overlap
+- **Blue overlay** = player 2
+
+Lines fade out over the last 40 frames. Portal interactions (speed, size, gravity) are handled during simulation. Ring and pad states get saved before simulation and restored after so the preview doesnt mess with actual gameplay.
+
+> Trajectory has very hit-or-miss accuracy. If you're doing precise stuff, use it alongside Show Hitboxes.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Hitbox Visualization</h3></summary>
+
+Hooks `GJBaseGameLayer::updateDebugDraw` to render collision geometry.
+
+**Three display modes:**
+- **Always** - hitboxes visible at all times
+- **On Death** - only shows when the player dies
+- **Trail** - keeps a rolling history of player hitbox positions (capped at `hitboxTrailLength`, default 240)
+
+**Color coding:**
+
+| Object Type | Color |
+|------------|-------|
+| Solid blocks | Blue |
+| Hazards (spikes etc) | Red |
+| Passable objects | Cyan |
+| Interactive (orbs, pads) | Green |
+| Player | Red outline, blue inner |
+| Coins | Green |
+| Slopes | Blue |
+
+Player hitboxes are rotated using 2D rotation around the rect center:
+(Im planning to add customization for the hitbox colors soon, please be patient)
 
 ```
 newX = cx + (x - cx) * cos(angle) - (y - cy) * sin(angle)
 newY = cy + (x - cx) * sin(angle) + (y - cy) * cos(angle)
 ```
 
-Trail mode keeps the player rects in a `deque` each tick, like FOLK I need to change this... But then it's capped at `hitboxTrailLength`. On Death only mode clears the draw nodes until the player dies.
+Supports rectangles, circles, triangles, and oriented quads.
 
-### Checkpoint Handling (For Recording)
+</details>
 
-When a checkpoint is placed during recording, the engine snapshots:
+---
 
-```cpp
-struct RestorePoint {
-    int tick;
-    PhysicsSnapshot player1State;  // 250 fields of player physics 
-    PhysicsSnapshot player2State;
-    uintptr_t rngState;            // RNG seed cause why not
-    int priorTick;
-};
+<details>
+<summary><h3>Frame Editor</h3></summary>
+
+New in v1.3.0. A full visual timeline editor for your macros.
+
+**What you see:**
+- Horizontal ruler with frame tick marks
+- Input lanes for Player 1 and Player 2 (separate, color-coded)
+- Hold segments showing press-to-release duration
+- Overview bar at the top showing the full macro
+
+**What you can do:**
+- **Drag segments** to move them in time
+- **Drag edges** to adjust when a press or release happens
+- **Scroll and zoom** (0.5x to 40x pixels per frame of superzoom)
+- **Go to frame** for quick navigation
+- **Undo/redo** with a 200-entry stack limit 
+- **Delete inputs** and adjust step offsets
+
+Supports both TTR and GDR formats. Auto-detects two-player macros and shows both lanes. Player 2 gets a different color so you can tell them apart.
+
+Unsaved changes trigger a confirmation dialog when you try to close. Because losing edits sucks (I lost a bunch while testing)
+
+</details>
+
+---
+
+<details>
+<summary><h3>Video Rendering</h3></summary>
+
+FFmpeg API video export. Uses the FFmpeg API mod when available, falls back to piping frames to `ffmpeg.exe`.
+
+**pipelin:**
+1. Capture each frame to an OpenGL FBO at the set resolution
+2. Stream raw RGB24 frames to FFmpeg (buffered, up to 8 frames)
+3. FFmpeg encodes to your chosen codec
+4. After gameplay ends, mux audio (game music + click sounds if enabled)
+
+**Settings you can tweak:**
+
+| Setting | Default | Options |
+|---------|---------|---------|
+| Resolution | 1920x1080 | 720p, 1080p, 1440p, 4K, or custom |
+| FPS | 60 | Whatever you want |
+| Codec | libx264 | Falls back to libx265, h264, mpeg4, vp9 |
+| Bitrate | 30M | In megabits |
+| Format | .mp4 | Whatever FFmpeg supports |
+
+**Audio options:**
+- Include/exclude background music and click sounds separately
+- Volume sliders for music and SFX
+- Music fade-in/fade-out
+- Configurable duration after level completion (default 3 seconds)
+
+**Display options:**
+- Hide end screen
+- Hide level complete popup
+- Hide completion particles
+
+Click sounds are pre added at the render's sample rate and mixed in at the exact frame they should play. The renderer handles song file detection for both custom and built-in level music.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Click Sounds</h3></summary>
+
+Custom click pack system. Each pack is a folder with subfolders for different sound types:
+
+```
+my-click-pack/
+  clicks/          (or hard/hardclicks)
+  softclicks/      (or soft/softclick)
+  hardreleases/    (or hardrelease)
+  softreleases/    (or softrelease)
+  releases/        (generic releases)
+  noise/           (or background/bg/mic)
 ```
 
-Loading a checkpoint truncs all recorded actions and fixes after that tick, restores the RNG state, and resets the deffered input tracking. This allows recording in practice mode without rewriting the file or corrupting the macro.
+**Controls:**
+- **Softness slider** (0 to 1) controls the ratio of hard vs soft clicks
+- **Click delay** (min/max ms) adds random delay variation
+- **Background noise** toggle with volume slider
+- **Separate P1/P2 packs** for two-player mode
 
-### RNG Lock
+Clicks play in real-time during recording and playback. For renders, all sounds get pre added and mixed into the final audio at precise frame offsets. The system picks randomly from available sound files each time so it doesnt sound robotic.
 
-Locks the game's internal `randomState` using a seed from user input plus current level progress:
+</details>
+
+---
+
+<details>
+<summary><h3>RNG Lock</h3></summary>
+
+Locks the game's random state using a seed derived from your input plus level progress:
 
 ```cpp
 std::mt19937 gen(rngSeedVal + currentProgress);
 std::uniform_int_distribution<uint64_t> dist(10000, 999999999);
-GameToolbox::fast_srand(dist(gen));
+GameToolbox::fast_srand(dist(gen));  // now every attempt is the same
 ```
 
-This makes levels with random trigger stuff set identically across attempts.
+Makes levels with random triggers behave identically across attempts. The RNG state is also stored in checkpoints and playback anchors so it stays consistent even when loading from practice mode
 
-### Safe Mode
+</details>
 
-Hooks the three functions to prevent progress from being saved:
+---
 
-- `PlayLayer::levelComplete` → sets `m_isTestMode = true` before calling the original
-- `PlayLayer::showNewBest` → blocks the call entirely
-- `GJGameLevel::savePercentage` → blocks the call entirely
+<details>
+<summary><h3>Safe Mode</h3></summary>
 
-### Menu
+Hooks three functions to prevent progress from being saved:
 
-made with [ImGui Cocos](https://github.com/geode-sdk/imgui-cocos). Four module tabs: Replay, Tools, Hacks, Settings.
+- `PlayLayer::levelComplete` sets `m_isTestMode = true` before calling the original
+- `PlayLayer::showNewBest` gets blocked entirely
+- `GJGameLevel::savePercentage` also blocked
 
-The theme engine supports custom accent/background/card/text colors, corner radius, opacity, and RGB color cycling (RGB Cycling). All settings persist through the Geode saved values (Courtesy the API)
+You still see the level complete screen normally, it just doesnt save anything. A "Safe Mode Active" label shows on the end screen so you know its working
+
+</details>
+
+---
+
+<details>
+<summary><h3>Other Tools</h3></summary>
+
+**Layout Mode** strips all decoration from the level and shows only gameplay objects. Uses a ID catalog to filter out decorative and trigger objects. Everything gets forced to a clean monochrome look. Great for focusing on the actual gameplay.
+
+**No Mirror** blocks mirror/flip portal effects. Can be set to only apply during recording if you want normal visuals during playback.
+
+**Audio Pitch Control** adjusts FMOD's master channel pitch proportional to game speed. So 2x speed = 2x pitch. Automatically disabled during rendering to prevent audio desync.
+
+**Autoclicker** with separate P1/P2 toggles, configurable hold/release duration in ticks, and a "only while holding" mode. Shows calculated CPS based on your engine TPS.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Menu & Theming</h3></summary>
+
+Built with [ImGui Cocos](https://github.com/geode-sdk/imgui-cocos). Six tabs: **Replay**, **Render**, **Clicks**, **Autoclicker**, **Settings**, **Online**.
+
+**Theme engine** supports:
+- built-in preset themes
+- Custom accent, background, card, and text colors
+- Corner radius and text scale
+- Glow cycle animation with adjustable speed
 
 Animations use eased transitions:
 
 ```cpp
-// ease out cubic (GD ahh easing)
 float easeOutCubic(float t) {
     float inv = 1.0f - t;
-    return 1.0f - inv * inv * inv;
+    return 1.0f - inv * inv * inv;  // smooth like the GD ahh easing
 }
 ```
 
-Menu entrance direction is changeable (center scale, move from any edge). Toggle switches and move states are individually animated per the widget using tracked `ImGuiID` maps.
+Toggle switches, tab transitions, and card expansions are all individually animated. Every keybind is rebindable with conflict detection. All settings persist through Geode's saved values.
+
+</details>
 
 ---
 
-Extended information
---
+<details>
+<summary><h3>Online Features</h3></summary>
 
-credits go to: 
+**Discord Integration** for account linking. Login opens your browser, checks for auth status, and grabs your avatar + username.
 
-- [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features. 
-- [Zilko](https://github.com/Zilko) for inspiring me (from [xdBot](https://github.com/Zilko/xdBot)) and the idea for (Coin Tracking)
-- [Jarvisdevil](https://github.com/thejarvisdevil) for being a great mentor and helping me figure out specific bugs.
+**Macro Upload** lets you share macros to the cloud with metadata (level name, ID, TPS, action count, duration) and an optional comment. Supports both TTR and GDR.
+
+**Issue Reporting** so you can submit bug reports with a title and description straight from in the game.
+
+</details>
+
+---
+
+## Credits
+
+- [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features.
+- [Zilko](https://github.com/Zilko) Original ideas of Frame Fixing from [xdBot](https://github.com/Zilko/xdBot))
+- [Jarvisdevil](https://github.com/thejarvisdevil) for helping me put my brain cells together.
 - [NinXout](https://github.com/ninXout) for inspiration similar to Eclipse Menu. (Received help for my hitbox implementation)
-- [C++ and c++ Together Discords](https://discord.gg/WeBHv6b4WS) helping me learn c++ and their amazing guides.
-- [GDH by Toby](https://github.com/TobyAdd/GDH/blob/main/LICENSE) being an amazing opensource reference to fix up my trajectory, hitboxes, and a bunch of other bugs I was experiencing.
-- And of course, [Geode](https://github.com/geode-sdk) for the amazing framework this is built upon.
+- [C++ and C++ Together Discords](https://discord.gg/WeBHv6b4WS) for helping me learn C++ and their amazing guides.
+- [GDH by Toby](https://github.com/TobyAdd/GDH/blob/main/LICENSE) for being an amazing open source reference to fix up trajectory, hitboxes, and a bunch of other bugs.
+- jimmybutlerfan for extensive testing on my v1.3.0 build, could not have bug-fixed this menu without him.
+- And of course, [Geode](https://github.com/geode-sdk) for the amazing framework this is built on.
 
-* Monthly updates will be added to improve customization, add features, and most importantly, squash bugs! If you find any bugs please report them in my discord. or in my issues page on the ToastyReplay Repository.
+---
 
-https://discord.gg/JWkVm7cUhH
-https://github.com/ToastexGD/ToastyReplay/issues
+<div align="center">
+
+Updates will come to add features and squash bugs. If you find anything broken, msg me in the Discord or open an issue.
+
+[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
+[![Issues](https://img.shields.io/badge/GitHub-Report%20Bug-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ToastexGD/ToastyReplay/issues)
 
 Thanks everyone! <3
+
+</div>
