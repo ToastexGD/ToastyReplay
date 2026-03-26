@@ -21,6 +21,17 @@ class $modify(ProtectedPlayLayer, PlayLayer) {
         PlayLayer::levelComplete();
 
         m_isTestMode = originalTestMode;
+
+        
+        if (engine->engineMode == MODE_CAPTURE) {
+            if (engine->ttrMode && engine->activeTTR && !engine->activeTTR->inputs.empty()) {
+                engine->activeTTR->persist();
+                engine->reloadMacroList();
+            } else if (!engine->ttrMode && engine->activeMacro && !engine->activeMacro->inputs.empty()) {
+                engine->activeMacro->persist(engine->activeMacro->accuracyMode, static_cast<int>(engine->tickRate));
+                engine->reloadMacroList();
+            }
+        }
     }
 };
 

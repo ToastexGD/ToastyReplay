@@ -1,4 +1,5 @@
 #include "ToastyReplay.hpp"
+#include "audio/clicksounds.hpp"
 #include <Geode/modify/FMODAudioEngine.hpp>
 using namespace geode::prelude;
 
@@ -9,9 +10,12 @@ class $modify(PitchControlAudio, FMODAudioEngine) {
 
     void update(float delta) {
         FMODAudioEngine::update(delta);
+        ClickSoundManager::get()->updatePendingClicks();
 
         auto* engine = ReplayEngine::get();
-        float desiredPitch = engine->audioPitchEnabled ? engine->gameSpeed : 1.f;
+        float desiredPitch = (!engine->renderer.recording && engine->audioPitchEnabled)
+            ? static_cast<float>(engine->gameSpeed)
+            : 1.f;
 
         if (desiredPitch == m_fields->cachedPitch) return;
 

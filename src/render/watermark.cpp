@@ -1,4 +1,4 @@
-#include "gui.hpp"
+#include "gui/gui.hpp"
 #include <Geode/Bindings.hpp>
 
 using namespace geode::prelude;

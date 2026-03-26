@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.3.0
+
+- New recording format (TTR)
+- Startposition support.
+- CBS and CBF mode rework.
+- New frame editor (for Vanilla macros)
+- Video Rendering up to 4k with FFmpeg API
+- Click Sounds and clickpack support with many customization options
+- Complete Trajectory Mode rework with orbs and much more.
+- Autoclicker up to max cps at TPS limits
+- New online features including linking discord, issue reporting, and macro submissions.
+- All new menu with themes, reworked background, and much more.
+
+### What's fixed?
+
+- Fixed the game disapearing at high tps
+- TPS is now stable up to 1 million tps
+- Fixed the editor crash when dying
+- Fixed high tps crashing in editor
+- Fixed FFmpeg breaking pulsing objects
+- Fixed recording being unstable when using megahack
+- Fixed menu animation sliding the menu down
+- Fixed menu causing extreme lag when opening
+- Fixed Practice Mode from causing extreme lag when respawning.
+- Many more fixes.
+
 ## v1.2.1
 
 - Fixed crashes.

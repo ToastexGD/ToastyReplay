@@ -1,6 +1,6 @@
 {
-	"geode": "5.0.1",
-	"version": "v1.2.2",
+	"geode": "5.4.1",
+	"version": "v1.3.0",
 	"gd": {
 		"win": "2.2081"
 	},
@@ -10,6 +10,24 @@
 	"description": "Frame perfect replay bot for Geode.",
 	"links": {
 		"source": "https://github.com/ToastexGD/ToastyReplay"
+	},
+	"dependencies": {
+		"eclipse.ffmpeg-api": {
+			"version": ">=v2.0.0",
+			"importance": "suggested"
+		}
+	},
+	"settings": {
+		"ffmpeg_path": {
+			"name": "ffmpeg.exe Path",
+			"type": "file",
+			"default": ""
+		},
+		"render_folder": {
+			"name": "Render Save Location",
+			"type": "folder",
+			"default": ""
+		}
 	},
 	"resources": {
 		"files": ["resources/*.ttf"]
