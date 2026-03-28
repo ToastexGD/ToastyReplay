@@ -80,8 +80,8 @@ GD_IMGUI_COCOS_BACKEND_CONTENT
 )
 if (NOT GD_IMGUI_COCOS_BACKEND_CONTENT MATCHES "readClipboardText")
 string(REPLACE
-"#ifdef GEODE_IS_MOBILE"
-"#ifdef GEODE_IS_WINDOWS\nstatic std::string readClipboardText() {\n\tif (!OpenClipboard(nullptr)) return {};\n\n\tHANDLE hData = GetClipboardData(CF_UNICODETEXT);\n\tif (hData == nullptr) {\n\t\tCloseClipboard();\n\t\treturn {};\n\t}\n\n\tauto pszText = static_cast<wchar_t*>(GlobalLock(hData));\n\tif (pszText == nullptr) {\n\t\tCloseClipboard();\n\t\treturn {};\n\t}\n\n\tint size = WideCharToMultiByte(CP_UTF8, 0, pszText, -1, nullptr, 0, nullptr, nullptr);\n\tstd::string text;\n\tif (size > 0) {\n\t\ttext.resize(static_cast<size_t>(size));\n\t\tWideCharToMultiByte(CP_UTF8, 0, pszText, -1, text.data(), size, nullptr, nullptr);\n\t\tif (!text.empty() && text.back() == '\\0') {\n\t\t\ttext.pop_back();\n\t\t}\n\t}\n\n\tGlobalUnlock(hData);\n\tCloseClipboard();\n\treturn text;\n}\n#endif\n\n#ifdef GEODE_IS_MOBILE"
+"#ifdef GEODE_IS_MOBILE\n\nclass ImGuiIMEDelegate"
+"#ifdef GEODE_IS_WINDOWS\nstatic std::string readClipboardText() {\n\tif (!OpenClipboard(nullptr)) return {};\n\n\tHANDLE hData = GetClipboardData(CF_UNICODETEXT);\n\tif (hData == nullptr) {\n\t\tCloseClipboard();\n\t\treturn {};\n\t}\n\n\tauto pszText = static_cast<wchar_t*>(GlobalLock(hData));\n\tif (pszText == nullptr) {\n\t\tCloseClipboard();\n\t\treturn {};\n\t}\n\n\tint size = WideCharToMultiByte(CP_UTF8, 0, pszText, -1, nullptr, 0, nullptr, nullptr);\n\tstd::string text;\n\tif (size > 0) {\n\t\ttext.resize(static_cast<size_t>(size));\n\t\tWideCharToMultiByte(CP_UTF8, 0, pszText, -1, text.data(), size, nullptr, nullptr);\n\t\tif (!text.empty() && text.back() == '\\0') {\n\t\t\ttext.pop_back();\n\t\t}\n\t}\n\n\tGlobalUnlock(hData);\n\tCloseClipboard();\n\treturn text;\n}\n#endif\n\n#ifdef GEODE_IS_MOBILE\n\nclass ImGuiIMEDelegate"
 GD_IMGUI_COCOS_BACKEND_CONTENT
 "${GD_IMGUI_COCOS_BACKEND_CONTENT}"
 )
