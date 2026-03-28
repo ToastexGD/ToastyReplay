@@ -122,6 +122,7 @@ public:
     float ogScaleY = 1.f;
 
     cocos2d::CCLabelBMFont* watermarkLabel = nullptr;
+    cocos2d::CCLabelBMFont* progressLabel = nullptr;
 
     void captureFrame();
     void changeRes(bool original);

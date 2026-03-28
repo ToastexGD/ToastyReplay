@@ -237,7 +237,62 @@ PlayerStateCapsule TrajectoryPredictionService::capturePlayerState(PlayerObject*
         player->m_isOnGround3,
         player->m_isOnGround4,
         player->m_fallSpeed,
-        player->m_maybeIsColliding
+        player->m_maybeIsColliding,
+        player->m_collidedTopMinY,
+        player->m_collidedBottomMaxY,
+        player->m_collidedLeftMaxX,
+        player->m_collidedRightMinX,
+        player->m_yVelocityRelated,
+        player->m_scaleXRelated2
+    };
+
+    state.dynamics = {
+        player->m_gravity,
+        player->m_yStart,
+        player->m_speedMultiplier,
+        player->m_accelerationOrSpeed,
+        player->m_snapDistance,
+        player->m_physDeltaRelated,
+        player->m_blackOrbRelated,
+        player->m_platformerXVelocity,
+        player->m_lastLandTime,
+        player->m_gameModeChangedTime,
+        player->m_lastJumpTime,
+        player->m_lastFlipTime,
+        player->m_lastSpiderFlipTime,
+        player->m_dashX,
+        player->m_dashY,
+        player->m_dashAngle,
+        player->m_dashStartTime,
+        player->m_rotationSpeed,
+        player->m_xVelocityRelated,
+        player->m_xVelocityRelated2,
+        player->m_shipRotation,
+        player->m_lastGroundedPos,
+        player->m_objectSnappedTo,
+        player->m_jumpBuffered,
+        player->m_wasJumpBuffered,
+        player->m_wasRobotJump,
+        player->m_stateJumpBuffered,
+        player->m_stateRingJump,
+        player->m_stateRingJump2,
+        player->m_touchedGravityPortal,
+        player->m_isAccelerating,
+        player->m_isOnIce,
+        player->m_affectedByForces,
+        player->m_stateOnGround,
+        player->m_stateBoostX,
+        player->m_stateBoostY,
+        player->m_stateForce,
+        player->m_stateForceVector,
+        player->m_maybeStateForce2,
+        player->m_stateScale,
+        player->m_stateNoAutoJump,
+        player->m_stateDartSlide,
+        player->m_stateHitHead,
+        player->m_stateFlipGravity,
+        player->m_stateNoStickX,
+        player->m_stateNoStickY
     };
 
     return state;
@@ -319,6 +374,58 @@ void TrajectoryPredictionService::applyPlayerState(PlayerObject* player, PlayerS
     player->m_isOnGround4 = state.collision.isOnGround4;
     player->m_fallSpeed = state.collision.fallSpeed;
     player->m_maybeIsColliding = state.collision.maybeColliding;
+    player->m_collidedTopMinY = state.collision.collidedTopMinY;
+    player->m_collidedBottomMaxY = state.collision.collidedBottomMaxY;
+    player->m_collidedLeftMaxX = state.collision.collidedLeftMaxX;
+    player->m_collidedRightMinX = state.collision.collidedRightMinX;
+    player->m_yVelocityRelated = state.collision.yVelocityRelated;
+    player->m_scaleXRelated2 = state.collision.scaleXRelated2;
+
+    player->m_gravity = state.dynamics.gravity;
+    player->m_yStart = state.dynamics.yStart;
+    player->m_speedMultiplier = state.dynamics.speedMultiplier;
+    player->m_accelerationOrSpeed = state.dynamics.accelerationOrSpeed;
+    player->m_snapDistance = state.dynamics.snapDistance;
+    player->m_blackOrbRelated = state.dynamics.blackOrbRelated;
+    player->m_platformerXVelocity = state.dynamics.platformerXVelocity;
+    player->m_lastLandTime = state.dynamics.lastLandTime;
+    player->m_gameModeChangedTime = state.dynamics.gameModeChangedTime;
+    player->m_lastJumpTime = state.dynamics.lastJumpTime;
+    player->m_lastFlipTime = state.dynamics.lastFlipTime;
+    player->m_lastSpiderFlipTime = state.dynamics.lastSpiderFlipTime;
+    player->m_dashX = state.dynamics.dashX;
+    player->m_dashY = state.dynamics.dashY;
+    player->m_dashAngle = state.dynamics.dashAngle;
+    player->m_dashStartTime = state.dynamics.dashStartTime;
+    player->m_rotationSpeed = state.dynamics.rotationSpeed;
+    player->m_xVelocityRelated = state.dynamics.xVelocityRelated;
+    player->m_xVelocityRelated2 = state.dynamics.xVelocityRelated2;
+    player->m_shipRotation = state.dynamics.shipRotation;
+    player->m_lastGroundedPos = state.dynamics.lastGroundedPos;
+    player->m_objectSnappedTo = nullptr;
+    player->m_jumpBuffered = state.dynamics.jumpBuffered;
+    player->m_wasJumpBuffered = state.dynamics.wasJumpBuffered;
+    player->m_wasRobotJump = state.dynamics.wasRobotJump;
+    player->m_stateJumpBuffered = state.dynamics.stateJumpBuffered;
+    player->m_stateRingJump = state.dynamics.stateRingJump;
+    player->m_stateRingJump2 = state.dynamics.stateRingJump2;
+    player->m_touchedGravityPortal = state.dynamics.touchedGravityPortal;
+    player->m_isAccelerating = state.dynamics.isAccelerating;
+    player->m_isOnIce = state.dynamics.isOnIce;
+    player->m_affectedByForces = state.dynamics.affectedByForces;
+    player->m_stateOnGround = state.dynamics.stateOnGround;
+    player->m_stateBoostX = state.dynamics.stateBoostX;
+    player->m_stateBoostY = state.dynamics.stateBoostY;
+    player->m_stateForce = state.dynamics.stateForce;
+    player->m_stateForceVector = state.dynamics.stateForceVector;
+    player->m_maybeStateForce2 = state.dynamics.maybeStateForce2;
+    player->m_stateScale = state.dynamics.stateScale;
+    player->m_stateNoAutoJump = state.dynamics.stateNoAutoJump;
+    player->m_stateDartSlide = state.dynamics.stateDartSlide;
+    player->m_stateHitHead = state.dynamics.stateHitHead;
+    player->m_stateFlipGravity = state.dynamics.stateFlipGravity;
+    player->m_stateNoStickX = state.dynamics.stateNoStickX;
+    player->m_stateNoStickY = state.dynamics.stateNoStickY;
 }
 bool TrajectoryPredictionService::isActiveSimulation() const {
     return m_context.activeSimulation;
@@ -587,7 +694,9 @@ void TrajectoryPredictionService::traceInputPath(
         previewPlayer->m_potentialSlopeMap.insert({ key, value });
     }
 
-    int frameCount = std::clamp(ReplayEngine::get()->pathLength, 0, kMaxTraceFrames);
+    auto* engine = ReplayEngine::get();
+    int frameCount = std::clamp(engine->pathLength, 0, kMaxTraceFrames);
+    float simDt = m_context.stepDelta;
     m_context.traceCancelled = false;
     m_context.holdingTrace = holdingInput;
     m_context.touchingPads.clear();
@@ -624,12 +733,12 @@ void TrajectoryPredictionService::traceInputPath(
         previewPlayer->m_collisionLogLeft->removeAllObjects();
         previewPlayer->m_collisionLogRight->removeAllObjects();
 
-        previewPlayer->update(m_context.stepDelta);
-        previewPlayer->updateRotation(m_context.stepDelta);
+        previewPlayer->update(simDt);
+        previewPlayer->updateRotation(simDt);
         previewPlayer->updatePlayerScale();
 
         m_context.frameTouchingPads.clear();
-        playLayer->checkCollisions(previewPlayer, m_context.stepDelta, false);
+        playLayer->checkCollisions(previewPlayer, simDt, false);
         m_context.touchingPads = m_context.frameTouchingPads;
 
         if (m_context.traceCancelled) {

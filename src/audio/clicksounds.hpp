@@ -26,9 +26,7 @@ struct ClickPack {
 
     int hardCount() const { return static_cast<int>(hardClicks.size()); }
     int softCount() const { return static_cast<int>(softClicks.size()); }
-    int releaseCount() const {
-        return static_cast<int>(hardReleases.size() + softReleases.size() + releases.size());
-    }
+    int releaseCount() const { return static_cast<int>(hardReleases.size() + softReleases.size() + releases.size()); }
     int noiseCount() const { return static_cast<int>(noiseFiles.size()); }
     bool empty() const {
         return hardClicks.empty() && softClicks.empty() &&
@@ -69,6 +67,7 @@ public:
     void playClick(bool pressed, bool isPlayer2);
     void startBackgroundNoise();
     void stopBackgroundNoise();
+    void shutdown();
     void updatePendingClicks();
     void clearPendingClicks();
     void openClickFolder();

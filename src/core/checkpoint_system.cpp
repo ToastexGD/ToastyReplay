@@ -46,6 +46,7 @@ void refreshRngState(bool isLevelStart) {
 void ReplayEngine::resetDeferredInputState() {
     skipTickIndex = -1;
     skipActionTick = -1;
+    clearCheckpointResumedHolds();
     deferredReleaseA[0] = -1;
     deferredReleaseA[1] = -1;
     deferredInputTick[0] = -1;
@@ -172,6 +173,60 @@ namespace {
             return anchor.tick < targetTick;
         });
         return static_cast<size_t>(std::distance(anchors.begin(), it));
+    }
+
+    static bool isLatchHeld(uint8_t mask, int button) {
+        if (button < 1 || button > 3) {
+            return false;
+        }
+        return (mask & (1 << (button - 1))) != 0;
+    }
+
+    static void clearCheckpointHoldBaseline(PlayerObject* player, int button) {
+        if (!player) {
+            return;
+        }
+
+        player->m_holdingButtons[button] = false;
+        if (button == 2) {
+            player->m_holdingLeft = false;
+        } else if (button == 3) {
+            player->m_holdingRight = false;
+        }
+    }
+
+    static void resumeCheckpointHold(PlayerObject* player, ReplayEngine* engine, uint8_t mask, int button, int playerSlot) {
+        if (!player || !engine || !isLatchHeld(mask, button)) {
+            return;
+        }
+
+        clearCheckpointHoldBaseline(player, button);
+        player->pushButton(static_cast<PlayerButton>(button));
+        engine->setCheckpointHoldResumed(playerSlot, button, true);
+    }
+
+    static void restoreCheckpointHolds(PlayLayer* playLayer, ReplayEngine* engine, CheckpointStateBundle const& checkpoint) {
+        if (!playLayer || !engine || !playLayer->m_player1 || !playLayer->m_levelSettings) {
+            return;
+        }
+
+        resumeCheckpointHold(playLayer->m_player1, engine, checkpoint.player1LatchMask, 1, 0);
+        if (playLayer->m_levelSettings->m_platformerMode) {
+            resumeCheckpointHold(playLayer->m_player1, engine, checkpoint.player1LatchMask, 2, 0);
+            resumeCheckpointHold(playLayer->m_player1, engine, checkpoint.player1LatchMask, 3, 0);
+        }
+
+        bool hasSecondPlayer = playLayer->m_player2 &&
+            (playLayer->m_gameState.m_isDualMode || playLayer->m_levelSettings->m_twoPlayerMode);
+        if (!hasSecondPlayer) {
+            return;
+        }
+
+        resumeCheckpointHold(playLayer->m_player2, engine, checkpoint.player2LatchMask, 1, 1);
+        if (playLayer->m_levelSettings->m_platformerMode) {
+            resumeCheckpointHold(playLayer->m_player2, engine, checkpoint.player2LatchMask, 2, 1);
+            resumeCheckpointHold(playLayer->m_player2, engine, checkpoint.player2LatchMask, 3, 1);
+        }
     }
 }
 
@@ -334,6 +389,7 @@ class $modify(MacroPlayLayer, PlayLayer) {
 
             PlayLayer::loadFromCheckpoint(checkpoint);
             CheckpointStateManager::restore(this, it->second);
+            restoreCheckpointHolds(this, engine, it->second);
             resetSimulationTimingState();
             return;
         }

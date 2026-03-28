@@ -15,25 +15,19 @@ namespace {
 
     static int computeCurrentTick() {
         auto* playLayer = PlayLayer::get();
-        if (!playLayer) {
-            return 0;
-        }
+        if (!playLayer) return 0;
 
         auto* engine = ReplayEngine::get();
         int tick = static_cast<int>(playLayer->m_gameState.m_levelTime * engine->runtimeTickRate());
-        tick++;
-        return std::max(0, tick);
+        return std::max(0, tick + 1);
     }
 
     static bool flipControls() {
         auto* playLayer = PlayLayer::get();
-        if (!playLayer) {
-            return GameManager::get()->getGameVariable("0010");
-        }
+        if (!playLayer) return GameManager::get()->getGameVariable("0010");
 
-        return playLayer->m_levelSettings->m_platformerMode
-            ? false
-            : GameManager::get()->getGameVariable("0010");
+        if (playLayer->m_levelSettings->m_platformerMode) return false;
+        return GameManager::get()->getGameVariable("0010");
     }
 
     static bool hasDualPlaybackContext(PlayLayer* playLayer) {
@@ -48,14 +42,15 @@ namespace {
         return layer && (layer->m_levelSettings->m_twoPlayerMode || layer->m_gameState.m_isDualMode);
     }
 
-    static bool matchesQueuedMacroCommand(
-        PlayerButtonCommand const& command,
-        ReplayEngine::QueuedMacroCommand const& queued
-    ) {
-        return static_cast<int>(command.m_button) == queued.button &&
-            command.m_isPush == queued.down &&
-            command.m_isPlayer2 == queued.player2 &&
-            std::abs(command.m_timestamp - queued.timestamp) <= kQueuedCommandMatchTolerance;
+    static bool isTrackedHoldButton(int button) {
+        return button >= 1 && button <= 3;
+    }
+
+    static bool matchesQueuedMacroCommand(PlayerButtonCommand const& command, ReplayEngine::QueuedMacroCommand const& queued) {
+        if (static_cast<int>(command.m_button) != queued.button) return false;
+        if (command.m_isPush != queued.down) return false;
+        if (command.m_isPlayer2 != queued.player2) return false;
+        return std::abs(command.m_timestamp - queued.timestamp) <= kQueuedCommandMatchTolerance;
     }
 }
 
@@ -176,11 +171,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
 
         int stepDelta = std::max(0, m_currentStep - engine->tickStartStep);
-        engine->beginStepTimingWindow(
-            InputTiming::nowMicros(),
-            static_cast<double>(dt) * 1'000'000.0,
-            newTick
-        );
+        engine->beginStepTimingWindow(InputTiming::nowMicros(), static_cast<double>(dt) * 1'000'000.0, newTick);
 
         if (engine->engineMode != MODE_DISABLED) {
             if (tick > 2 && engine->initialRun && engine->hasMacro()) {
@@ -195,9 +186,8 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
             if (engine->lastTickIndex == tick && tick != 0 && engine->hasMacro()) {
                 bool repeatedTimedSlice = timedPlayback && engine->lastStepDelta == stepDelta;
-                if (!timedPlayback || repeatedTimedSlice) {
+                if (!timedPlayback || repeatedTimedSlice)
                     return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
-                }
             }
         }
 
@@ -502,11 +492,16 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
 
         int tick = computeCurrentTick();
+        bool resumedPlayer2 = keepSecondPlayerSlot(this) ? player2 : false;
+        int resumedSlot = resumedPlayer2 ? 1 : 0;
         int playerIndex = deferredSlotForPlayer(m_levelSettings->m_twoPlayerMode, player2);
         bool delayedInputQueued = engine->deferredInputTick[playerIndex] != -1;
         bool delayedReleaseQueued = engine->deferredReleaseA[playerIndex] != -1;
 
         if ((delayedInputQueued || engine->skipActionTick == tick || delayedReleaseQueued) && button == 1) {
+            if (hold && engine->isCheckpointHoldResumed(resumedSlot, button)) {
+                return;
+            }
             if (engine->skipActionTick >= tick) {
                 engine->deferredInputTick[playerIndex] = engine->skipActionTick + 1;
             }
@@ -517,10 +512,25 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
             return GJBaseGameLayer::handleButton(hold, button, player2);
         }
 
+        bool recordPlayer2 = player2;
+        if (!keepSecondPlayerSlot(this)) {
+            recordPlayer2 = false;
+        }
+
+        int recordSlot = recordPlayer2 ? 1 : 0;
+        PlayerObject* targetPlayer = recordPlayer2 ? m_player2 : m_player1;
+        bool trackHoldTransition = isTrackedHoldButton(button) && targetPlayer;
+        bool wasHeld = trackHoldTransition ? targetPlayer->m_holdingButtons[button] : false;
+
         GJBaseGameLayer::handleButton(hold, button, player2);
 
-        if (!keepSecondPlayerSlot(this)) {
-            player2 = false;
+        if (trackHoldTransition && !hold && wasHeld && engine->isCheckpointHoldResumed(recordSlot, button)) {
+            engine->setCheckpointHoldResumed(recordSlot, button, false);
+        }
+
+        bool realTransition = !trackHoldTransition || (hold ? !wasHeld : wasHeld);
+        if (!realTransition) {
+            return;
         }
 
         if (!engine->captureIgnored && !engine->simulatingPath && !m_player1->m_isDead) {
@@ -539,16 +549,16 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
                 if (!usesTimedAccuracy(engine->activeTTR->accuracyMode)) {
                     stepOffset = 0.0f;
                 }
-                engine->activeTTR->recordAction(recordTick, button, player2, hold, stepOffset);
+                engine->activeTTR->recordAction(recordTick, button, recordPlayer2, hold, stepOffset);
             } else if (engine->activeMacro) {
                 if (!usesTimedAccuracy(engine->activeMacro->accuracyMode)) {
                     stepOffset = 0.0f;
                 }
-                engine->activeMacro->recordAction(recordTick, button, player2, hold, stepOffset);
+                engine->activeMacro->recordAction(recordTick, button, recordPlayer2, hold, stepOffset);
             }
 
             engine->macroInputActive = true;
-            engine->triggerAudio(player2, button, hold);
+            engine->triggerAudio(recordPlayer2, button, hold);
         }
     }
 };

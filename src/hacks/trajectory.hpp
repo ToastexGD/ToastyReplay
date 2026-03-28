@@ -92,6 +92,61 @@ struct TrajectoryCollisionState {
     bool isOnGround4;
     double fallSpeed;
     bool maybeColliding;
+    double collidedTopMinY;
+    double collidedBottomMaxY;
+    double collidedLeftMaxX;
+    double collidedRightMinX;
+    double yVelocityRelated;
+    double scaleXRelated2;
+};
+
+struct TrajectoryDynamicsState {
+    double gravity;
+    double yStart;
+    double speedMultiplier;
+    double accelerationOrSpeed;
+    double snapDistance;
+    double physDeltaRelated;
+    double blackOrbRelated;
+    double platformerXVelocity;
+    double lastLandTime;
+    double gameModeChangedTime;
+    double lastJumpTime;
+    double lastFlipTime;
+    double lastSpiderFlipTime;
+    double dashX;
+    double dashY;
+    double dashAngle;
+    double dashStartTime;
+    float rotationSpeed;
+    float xVelocityRelated;
+    float xVelocityRelated2;
+    CCPoint shipRotation;
+    CCPoint lastGroundedPos;
+    GameObject* objectSnappedTo;
+    bool jumpBuffered;
+    bool wasJumpBuffered;
+    bool wasRobotJump;
+    unsigned char stateJumpBuffered;
+    bool stateRingJump;
+    bool stateRingJump2;
+    bool touchedGravityPortal;
+    bool isAccelerating;
+    bool isOnIce;
+    bool affectedByForces;
+    int stateOnGround;
+    int stateBoostX;
+    int stateBoostY;
+    int stateForce;
+    CCPoint stateForceVector;
+    int maybeStateForce2;
+    int stateScale;
+    int stateNoAutoJump;
+    int stateDartSlide;
+    int stateHitHead;
+    int stateFlipGravity;
+    unsigned char stateNoStickX;
+    unsigned char stateNoStickY;
 };
 
 struct PlayerStateCapsule {
@@ -100,6 +155,7 @@ struct PlayerStateCapsule {
     TrajectoryInteractionState interaction;
     TrajectorySlopeState slope;
     TrajectoryCollisionState collision;
+    TrajectoryDynamicsState dynamics;
 };
 
 struct PredictionWatchKey {

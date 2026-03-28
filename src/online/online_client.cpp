@@ -1,70 +1,117 @@
 #include "online/online_client.hpp"
 #include "ToastyReplay.hpp"
-#include <Geode/modify/AppDelegate.hpp>
+#include "audio/clicksounds.hpp"
+
+#include <Geode/loader/GameEvent.hpp>
+#include <Geode/utils/string.hpp>
+
+#include <filesystem>
 #include <random>
-#include <thread>
+#include <system_error>
 
 using namespace geode::prelude;
 
-std::atomic<bool> OnlineClient::alive{true};
+namespace {
+    constexpr char BASE64_TABLE[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-void OnlineClient::shutdown() {
-    alive = false;
-    auto* client = get();
-    if (client->avatarTexture) {
-        client->avatarTexture->release();
-        client->avatarTexture = nullptr;
+    std::string base64Encode(std::vector<uint8_t> const& data) {
+        std::string out;
+        out.reserve(((data.size() + 2) / 3) * 4);
+
+        for (size_t i = 0; i < data.size(); i += 3) {
+            uint32_t n = static_cast<uint32_t>(data[i]) << 16;
+            if (i + 1 < data.size()) n |= static_cast<uint32_t>(data[i + 1]) << 8;
+            if (i + 2 < data.size()) n |= static_cast<uint32_t>(data[i + 2]);
+
+            out.push_back(BASE64_TABLE[(n >> 18) & 0x3F]);
+            out.push_back(BASE64_TABLE[(n >> 12) & 0x3F]);
+            out.push_back(i + 1 < data.size() ? BASE64_TABLE[(n >> 6) & 0x3F] : '=');
+            out.push_back(i + 2 < data.size() ? BASE64_TABLE[n & 0x3F] : '=');
+        }
+
+        return out;
     }
-    client->avatarLoaded = false;
+
+    std::string summarizeErrorResponse(web::WebResponse const& res, std::string_view fallback) {
+        if (res.code() == 429) {
+            return "Rate limited. Try again later.";
+        }
+
+        auto json = res.json();
+        if (json.isOk() && json.unwrap().contains("error")) {
+            return json.unwrap()["error"].asString().unwrapOr(std::string(fallback));
+        }
+
+        std::string message = std::string(fallback) + " (HTTP " + std::to_string(res.code()) + ")";
+        if (res.code() >= 500) {
+            message += ". Backend server error.";
+        }
+        return message;
+    }
+
+    std::filesystem::path avatarCachePath() {
+        return Mod::get()->getSaveDir() / "cache" / "discord-avatar.png";
+    }
+
+    std::string avatarCacheKey(std::filesystem::path const& path) {
+        return geode::utils::string::pathToString(path);
+    }
 }
 
-class $modify(OnlineAppDelegate, AppDelegate) {
-    void trySaveGame(bool p0) {
-        OnlineClient::shutdown();
-        AppDelegate::trySaveGame(p0);
-    }
+struct OnlineClientImpl {
+    geode::async::TaskHolder<web::WebResponse> avatarTask;
+    geode::async::TaskHolder<web::WebResponse> issueTask;
+    geode::async::TaskHolder<web::WebResponse> uploadTask;
+    geode::async::TaskHolder<web::WebResponse> authTask;
 };
 
-static const char BASE64_TABLE[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+std::atomic<bool> OnlineClient::alive{true};
 
-static std::string base64Encode(const std::vector<uint8_t>& data) {
-    std::string out;
-    out.reserve(((data.size() + 2) / 3) * 4);
+OnlineClient::OnlineClient() : m_impl(std::make_unique<OnlineClientImpl>()) {}
+OnlineClient::~OnlineClient() = default;
 
-    for (size_t i = 0; i < data.size(); i += 3) {
-        uint32_t n = static_cast<uint32_t>(data[i]) << 16;
-        if (i + 1 < data.size()) n |= static_cast<uint32_t>(data[i + 1]) << 8;
-        if (i + 2 < data.size()) n |= static_cast<uint32_t>(data[i + 2]);
+void OnlineClient::releaseAvatarTexture() {
+    if (!avatarTexture) return;
 
-        out.push_back(BASE64_TABLE[(n >> 18) & 0x3F]);
-        out.push_back(BASE64_TABLE[(n >> 12) & 0x3F]);
-        out.push_back((i + 1 < data.size()) ? BASE64_TABLE[(n >> 6) & 0x3F] : '=');
-        out.push_back((i + 2 < data.size()) ? BASE64_TABLE[n & 0x3F] : '=');
-    }
-    return out;
+    avatarTexture->release();
+    avatarTexture = nullptr;
 }
 
-static std::string summarizeErrorResponse(web::WebResponse const& res, std::string_view fallback) {
-    if (res.code() == 429) {
-        return "Rate limited. Try again later.";
-    }
+void OnlineClient::shutdown() {
+    auto* client = get();
+    if (!alive.exchange(false)) return;
 
-    auto json = res.json();
-    if (json.isOk() && json.unwrap().contains("error")) {
-        return json.unwrap()["error"].asString().unwrapOr(std::string(fallback));
-    }
+    client->m_impl->avatarTask.cancel();
+    client->m_impl->issueTask.cancel();
+    client->m_impl->uploadTask.cancel();
+    client->m_impl->authTask.cancel();
 
-    std::string message = std::string(fallback) + " (HTTP " + std::to_string(res.code()) + ")";
-    if (res.code() >= 500) {
-        message += ". Backend server error.";
-    }
+    client->authPolling = false;
+    client->authPollTimer = 0.0f;
 
-    return message;
+    client->issueState = IDLE;
+    client->issueResultMsg.clear();
+    client->issueResultTimer = 0.0f;
+
+    client->uploadState = IDLE;
+    client->uploadResultMsg.clear();
+    client->uploadResultTimer = 0.0f;
+
+    client->avatarLoading = false;
+    client->avatarLoaded = false;
+    client->releaseAvatarTexture();
+}
+
+$on_mod(Loaded) {
+    GameEvent(GameEventType::Exiting).listen([] {
+        OnlineClient::shutdown();
+        ClickSoundManager::get()->shutdown();
+    }, 50).leak();
 }
 
 void OnlineClient::generateSessionCode() {
-    static const char HEX[] = "0123456789abcdef";
+    static constexpr char HEX[] = "0123456789abcdef";
+
     std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<int> dist(0, 15);
 
@@ -84,6 +131,8 @@ void OnlineClient::save() {
 }
 
 void OnlineClient::load() {
+    alive = true;
+
     auto* mod = Mod::get();
     sessionCode = mod->getSavedValue<std::string>("online_session_code", "");
     discordUsername = mod->getSavedValue<std::string>("online_discord_username", "");
@@ -102,94 +151,115 @@ std::string OnlineClient::getApiBase() const {
 
 std::string OnlineClient::getAvatarUrl() const {
     if (!discordAvatar.empty() && !discordId.empty()) {
-        std::string ext = (discordAvatar.rfind("a_", 0) == 0) ? ".gif" : ".png";
-        return "https://cdn.discordapp.com/avatars/" + discordId + "/" + discordAvatar + ext + "?size=128";
+        return "https://cdn.discordapp.com/avatars/" + discordId + "/" + discordAvatar + ".png?size=128";
     }
-    if (!discordId.empty()) {
+
+    if (discordId.empty()) {
+        return "";
+    }
+
+    try {
         uint64_t id = std::stoull(discordId);
         int index = static_cast<int>((id >> 22) % 6);
         return "https://cdn.discordapp.com/embed/avatars/" + std::to_string(index) + ".png";
+    } catch (...) {
+        log::warn("Invalid Discord ID stored for avatar lookup: {}", discordId);
+        return "";
     }
-    return "";
 }
 
 void OnlineClient::fetchAvatar() {
-    std::string url = getAvatarUrl();
-    if (url.empty()) return;
+    if (avatarLoading) return;
+
+    auto url = getAvatarUrl();
+    if (url.empty()) {
+        avatarLoading = false;
+        avatarLoaded = false;
+        releaseAvatarTexture();
+        return;
+    }
 
     avatarLoading = true;
 
-    std::thread([this, url]() {
-        auto req = web::WebRequest();
-        auto res = req.getSync(url);
+    m_impl->avatarTask.spawn("ToastyReplay Avatar", web::WebRequest().get(url), [this](web::WebResponse res) {
+        avatarLoading = false;
+        if (!alive) return;
 
-        if (res.ok()) {
-            auto& bytes = res.data();
-
-            Loader::get()->queueInMainThread([this, bytes = std::move(bytes)]() {
-                if (!alive) return;
-                auto* image = new cocos2d::CCImage();
-                if (image->initWithImageData(const_cast<uint8_t*>(bytes.data()), bytes.size())) {
-                    auto* texture = new cocos2d::CCTexture2D();
-                    if (texture->initWithImage(image)) {
-                        if (avatarTexture) avatarTexture->release();
-                        avatarTexture = texture;
-                        avatarLoaded = true;
-                    } else {
-                        texture->release();
-                    }
-                }
-                image->release();
-                avatarLoading = false;
-            });
-        } else {
-            Loader::get()->queueInMainThread([this]() {
-                if (!alive) return;
-                avatarLoading = false;
-            });
+        if (!res.ok()) {
+            avatarLoaded = false;
+            releaseAvatarTexture();
+            return;
         }
-    }).detach();
+
+        auto cachePath = avatarCachePath();
+        std::error_code ec;
+        std::filesystem::create_directories(cachePath.parent_path(), ec);
+        if (ec) {
+            avatarLoaded = false;
+            releaseAvatarTexture();
+            return;
+        }
+
+        auto writeResult = res.into(cachePath);
+        if (!writeResult) {
+            avatarLoaded = false;
+            releaseAvatarTexture();
+            return;
+        }
+
+        auto cacheKey = avatarCacheKey(cachePath);
+        auto* cache = cocos2d::CCTextureCache::get();
+        cache->removeTextureForKey(cacheKey.c_str());
+
+        auto* texture = cache->addImage(cacheKey.c_str(), false);
+        if (!texture) {
+            avatarLoaded = false;
+            releaseAvatarTexture();
+            return;
+        }
+
+        texture->retain();
+        releaseAvatarTexture();
+        avatarTexture = texture;
+        avatarLoaded = true;
+    });
 }
 
-void OnlineClient::submitIssue(const std::string& title, const std::string& description) {
+void OnlineClient::submitIssue(std::string const& title, std::string const& description) {
     if (issueState == PENDING) return;
+
     issueState = PENDING;
     issueResultMsg = "Submitting...";
 
-    std::string titleCopy = title;
-    std::string descCopy = description;
-    std::string code = sessionCode;
+    web::WebRequest req;
+    req.header("Content-Type", "application/json");
 
-    std::thread([this, titleCopy, descCopy, code]() {
-        auto req = web::WebRequest();
-        req.header("Content-Type", "application/json");
+    matjson::Value body;
+    body["title"] = title;
+    body["description"] = description;
+    if (!sessionCode.empty()) {
+        body["session_code"] = sessionCode;
+    }
+    req.bodyJSON(body);
 
-        matjson::Value body;
-        body["title"] = titleCopy;
-        body["description"] = descCopy;
-        if (!code.empty()) {
-            body["session_code"] = code;
+    m_impl->issueTask.spawn("ToastyReplay Submit Issue", req.post(getApiBase() + "/submit-issue"), [this](web::WebResponse res) {
+        if (!alive) return;
+
+        if (res.ok()) {
+            issueState = SUCCESS;
+            issueResultMsg = "Issue submitted successfully!";
+        } else {
+            issueState = RSERROR;
+            issueResultMsg = summarizeErrorResponse(res, "Issue submission failed");
         }
-        req.bodyJSON(body);
 
-        auto res = req.postSync(getApiBase() + "/submit-issue");
-
-        Loader::get()->queueInMainThread([this, res = std::move(res)]() {
-            if (!alive) return;
-            if (res.ok()) {
-                issueState = SUCCESS;
-                issueResultMsg = "Issue submitted successfully!";
-            } else {
-                issueState = RSERROR;
-                issueResultMsg = summarizeErrorResponse(res, "Issue submission failed");
-            }
-            issueResultTimer = 5.0f;
-        });
-    }).detach();
+        issueResultTimer = 5.0f;
+    });
 }
 
-void OnlineClient::uploadMacro(const std::string& macroName, const std::string& comment) {
+void OnlineClient::uploadMacro(std::string const& macroName, std::string const& comment) {
     if (uploadState == PENDING) return;
+
     uploadState = PENDING;
     uploadResultMsg = "Uploading...";
 
@@ -206,7 +276,7 @@ void OnlineClient::uploadMacro(const std::string& macroName, const std::string& 
     std::string filename;
 
     if (isTTR) {
-        TTRMacro* macro = TTRMacro::loadFromDisk(macroName);
+        auto* macro = TTRMacro::loadFromDisk(macroName);
         if (!macro) {
             uploadState = RSERROR;
             uploadResultMsg = "Failed to load macro file.";
@@ -224,7 +294,7 @@ void OnlineClient::uploadMacro(const std::string& macroName, const std::string& 
         filename = macroName + ".ttr";
         delete macro;
     } else {
-        MacroSequence* macro = MacroSequence::loadFromDisk(macroName);
+        auto* macro = MacroSequence::loadFromDisk(macroName);
         if (!macro) {
             uploadState = RSERROR;
             uploadResultMsg = "Failed to load macro file.";
@@ -244,52 +314,47 @@ void OnlineClient::uploadMacro(const std::string& macroName, const std::string& 
     }
 
     if (levelName.empty()) levelName = macroName;
-    if (tps <= 0) tps = 240.0;
+    if (tps <= 0.0) tps = 240.0;
 
-    std::string code = sessionCode;
-    std::string b64Data = fileData.empty() ? "" : base64Encode(fileData);
+    web::WebRequest req;
+    req.header("Content-Type", "application/json");
 
-    std::string uploadComment = comment;
+    matjson::Value body;
+    body["level_name"] = levelName;
+    body["level_id"] = levelId;
+    body["tps"] = tps;
+    body["action_count"] = actionCount;
+    body["frame_count"] = frameCount;
+    body["duration_seconds"] = durationSeconds;
+    body["filename"] = filename;
 
-    std::thread([this, levelName, levelId, tps, actionCount, frameCount, durationSeconds, filename, code, b64Data, uploadComment]() {
-        auto req = web::WebRequest();
-        req.header("Content-Type", "application/json");
+    if (!sessionCode.empty()) {
+        body["session_code"] = sessionCode;
+    }
 
-        matjson::Value body;
-        body["level_name"] = levelName;
-        body["level_id"] = levelId;
-        body["tps"] = tps;
-        body["action_count"] = actionCount;
-        body["frame_count"] = frameCount;
-        body["duration_seconds"] = durationSeconds;
-        body["filename"] = filename;
+    auto b64Data = fileData.empty() ? std::string() : base64Encode(fileData);
+    if (!b64Data.empty()) {
+        body["macro_data"] = b64Data;
+    }
+    if (!comment.empty()) {
+        body["comment"] = comment;
+    }
 
-        if (!code.empty()) {
-            body["session_code"] = code;
+    req.bodyJSON(body);
+
+    m_impl->uploadTask.spawn("ToastyReplay Upload Macro", req.post(getApiBase() + "/upload-macro"), [this](web::WebResponse res) {
+        if (!alive) return;
+
+        if (res.ok()) {
+            uploadState = SUCCESS;
+            uploadResultMsg = "Macro uploaded successfully!";
+        } else {
+            uploadState = RSERROR;
+            uploadResultMsg = summarizeErrorResponse(res, "Macro upload failed");
         }
-        if (!b64Data.empty()) {
-            body["macro_data"] = b64Data;
-        }
-        if (!uploadComment.empty()) {
-            body["comment"] = uploadComment;
-        }
 
-        req.bodyJSON(body);
-
-        auto res = req.postSync(getApiBase() + "/upload-macro");
-
-        Loader::get()->queueInMainThread([this, res = std::move(res)]() {
-            if (!alive) return;
-            if (res.ok()) {
-                uploadState = SUCCESS;
-                uploadResultMsg = "Macro uploaded successfully!";
-            } else {
-                uploadState = RSERROR;
-                uploadResultMsg = summarizeErrorResponse(res, "Macro upload failed");
-            }
-            uploadResultTimer = 5.0f;
-        });
-    }).detach();
+        uploadResultTimer = 5.0f;
+    });
 }
 
 void OnlineClient::startAuthFlow() {
@@ -298,7 +363,7 @@ void OnlineClient::startAuthFlow() {
         save();
     }
 
-    std::string url = getApiBase() + "/auth/login?code=" + sessionCode;
+    auto url = getApiBase() + "/auth/login?code=" + sessionCode;
     geode::utils::web::openLinkInBrowser(url);
 
     authPolling = true;
@@ -306,49 +371,52 @@ void OnlineClient::startAuthFlow() {
 }
 
 void OnlineClient::pollAuthStatus() {
-    std::string code = sessionCode;
+    if (sessionCode.empty() || m_impl->authTask.isPending()) {
+        return;
+    }
 
-    std::thread([this, code]() {
-        auto req = web::WebRequest();
-        auto res = req.getSync(getApiBase() + "/auth/status?code=" + code);
+    auto code = sessionCode;
+    m_impl->authTask.spawn("ToastyReplay Auth Poll", web::WebRequest().get(getApiBase() + "/auth/status?code=" + code), [this](web::WebResponse res) {
+        if (!alive || !authPolling) return;
+        if (!res.ok()) return;
 
-        Loader::get()->queueInMainThread([this, res = std::move(res)]() {
-            if (!alive) return;
-            if (res.ok()) {
-                auto json = res.json();
-                if (json.isOk()) {
-                    auto& data = json.unwrap();
-                    auto status = data["status"].asString().unwrapOr("");
-                    if (status == "linked") {
-                        discordUsername = data["discord_username"].asString().unwrapOr("");
-                        discordId = data["discord_id"].asString().unwrapOr("");
-                        discordAvatar = data["discord_avatar"].asString().unwrapOr("");
-                        authPolling = false;
-                        save();
-                        fetchAvatar();
-                    }
-                }
-            }
-        });
-    }).detach();
+        auto json = res.json();
+        if (!json.isOk()) return;
+
+        auto& data = json.unwrap();
+        auto status = data["status"].asString().unwrapOr("");
+        if (status != "linked") {
+            return;
+        }
+
+        discordUsername = data["discord_username"].asString().unwrapOr("");
+        discordId = data["discord_id"].asString().unwrapOr("");
+        discordAvatar = data["discord_avatar"].asString().unwrapOr("");
+        authPolling = false;
+        authPollTimer = 0.0f;
+        save();
+        fetchAvatar();
+    });
 }
 
 void OnlineClient::stopAuthPolling() {
     authPolling = false;
     authPollTimer = 0.0f;
+    m_impl->authTask.cancel();
 }
 
 void OnlineClient::unlinkAccount() {
+    stopAuthPolling();
+    m_impl->avatarTask.cancel();
+
     discordUsername.clear();
     discordId.clear();
     discordAvatar.clear();
     sessionCode.clear();
-    authPolling = false;
-    if (avatarTexture) {
-        avatarTexture->release();
-        avatarTexture = nullptr;
-    }
+
+    avatarLoading = false;
     avatarLoaded = false;
+    releaseAvatarTexture();
     save();
 }
 

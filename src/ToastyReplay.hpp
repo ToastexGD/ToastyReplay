@@ -126,6 +126,7 @@ public:
     int deferredReleaseA[2] = { -1, -1 };
     int deferredInputTick[2] = { -1, -1 };
     int deferredReleaseB[2][2] = { { -1, -1 }, { -1, -1 } };
+    std::array<std::array<bool, 3>, 2> checkpointResumedHolds = {};
     bool activeButtons[6] = { false, false, false, false, false, false };
     bool priorButtonState[6] = { false, false, false, false, false, false };
     bool lateralInputPending[2] = { false, false };
@@ -168,68 +169,62 @@ public:
         cbfMacros.clear();
         ttrMacros.clear();
         auto directory = geode::prelude::Mod::get()->getSaveDir() / "replays";
-        if (!std::filesystem::exists(directory)) {
+        std::error_code ec;
+        if (!std::filesystem::exists(directory, ec) || ec) {
             return;
         }
 
-        for (auto& entry : std::filesystem::directory_iterator(directory)) {
-            if (!entry.is_regular_file()) {
+        auto markIncompatible = [&](std::string const& stem) {
+            storedMacros.push_back(stem);
+            incompatibleMacros.insert(stem);
+        };
+
+        for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file()) {
                 continue;
             }
 
-            std::string stem = entry.path().stem().string();
-            auto extension = entry.path().extension();
+            auto path = it->path();
+            auto stem = path.stem().string();
+            auto extension = path.extension();
 
             if (extension == ".ttr") {
-                std::ifstream input(entry.path(), std::ios::binary);
-                if (!input.is_open()) {
-                    storedMacros.push_back(stem);
-                    incompatibleMacros.insert(stem);
+                auto bytes = ReplayStorage::readReplayBytes(path);
+                if (!bytes || bytes->size() < 10) {
+                    markIncompatible(stem);
                     continue;
                 }
 
-                char header[10] = {};
-                input.read(header, 10);
-                input.close();
+                auto const& header = *bytes;
                 if (header[0] == 'T' && header[1] == 'T' && header[2] == 'R' && header[3] == '\0') {
                     storedMacros.push_back(stem);
                     ttrMacros.insert(stem);
                     uint32_t flags = 0;
-                    std::memcpy(&flags, header + 6, sizeof(uint32_t));
+                    std::memcpy(&flags, header.data() + 6, sizeof(uint32_t));
                     if ((flags & TTR_FLAG_ACCURACY_CBF) != 0) {
                         cbfMacros.insert(stem);
                     } else if ((flags & TTR_FLAG_ACCURACY_CBS) != 0) {
                         cbsMacros.insert(stem);
                     }
                 } else {
-                    storedMacros.push_back(stem);
-                    incompatibleMacros.insert(stem);
+                    markIncompatible(stem);
                 }
                 continue;
             }
 
             if (extension != ".gdr") {
-                storedMacros.push_back(stem);
-                incompatibleMacros.insert(stem);
+                markIncompatible(stem);
                 continue;
             }
 
-            std::ifstream input(entry.path(), std::ios::binary);
-            if (!input.is_open()) {
-                storedMacros.push_back(stem);
-                incompatibleMacros.insert(stem);
+            auto bytes = ReplayStorage::readReplayBytes(path);
+            if (!bytes) {
+                markIncompatible(stem);
                 continue;
             }
-
-            input.seekg(0, std::ios::end);
-            auto fileSize = input.tellg();
-            input.seekg(0, std::ios::beg);
-            std::vector<uint8_t> bytes(static_cast<size_t>(fileSize));
-            input.read(reinterpret_cast<char*>(bytes.data()), fileSize);
-            input.close();
 
             try {
-                MacroSequence temp = MacroSequence::importData(bytes);
+                MacroSequence temp = MacroSequence::importData(*bytes);
                 storedMacros.push_back(stem);
                 if (temp.accuracyMode == AccuracyMode::CBF) {
                     cbfMacros.insert(stem);
@@ -237,9 +232,12 @@ public:
                     cbsMacros.insert(stem);
                 }
             } catch (...) {
-                storedMacros.push_back(stem);
-                incompatibleMacros.insert(stem);
+                markIncompatible(stem);
             }
+        }
+
+        if (ec) {
+            log::warn("Failed while scanning replay directory {}: {}", directory.string(), ec.message());
         }
     }
 
@@ -534,6 +532,32 @@ public:
         rng.locked = rngLocked;
         rng.seed = rngSeedVal;
         return rng;
+    }
+
+    void clearCheckpointResumedHolds() {
+        for (auto& playerHolds : checkpointResumedHolds) {
+            playerHolds.fill(false);
+        }
+    }
+
+    bool isCheckpointHoldResumed(int playerSlot, int button) const {
+        if (playerSlot < 0 || playerSlot >= static_cast<int>(checkpointResumedHolds.size())) {
+            return false;
+        }
+        if (button < 1 || button > 3) {
+            return false;
+        }
+        return checkpointResumedHolds[playerSlot][static_cast<size_t>(button - 1)];
+    }
+
+    void setCheckpointHoldResumed(int playerSlot, int button, bool resumed) {
+        if (playerSlot < 0 || playerSlot >= static_cast<int>(checkpointResumedHolds.size())) {
+            return;
+        }
+        if (button < 1 || button > 3) {
+            return;
+        }
+        checkpointResumedHolds[playerSlot][static_cast<size_t>(button - 1)] = resumed;
     }
 
     Renderer renderer;

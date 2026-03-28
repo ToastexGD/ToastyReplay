@@ -4,8 +4,6 @@
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
-#include <array>
-
 using namespace geode::prelude;
 
 namespace {
@@ -89,11 +87,16 @@ namespace {
             case GameObjectType::CollisionObject:
                 return true;
             case GameObjectType::Modifier:
-                return object->m_objectID == 200
-                    || object->m_objectID == 201
-                    || object->m_objectID == 202
-                    || object->m_objectID == 203
-                    || object->m_objectID == 1334;
+                switch (object->m_objectID) {
+                    case 200:
+                    case 201:
+                    case 202:
+                    case 203:
+                    case 1334:
+                        return true;
+                    default:
+                        return false;
+                }
             default:
                 return false;
         }
@@ -132,11 +135,10 @@ namespace {
     }
 
     LayoutDisposition classifyObject(GameObject* object) {
-        auto behaviorDisposition = classifyByBehavior(object);
-        if (behaviorDisposition != LayoutDisposition::Visible) {
-            return behaviorDisposition;
+        auto disposition = classifyByBehavior(object);
+        if (disposition != LayoutDisposition::Visible) {
+            return disposition;
         }
-
         return classifyByFallbackCatalog(object);
     }
 

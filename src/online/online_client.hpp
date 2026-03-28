@@ -3,14 +3,20 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/utils/web.hpp>
-#include <string>
 #include <atomic>
+#include <memory>
+#include <string>
 
 using namespace geode::prelude;
+
+struct OnlineClientImpl;
 
 class OnlineClient {
 public:
     static constexpr const char* DEFAULT_API_BASE = "http://50.21.191.142:3000";
+
+    OnlineClient();
+    ~OnlineClient();
 
     std::string sessionCode;
     std::string discordUsername;
@@ -61,7 +67,9 @@ public:
     static void shutdown();
 
 private:
+    std::unique_ptr<OnlineClientImpl> m_impl;
     void generateSessionCode();
+    void releaseAvatarTexture();
 };
 
 #endif

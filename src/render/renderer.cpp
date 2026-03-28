@@ -703,6 +703,20 @@ void Renderer::start() {
         watermarkLabel->retain();
     }
 
+    if (progressLabel) {
+        progressLabel->removeFromParentAndCleanup(true);
+        progressLabel = nullptr;
+    }
+    {
+        progressLabel = cocos2d::CCLabelBMFont::create("Rendering... 0%", "goldFont.fnt");
+        progressLabel->setPosition(ccp(ogRes.width / 2.0f, ogRes.height - 20.0f));
+        progressLabel->setScale(0.55f);
+        progressLabel->setOpacity(200);
+        progressLabel->setZOrder(9999);
+        auto* scene = cocos2d::CCDirector::sharedDirector()->getRunningScene();
+        if (scene) scene->addChild(progressLabel);
+    }
+
     if (!pl->m_levelEndAnimationStarted && pl->m_isPaused) {
         if (engine->engineMode == MODE_EXECUTE && engine->hasMacro()) {
         } else if (engine->engineMode == MODE_CAPTURE) {
@@ -1180,12 +1194,27 @@ void Renderer::stop(int frame) {
         watermarkLabel->release();
         watermarkLabel = nullptr;
     }
+    if (progressLabel) {
+        progressLabel->removeFromParentAndCleanup(true);
+        progressLabel = nullptr;
+    }
 }
 
 void Renderer::handleRecording(PlayLayer* pl, int frame) {
     if (!pl) return stop(frame);
     isPlatformer = pl->m_levelSettings->m_platformerMode;
-    if (dontRender || pl->m_player1->m_isDead) return;
+    if (dontRender) return;
+
+    if (progressLabel) {
+        int pct = pl->getCurrentPercentInt();
+        progressLabel->setString(fmt::format("Rendering... {}%", pct).c_str());
+    }
+
+    if (!pl->m_player1 || pl->m_player1->m_isDead) {
+        log::info("Stopping render because the player died at frame {}", frame);
+        stop(frame);
+        return;
+    }
 
     if (renderedFrames.contains(frame) && frame > 10)
         return;

@@ -5,11 +5,17 @@
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
-#include <thread>
 #include <chrono>
+#include <unordered_map>
 
 using namespace geode::prelude;
+
+namespace {
+    FMOD::System* getAudioSystem() {
+        auto* audio = FMODAudioEngine::sharedEngine();
+        return audio ? audio->m_system : nullptr;
+    }
+}
 
 ClickSoundManager* ClickSoundManager::get() {
     static ClickSoundManager* instance = new ClickSoundManager();
@@ -29,9 +35,12 @@ std::filesystem::path ClickSoundManager::getClicksP2Dir() const {
 }
 
 void ClickSoundManager::ensureChannelGroup() {
-    if (!channelGroup) {
-        FMODAudioEngine::sharedEngine()->m_system->createChannelGroup("ClickSounds", &channelGroup);
-    }
+    if (channelGroup) return;
+
+    auto* system = getAudioSystem();
+    if (!system) return;
+
+    system->createChannelGroup("ClickSounds", &channelGroup);
 }
 
 void ClickSoundManager::scanClickPacks() {
@@ -71,12 +80,7 @@ struct ResolvedClickSound {
     float volume = 0.0f;
 };
 
-static std::vector<float> resampleInterleavedAudio(
-    std::vector<float> const& input,
-    int channels,
-    int sourceRate,
-    int targetRate
-) {
+static std::vector<float> resampleInterleavedAudio(std::vector<float> const& input, int channels, int sourceRate, int targetRate) {
     if (input.empty() || channels <= 0 || sourceRate <= 0 || targetRate <= 0 || sourceRate == targetRate) {
         return input;
     }
@@ -114,12 +118,7 @@ static std::string pickRandomFileWithRng(const std::vector<std::string>& files, 
 }
 
 template <class Rng>
-static ResolvedClickSound resolveClickSound(
-    const ClickPack& pack,
-    bool pressed,
-    float softness,
-    Rng& rng
-) {
+static ResolvedClickSound resolveClickSound(const ClickPack& pack, bool pressed, float softness, Rng& rng) {
     std::uniform_real_distribution<float> softDist(0.0f, 1.0f);
 
     if (pressed) {
@@ -217,7 +216,7 @@ FMOD::Sound* ClickSoundManager::getCachedSound(const std::string& path) {
     auto it = soundCache.find(path);
     if (it != soundCache.end()) return it->second;
 
-    auto* system = FMODAudioEngine::sharedEngine()->m_system;
+    auto* system = getAudioSystem();
     if (!system) return nullptr;
 
     FMOD::Sound* sound = nullptr;
@@ -240,12 +239,16 @@ void ClickSoundManager::clearSoundCache() {
 
 void ClickSoundManager::playFile(const std::string& path, float volume) {
     if (path.empty() || volume <= 0.0f) return;
-    ensureChannelGroup();
 
-    FMOD::Sound* sound = getCachedSound(path);
+    ensureChannelGroup();
+    if (!channelGroup) return;
+
+    auto* system = getAudioSystem();
+    if (!system) return;
+
+    auto* sound = getCachedSound(path);
     if (!sound) return;
 
-    auto* system = FMODAudioEngine::sharedEngine()->m_system;
     FMOD::Channel* channel = nullptr;
     system->playSound(sound, channelGroup, true, &channel);
     if (channel) {
@@ -258,9 +261,11 @@ void ClickSoundManager::playResolvedClick(bool pressed, bool isPlayer2) {
     if (!enabled) return;
 
     auto* playLayer = PlayLayer::get();
-    bool trueTwoPlayerMode = playLayer &&
-        playLayer->m_levelSettings &&
-        playLayer->m_levelSettings->m_twoPlayerMode;
+    bool trueTwoPlayerMode = false;
+    if (playLayer && playLayer->m_levelSettings) {
+        trueTwoPlayerMode = playLayer->m_levelSettings->m_twoPlayerMode;
+    }
+
     ClickPack& pack = shouldUseP2Pack(isPlayer2, trueTwoPlayerMode) ? p2Pack : p1Pack;
     if (pack.empty()) return;
 
@@ -320,16 +325,28 @@ void ClickSoundManager::clearPendingClicks() {
     pendingClicks.clear();
 }
 
+void ClickSoundManager::shutdown() {
+    clearSoundCache();
+    decodedClickCache.clear();
+
+    if (channelGroup) {
+        channelGroup->release();
+        channelGroup = nullptr;
+    }
+}
+
 void ClickSoundManager::startBackgroundNoise() {
     stopBackgroundNoise();
     if (!backgroundNoiseEnabled || backgroundNoiseVolume <= 0.0f) return;
 
-    ClickPack& pack = p1Pack;
+    auto* system = getAudioSystem();
+    if (!system) return;
+
+    auto& pack = p1Pack;
     if (pack.noiseFiles.empty()) return;
 
     ensureChannelGroup();
-    auto* system = FMODAudioEngine::sharedEngine()->m_system;
-    if (!system) return;
+    if (!channelGroup) return;
 
     std::string path = pack.noiseFiles[0];
     if (bgNoiseSound) { bgNoiseSound->release(); bgNoiseSound = nullptr; }
@@ -372,7 +389,9 @@ void ClickSoundManager::openClickFolderP2() {
 
 std::vector<float> ClickSoundManager::decodeClickToRaw(const std::string& filePath, int targetSampleRate) {
     std::vector<float> result;
-    auto* system = FMODAudioEngine::sharedEngine()->m_system;
+    auto* system = getAudioSystem();
+    if (!system) return result;
+
     FMOD::Sound* sound = nullptr;
 
     if (system->createSound(filePath.c_str(), FMOD_CREATESAMPLE, nullptr, &sound) != FMOD_OK || !sound)
@@ -394,7 +413,7 @@ std::vector<float> ClickSoundManager::decodeClickToRaw(const std::string& filePa
             sampleRate = static_cast<int>((static_cast<double>(lengthPcm) * 1000.0) / lengthMs);
     }
     if (sampleRate <= 0) {
-        FMODAudioEngine::sharedEngine()->m_system->getSoftwareFormat(&sampleRate, nullptr, nullptr);
+        system->getSoftwareFormat(&sampleRate, nullptr, nullptr);
     }
 
     if (sampleRate <= 0 || channels <= 0) { sound->release(); return result; }

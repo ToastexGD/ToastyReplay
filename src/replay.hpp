@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -42,6 +43,8 @@ inline bool usesTimedAccuracy(AccuracyMode mode) {
 }
 
 namespace ReplayStorage {
+    inline constexpr uintmax_t kMaxReplayFileSize = 64 * 1024 * 1024;
+
     inline std::filesystem::path getReplayDirectoryPath() {
         return Mod::get()->getSaveDir() / "replays";
     }
@@ -117,6 +120,48 @@ namespace ReplayStorage {
                 return candidate;
             }
         }
+    }
+
+    inline std::optional<std::vector<uint8_t>> readReplayBytes(std::filesystem::path const& path) {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec) || ec) {
+            return std::nullopt;
+        }
+
+        auto size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            log::warn("Failed to inspect replay file {}: {}", path.string(), ec.message());
+            return std::nullopt;
+        }
+        if (size > kMaxReplayFileSize) {
+            log::warn("Replay file is too large: {}", path.string());
+            return std::nullopt;
+        }
+
+        auto maxSize = static_cast<uintmax_t>(std::numeric_limits<size_t>::max());
+        auto maxStreamSize = static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max());
+        if (size > maxSize || size > maxStreamSize) {
+            log::warn("Replay file is too large: {}", path.string());
+            return std::nullopt;
+        }
+
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open()) {
+            log::warn("Failed to open replay file {}", path.string());
+            return std::nullopt;
+        }
+
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+        if (!bytes.empty()) {
+            auto streamSize = static_cast<std::streamsize>(size);
+            input.read(reinterpret_cast<char*>(bytes.data()), streamSize);
+            if (!input || input.gcount() != streamSize) {
+                log::warn("Failed to read replay file {}", path.string());
+                return std::nullopt;
+            }
+        }
+
+        return bytes;
     }
 }
 
@@ -298,31 +343,33 @@ public:
             return nullptr;
         }
 
-        std::ifstream input(dir / (filename + ".gdr"), std::ios::binary);
-        if (!input.is_open()) {
-            input = std::ifstream(dir / filename, std::ios::binary);
-            if (!input.is_open()) {
+        auto path = dir / (filename + ".gdr");
+        if (!std::filesystem::exists(path)) {
+            path = dir / filename;
+            if (!std::filesystem::exists(path)) {
                 return nullptr;
             }
         }
 
-        input.seekg(0, std::ios::end);
-        auto fileSize = input.tellg();
-        input.seekg(0, std::ios::beg);
-
-        std::vector<uint8_t> bytes(static_cast<size_t>(fileSize));
-        input.read(reinterpret_cast<char*>(bytes.data()), fileSize);
-        input.close();
+        auto bytes = ReplayStorage::readReplayBytes(path);
+        if (!bytes) {
+            return nullptr;
+        }
 
         try {
             auto* result = new MacroSequence();
-            *result = MacroSequence::importData(bytes);
-            result->name = filename;
-            result->persistedName = filename;
+            *result = MacroSequence::importData(*bytes);
+            auto stem = path.stem().string();
+            result->name = stem;
+            result->persistedName = stem;
             return result;
+        } catch (std::exception const& e) {
+            log::warn("Failed to load GDR macro {}: {}", path.string(), e.what());
         } catch (...) {
-            return nullptr;
+            log::warn("Failed to load GDR macro {}", path.string());
         }
+
+        return nullptr;
     }
 
     void truncateAfter(int tick) {

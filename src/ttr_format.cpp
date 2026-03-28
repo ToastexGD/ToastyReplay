@@ -4,9 +4,13 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <limits>
 #include <type_traits>
 
 #include <zlib.h>
+
+static constexpr size_t kMaxTTRStringSize = 16 * 1024;
+static constexpr uint32_t kMaxTTRPayloadSize = 64 * 1024 * 1024;
 
 template <typename T>
 static void writeLE(std::vector<uint8_t>& buffer, T value) {
@@ -29,6 +33,23 @@ static T readLE(std::vector<uint8_t> const& data, size_t& position) {
     return value;
 }
 
+static uint32_t readCount(
+    std::vector<uint8_t> const& data,
+    size_t& position,
+    size_t minBytesPerEntry,
+    char const* label
+) {
+    auto count = readLE<uint32_t>(data, position);
+    auto remaining = data.size() - position;
+    if (minBytesPerEntry == 0) {
+        minBytesPerEntry = 1;
+    }
+    if (count > remaining / minBytesPerEntry + 1) {
+        throw std::runtime_error(std::string("TTR: invalid ") + label + " count");
+    }
+    return count;
+}
+
 static void writeString(std::vector<uint8_t>& buffer, std::string const& value) {
     uint16_t length = static_cast<uint16_t>(std::min(value.size(), static_cast<size_t>(65535)));
     writeLE<uint16_t>(buffer, length);
@@ -37,6 +58,9 @@ static void writeString(std::vector<uint8_t>& buffer, std::string const& value) 
 
 static std::string readString(std::vector<uint8_t> const& data, size_t& position) {
     uint16_t length = readLE<uint16_t>(data, position);
+    if (length > kMaxTTRStringSize) {
+        throw std::runtime_error("TTR: string is too large");
+    }
     if (position + length > data.size()) {
         throw std::runtime_error("TTR: unexpected end of string data");
     }
@@ -90,6 +114,13 @@ static std::vector<uint8_t> zlibDecompress(
     size_t length,
     uint32_t uncompressedSize
 ) {
+    if (offset > input.size() || length > input.size() - offset) {
+        throw std::runtime_error("TTR: invalid compressed payload range");
+    }
+    if (uncompressedSize == 0 || uncompressedSize > kMaxTTRPayloadSize) {
+        throw std::runtime_error("TTR: invalid payload size");
+    }
+
     std::vector<uint8_t> output(uncompressedSize);
     uLongf destinationLength = uncompressedSize;
     int result = uncompress(output.data(), &destinationLength, input.data() + offset, static_cast<uLong>(length));
@@ -373,6 +404,10 @@ static bool readSharedMetadata(
     TTRMacro& macro
 ) {
     try {
+        if (headerSize < position || headerSize > data.size()) {
+            return false;
+        }
+
         macro.author = readString(data, position);
         macro.name = readString(data, position);
         macro.levelName = readString(data, position);
@@ -388,7 +423,7 @@ static bool readSharedMetadata(
         return false;
     }
 
-    if (headerSize > position && headerSize <= data.size()) {
+    if (headerSize > position) {
         position = headerSize;
     }
     return true;
@@ -407,7 +442,7 @@ static TTRMacro* deserializeLegacyV1(
     }
 
     try {
-        uint32_t inputCount = readLE<uint32_t>(data, position);
+        uint32_t inputCount = readCount(data, position, 10, "input");
         macro->inputs.reserve(inputCount);
         for (uint32_t index = 0; index < inputCount; ++index) {
             TTRInput input;
@@ -418,7 +453,7 @@ static TTRMacro* deserializeLegacyV1(
             macro->inputs.push_back(input);
         }
 
-        uint32_t anchorCount = readLE<uint32_t>(data, position);
+        uint32_t anchorCount = readCount(data, position, 94, "anchor");
         macro->anchors.reserve(anchorCount);
         for (uint32_t index = 0; index < anchorCount; ++index) {
             PlaybackAnchor anchor;
@@ -440,7 +475,7 @@ static TTRMacro* deserializeLegacyV1(
         }
 
         if (position < data.size()) {
-            uint32_t checkpointCount = readLE<uint32_t>(data, position);
+            uint32_t checkpointCount = readCount(data, position, 16, "checkpoint");
             macro->checkpoints.reserve(checkpointCount);
             for (uint32_t index = 0; index < checkpointCount; ++index) {
                 TTRCheckpoint checkpoint;
@@ -477,8 +512,10 @@ static TTRMacro* deserializeCompressedPayload(
 
         size_t payloadPosition = 0;
         bool hasTimedOffsets = (flags & (TTR_FLAG_ACCURACY_CBS | TTR_FLAG_ACCURACY_CBF)) != 0;
+        size_t minInputBytes = hasTimedOffsets ? 7 : 3;
+        size_t minAnchorBytes = version >= 3 ? 45 : 39;
 
-        uint32_t inputCount = readLE<uint32_t>(payload, payloadPosition);
+        uint32_t inputCount = readCount(payload, payloadPosition, minInputBytes, "input");
         macro->inputs.reserve(inputCount);
         int32_t previousInputTick = 0;
         for (uint32_t index = 0; index < inputCount; ++index) {
@@ -491,7 +528,7 @@ static TTRMacro* deserializeCompressedPayload(
             macro->inputs.push_back(input);
         }
 
-        uint32_t anchorCount = readLE<uint32_t>(payload, payloadPosition);
+        uint32_t anchorCount = readCount(payload, payloadPosition, minAnchorBytes, "anchor");
         macro->anchors.reserve(anchorCount);
         int32_t previousAnchorTick = 0;
         for (uint32_t index = 0; index < anchorCount; ++index) {
@@ -536,7 +573,7 @@ static TTRMacro* deserializeCompressedPayload(
         }
 
         if (payloadPosition < payload.size()) {
-            uint32_t checkpointCount = readLE<uint32_t>(payload, payloadPosition);
+            uint32_t checkpointCount = readCount(payload, payloadPosition, 16, "checkpoint");
             macro->checkpoints.reserve(checkpointCount);
             for (uint32_t index = 0; index < checkpointCount; ++index) {
                 TTRCheckpoint checkpoint;
@@ -627,27 +664,26 @@ TTRMacro* TTRMacro::loadFromDisk(std::string const& filename) {
     }
 
     auto path = directory / (filename + ".ttr");
-    std::ifstream input(path, std::ios::binary);
-    if (!input.is_open()) {
-        input = std::ifstream(directory / filename, std::ios::binary);
-        if (!input.is_open()) {
+    if (!std::filesystem::exists(path)) {
+        path = directory / filename;
+        if (!std::filesystem::exists(path)) {
             return nullptr;
         }
     }
 
-    input.seekg(0, std::ios::end);
-    auto fileSize = input.tellg();
-    input.seekg(0, std::ios::beg);
+    auto bytes = ReplayStorage::readReplayBytes(path);
+    if (!bytes) {
+        return nullptr;
+    }
 
-    std::vector<uint8_t> bytes(static_cast<size_t>(fileSize));
-    input.read(reinterpret_cast<char*>(bytes.data()), fileSize);
-    input.close();
-
-    auto* result = deserialize(bytes);
+    auto* result = deserialize(*bytes);
     if (result) {
-        result->name = filename;
-        result->persistedName = filename;
-        log::info("[TTR] Loaded macro: {} ({} inputs, {} anchors)", filename, result->inputs.size(), result->anchors.size());
+        auto stem = path.stem().string();
+        result->name = stem;
+        result->persistedName = stem;
+        log::info("[TTR] Loaded macro: {} ({} inputs, {} anchors)", stem, result->inputs.size(), result->anchors.size());
+    } else {
+        log::warn("[TTR] Failed to load macro {}", path.string());
     }
     return result;
 }

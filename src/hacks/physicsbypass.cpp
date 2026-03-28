@@ -245,9 +245,14 @@ namespace {
             float step = fixedDelta(engine);
             schedulerCarry += rawDt;
 
+            static constexpr int kMaxStepsPerFrame = 2;
+            int stepsThisFrame = 0;
+
             while (schedulerCarry + step * 0.01f >= step) {
+                if (stepsThisFrame >= kMaxStepsPerFrame) break;
                 schedulerCarry -= step;
                 scheduler->CCScheduler::update(step);
+                ++stepsThisFrame;
             }
 
             if (schedulerCarry < 0.0f) {
