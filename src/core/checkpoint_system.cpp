@@ -323,7 +323,35 @@ class $modify(MacroPlayLayer, PlayLayer) {
                 ? (engine->activeTTR && engine->activeTTR->recordedFromStartPos)
                 : (engine->activeMacro && engine->activeMacro->recordedFromStartPos);
 
-            if (m_startPosObject && anchors && !anchors->empty()) {
+            float recStartX = engine->ttrMode
+                ? (engine->activeTTR ? engine->activeTTR->startPosX : 0.f)
+                : (engine->activeMacro ? engine->activeMacro->startPosX : 0.f);
+            float recStartY = engine->ttrMode
+                ? (engine->activeTTR ? engine->activeTTR->startPosY : 0.f)
+                : (engine->activeMacro ? engine->activeMacro->startPosY : 0.f);
+
+            bool startPosMatch = false;
+            if (m_startPosObject && recordedFromStartPos) {
+                float dx = m_startPosObject->getPositionX() - recStartX;
+                float dy = m_startPosObject->getPositionY() - recStartY;
+                startPosMatch = std::sqrt(dx * dx + dy * dy) < 50.0f;
+            }
+
+            if (m_startPosObject && startPosMatch) {
+                engine->tickOffset = 0;
+                engine->startPosActive = true;
+                if (anchors && !anchors->empty()) {
+                    engine->playbackAnchorIndex = findFirstAnchorAtTick(*anchors, 0);
+                } else {
+                    engine->playbackAnchorIndex = 0;
+                }
+                if (engine->ttrMode && engine->activeTTR) {
+                    engine->executeIndex = 0;
+                } else if (engine->activeMacro) {
+                    engine->executeIndex = 0;
+                }
+                engine->startPosWarning.clear();
+            } else if (m_startPosObject && anchors && !anchors->empty()) {
                 engine->tickOffset = computeStartPosOffset(this, *anchors);
                 engine->startPosActive = true;
                 engine->playbackAnchorIndex = findFirstAnchorAtTick(*anchors, engine->tickOffset);

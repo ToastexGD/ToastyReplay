@@ -203,7 +203,8 @@ namespace {
             || engine.singleTickStep
             || engine.renderer.recording
             || !nearlyEqual(engine.runtimeTickRate(), ReplayEngine::kBaseTickRate, 0.01)
-            || !nearlyEqual(engine.gameSpeed, 1.0, 0.0001);
+            || !nearlyEqual(engine.gameSpeed, 1.0, 0.0001)
+            || Autoclicker::get()->enabled;
     }
 
     struct SimulationTimingController {
@@ -447,8 +448,17 @@ class $modify(PhysicsControlLayer, GJBaseGameLayer) {
                 engine->totalTickCount = static_cast<int>(std::min<int64_t>(total, std::numeric_limits<int>::max()));
             }
 
-            controller.tickAutoclickerSteps(this, *engine, steps);
-            GJBaseGameLayer::update(static_cast<float>(totalDelta));
+            auto* ac = Autoclicker::get();
+            if (ac->enabled && engine->engineMode != MODE_EXECUTE && steps > 1) {
+                for (int64_t i = 0; i < steps; ++i) {
+                    setExpectedTicks(1);
+                    controller.tickAutoclickerSteps(this, *engine, 1);
+                    GJBaseGameLayer::update(static_cast<float>(timestep));
+                }
+            } else {
+                controller.tickAutoclickerSteps(this, *engine, steps);
+                GJBaseGameLayer::update(static_cast<float>(totalDelta));
+            }
         }
 
         if (renderer.recording) {
