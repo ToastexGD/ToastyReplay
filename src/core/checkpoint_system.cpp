@@ -350,7 +350,7 @@ class $modify(MacroPlayLayer, PlayLayer) {
                 } else if (engine->activeMacro) {
                     engine->executeIndex = 0;
                 }
-                engine->startPosWarning.clear();
+                engine->clearStartPosWarning();
             } else if (m_startPosObject && anchors && !anchors->empty()) {
                 engine->tickOffset = computeStartPosOffset(this, *anchors);
                 engine->startPosActive = true;
@@ -360,18 +360,18 @@ class $modify(MacroPlayLayer, PlayLayer) {
                 } else if (engine->activeMacro) {
                     engine->executeIndex = findFirstInputAtTick(engine->activeMacro->inputs, engine->tickOffset);
                 }
-                engine->startPosWarning.clear();
+                engine->clearStartPosWarning();
             } else if (!m_startPosObject && recordedFromStartPos) {
-                engine->startPosWarning = "Macro was recorded from a start position. Use the same or later start position.";
+                engine->setStartPosWarningKey("Macro was recorded from a start position. Use the same or later start position.");
                 engine->haltExecution();
             } else if (m_startPosObject && (!anchors || anchors->empty())) {
-                engine->startPosWarning = "Macro lacks anchor data for start position playback. Re-record to enable.";
+                engine->setStartPosWarningKey("Macro lacks anchor data for start position playback. Re-record to enable.");
                 engine->tickOffset = 0;
                 engine->startPosActive = false;
             } else {
                 engine->tickOffset = 0;
                 engine->startPosActive = false;
-                engine->startPosWarning.clear();
+                engine->clearStartPosWarning();
             }
         }
 

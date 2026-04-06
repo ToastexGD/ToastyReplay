@@ -1,5 +1,6 @@
 #include "gui/frame_editor.hpp"
 #include "gui/gui.hpp"
+#include "i18n/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "ttr_format.hpp"
 #include "core/cbf_integration.hpp"
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <fmt/format.h>
 
 static ImVec4 feWithAlpha(ImVec4 c, float a) {
     c.w = a;
@@ -44,6 +46,15 @@ static void feDrawSolidRect(ImDrawList* dl, ImVec2 min, ImVec2 max, float roundi
     dl->AddRectFilled(min, max, feToU32(fill), rounding);
     if (border)
         dl->AddRect(min, max, theme.getAccentU32(0.18f * alpha), rounding, 0, 1.0f);
+}
+
+static std::string feTr(std::string_view key) {
+    return std::string(toasty::i18n::tr(key));
+}
+
+template <class... Args>
+static std::string feTrf(std::string_view key, Args&&... args) {
+    return toasty::i18n::trf(key, std::forward<Args>(args)...);
 }
 
 void FrameEditor::computeP2Color(const ImVec4& accent) {
@@ -560,12 +571,12 @@ void FrameEditor::draw(MenuInterface& ui) {
 
     if (inputs.empty()) {
         ImVec2 center(contentOrigin.x + contentWidth * 0.5f, contentOrigin.y + contentHeight * 0.4f);
-        const char* msg = "No inputs to edit";
-        ImVec2 textSize = ImGui::CalcTextSize(msg);
+        auto msg = feTr("No inputs to edit");
+        ImVec2 textSize = ImGui::CalcTextSize(msg.c_str());
         ImGui::GetWindowDrawList()->AddText(
             ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f),
             ui.theme.getTextSecondaryU32(),
-            msg
+            msg.c_str()
         );
 
         ImGui::SetCursorScreenPos(ImVec2(contentOrigin.x + contentWidth * 0.5f - 50.0f, center.y + 30.0f));
@@ -748,10 +759,10 @@ void FrameEditor::draw(MenuInterface& ui) {
         dl->AddRectFilled(popMin, popMax, feToU32(ImVec4(0.08f, 0.08f, 0.1f, 0.95f)), 6.0f);
         dl->AddRect(popMin, popMax, ui.theme.getAccentU32(0.5f), 6.0f, 0, 1.0f);
 
-        const char* promptText = "Unsaved changes. Discard?";
-        ImVec2 promptSize = ImGui::CalcTextSize(promptText);
+        auto promptText = feTr("Unsaved changes. Discard?");
+        ImVec2 promptSize = ImGui::CalcTextSize(promptText.c_str());
         dl->AddText(ImVec2(popMin.x + (popW - promptSize.x) * 0.5f, popMin.y + 8.0f),
-            ui.theme.getTextU32(), promptText);
+            ui.theme.getTextU32(), promptText.c_str());
 
         ImGui::SetCursorScreenPos(ImVec2(popMin.x + 30.0f, popMin.y + 34.0f));
         if (Widgets::StyledButton("Discard##confirmDisc", ImVec2(90.0f, 26.0f), ui.theme, ui.anim, 4.0f)) {
@@ -808,11 +819,10 @@ void FrameEditor::drawToolbar(MenuInterface& ui, ImVec2 origin, float width) {
     x += 56.0f;
 
     float nameX = origin.x + width - 8.0f;
-    char infoBuf[128];
-    std::snprintf(infoBuf, sizeof(infoBuf), "%zu inputs", inputs.size());
-    ImVec2 infoSize = ImGui::CalcTextSize(infoBuf);
+    auto infoText = feTrf("{count} inputs", fmt::arg("count", inputs.size()));
+    ImVec2 infoSize = ImGui::CalcTextSize(infoText.c_str());
     nameX -= infoSize.x;
-    dl->AddText(ImVec2(nameX, origin.y + 12.0f), ui.theme.getTextSecondaryU32(), infoBuf);
+    dl->AddText(ImVec2(nameX, origin.y + 12.0f), ui.theme.getTextSecondaryU32(), infoText.c_str());
     nameX -= 12.0f;
 
     const char* nameStr = macroName.c_str();
@@ -933,8 +943,10 @@ void FrameEditor::drawLanes(MenuInterface& ui, ImVec2 origin, float width, float
 
     float labelX = origin.x + 4.0f;
     if (ui.fontSmall) ImGui::PushFont(ui.fontSmall);
-    dl->AddText(ImVec2(labelX, origin.y + 2.0f), feToU32(feWithAlpha(accentColor, 0.4f)), "P1");
-    dl->AddText(ImVec2(labelX, origin.y + laneH + 2.0f), feToU32(feWithAlpha(p2Color, 0.4f)), "P2");
+    auto p1Text = feTr("P1");
+    auto p2Text = feTr("P2");
+    dl->AddText(ImVec2(labelX, origin.y + 2.0f), feToU32(feWithAlpha(accentColor, 0.4f)), p1Text.c_str());
+    dl->AddText(ImVec2(labelX, origin.y + laneH + 2.0f), feToU32(feWithAlpha(p2Color, 0.4f)), p2Text.c_str());
     if (ui.fontSmall) ImGui::PopFont();
 
     int32_t vStart = visibleFrameStart();
@@ -1075,8 +1087,9 @@ void FrameEditor::drawDetailBar(MenuInterface& ui, ImVec2 origin, float width, f
     if (selectedSegment >= 0 && selectedSegment < (int)segments.size()) {
         auto& seg = segments[selectedSegment];
 
-        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), "Frame:");
-        x += ImGui::CalcTextSize("Frame:").x + 6.0f;
+        auto frameText = feTr("Frame:");
+        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), frameText.c_str());
+        x += ImGui::CalcTextSize(frameText.c_str()).x + 6.0f;
 
         ImGui::SetCursorScreenPos(ImVec2(x, origin.y + 3.0f));
         ImGui::PushItemWidth(60.0f);
@@ -1107,32 +1120,33 @@ void FrameEditor::drawDetailBar(MenuInterface& ui, ImVec2 origin, float width, f
         dl->AddText(ImVec2(x, textY), ui.theme.getAccentU32(0.6f), "|");
         x += 14.0f;
 
-        const char* typeStr = seg.hasRelease ? "Hold" : "Press";
-        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), typeStr);
-        x += ImGui::CalcTextSize(typeStr).x + 10.0f;
+        auto typeStr = feTr(seg.hasRelease ? "Hold" : "Press");
+        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), typeStr.c_str());
+        x += ImGui::CalcTextSize(typeStr.c_str()).x + 10.0f;
 
         dl->AddText(ImVec2(x, textY), ui.theme.getAccentU32(0.6f), "|");
         x += 14.0f;
 
-        const char* playerStr = seg.player2 ? "P2" : "P1";
+        auto playerStr = feTr(seg.player2 ? "P2" : "P1");
         ImVec4 playerCol = seg.player2 ? p2Color : ui.theme.getAccent();
-        dl->AddText(ImVec2(x, textY), feToU32(playerCol), playerStr);
-        x += ImGui::CalcTextSize(playerStr).x + 10.0f;
+        dl->AddText(ImVec2(x, textY), feToU32(playerCol), playerStr.c_str());
+        x += ImGui::CalcTextSize(playerStr.c_str()).x + 10.0f;
 
         dl->AddText(ImVec2(x, textY), ui.theme.getAccentU32(0.6f), "|");
         x += 14.0f;
 
-        char durBuf[32];
         int32_t dur = seg.endFrame - seg.startFrame;
-        std::snprintf(durBuf, sizeof(durBuf), "%d frames", dur);
-        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), durBuf);
+        auto durText = feTrf("{count} frames", fmt::arg("count", dur));
+        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), durText.c_str());
     } else {
-        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), "Click a segment to select it");
+        auto hintText = feTr("Click a segment to select it");
+        dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), hintText.c_str());
     }
 
     float goToX = origin.x + width - 140.0f;
-    dl->AddText(ImVec2(goToX, textY), ui.theme.getTextSecondaryU32(), "Go to:");
-    goToX += ImGui::CalcTextSize("Go to:").x + 6.0f;
+    auto goToText = feTr("Go to:");
+    dl->AddText(ImVec2(goToX, textY), ui.theme.getTextSecondaryU32(), goToText.c_str());
+    goToX += ImGui::CalcTextSize(goToText.c_str()).x + 6.0f;
 
     ImGui::SetCursorScreenPos(ImVec2(goToX, origin.y + 3.0f));
     ImGui::PushItemWidth(60.0f);

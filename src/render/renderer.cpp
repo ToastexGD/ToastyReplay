@@ -1,9 +1,11 @@
 #include "render/renderer.hpp"
+#include "i18n/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "audio/clicksounds.hpp"
 #include "render/subprocess.hpp"
 #include "gui/gui.hpp"
 #include "hacks/physicsbypass.hpp"
+#include "utils.hpp"
 
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/EndLevelLayer.hpp>
@@ -25,6 +27,15 @@ using namespace geode::prelude;
 
 static constexpr int kApiMixSampleRate = 44100;
 
+static std::string trString(std::string_view key) {
+    return std::string(toasty::i18n::tr(key));
+}
+
+template <class... Args>
+static std::string trFormat(std::string_view key, Args&&... args) {
+    return toasty::i18n::trf(key, std::forward<Args>(args)...);
+}
+
 template <class T>
 static T loadSavedValueWithFallback(
     Mod* mod,
@@ -45,6 +56,15 @@ static T loadSavedValueWithFallback(
     }
 
     return defaultValue;
+}
+
+static bool pathExists(std::filesystem::path const& path) {
+    std::error_code ec;
+    return !path.empty() && std::filesystem::exists(path, ec) && !ec;
+}
+
+static bool pathContainsMarker(std::filesystem::path const& path, std::string_view marker) {
+    return toasty::pathToUtf8(path).find(marker) != std::string::npos;
 }
 
 static bool writeRawAudioWav(
@@ -106,7 +126,7 @@ static void cleanupTempFile(
         }
 
         if (attempt + 1 == attempts) {
-            log::warn("Failed to remove {} '{}': {}", label, filePath.string(), ec.message());
+            log::warn("Failed to remove {} '{}': {}", label, toasty::pathToUtf8(filePath), ec.message());
             return;
         }
 
@@ -168,55 +188,54 @@ static std::vector<float> resampleInterleavedAudio(
 }
 
 #ifdef GEODE_IS_WINDOWS
-static std::string resolveFfmpegExecutable(std::filesystem::path const& configuredPath) {
+static std::filesystem::path resolveFfmpegExecutable(std::filesystem::path const& configuredPath) {
     if (!configuredPath.empty()) {
         std::error_code ec;
         if (std::filesystem::exists(configuredPath, ec) && configuredPath.filename() == "ffmpeg.exe") {
-            return configuredPath.string();
+            return configuredPath;
         }
     }
 
-    char resolvedPath[MAX_PATH] = {};
-    DWORD resolvedLength = SearchPathA(nullptr, "ffmpeg.exe", nullptr, MAX_PATH, resolvedPath, nullptr);
+    wchar_t resolvedPath[MAX_PATH] = {};
+    DWORD resolvedLength = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, MAX_PATH, resolvedPath, nullptr);
     if (resolvedLength == 0 || resolvedLength >= MAX_PATH) {
         return {};
     }
 
-    return std::string(resolvedPath, resolvedLength);
+    return std::filesystem::path(resolvedPath);
 }
 
-static bool isUsableFfmpegExecutable(std::string const& ffmpegPath) {
+static bool isUsableFfmpegExecutable(std::filesystem::path const& ffmpegPath) {
     if (ffmpegPath.empty()) {
         return false;
     }
 
-    std::error_code ec;
-    if (!std::filesystem::exists(ffmpegPath, ec)) {
+    if (!pathExists(ffmpegPath)) {
         return false;
     }
 
     std::string command = fmt::format(
         "\"{}\" -hide_banner -loglevel error -version",
-        ffmpegPath
+        toasty::pathToUtf8(ffmpegPath)
     );
 
     auto probe = Subprocess(command);
     if (!probe.isRunning()) {
-        log::warn("Ignoring unusable ffmpeg.exe '{}': failed to start", ffmpegPath);
+        log::warn("Ignoring unusable ffmpeg.exe '{}': failed to start", toasty::pathToUtf8(ffmpegPath));
         return false;
     }
 
     int exitCode = probe.close();
     if (exitCode != 0) {
-        log::warn("Ignoring unusable ffmpeg.exe '{}': exited with code {}", ffmpegPath, exitCode);
+        log::warn("Ignoring unusable ffmpeg.exe '{}': exited with code {}", toasty::pathToUtf8(ffmpegPath), exitCode);
         return false;
     }
 
     return true;
 }
 
-static std::string resolveUsableFfmpegExecutable(std::filesystem::path const& configuredPath) {
-    std::string resolvedPath = resolveFfmpegExecutable(configuredPath);
+static std::filesystem::path resolveUsableFfmpegExecutable(std::filesystem::path const& configuredPath) {
+    std::filesystem::path resolvedPath = resolveFfmpegExecutable(configuredPath);
     if (!isUsableFfmpegExecutable(resolvedPath)) {
         return {};
     }
@@ -225,9 +244,9 @@ static std::string resolveUsableFfmpegExecutable(std::filesystem::path const& co
 }
 
 static bool tryMuxAudioWithExe(
-    std::string const& ffmpegPath,
-    std::string const& audioInput,
-    std::string const& videoInput,
+    std::filesystem::path const& ffmpegPath,
+    std::filesystem::path const& audioInput,
+    std::filesystem::path const& videoInput,
     std::filesystem::path const& outputPath,
     float audioOffset,
     double totalTime,
@@ -241,8 +260,7 @@ static bool tryMuxAudioWithExe(
         return false;
     }
 
-    std::error_code ec;
-    if (!std::filesystem::exists(ffmpegPath, ec)) {
+    if (!pathExists(ffmpegPath) || !pathExists(audioInput) || !pathExists(videoInput)) {
         return false;
     }
 
@@ -263,16 +281,16 @@ static bool tryMuxAudioWithExe(
 
     std::string command = fmt::format(
         "\"{}\" -y -ss {:.6f} -i \"{}\" -i \"{}\" -t {:.6f} -map 1:v -map 0:a -c:v copy -c:a aac {}-af \"adelay=0|0{}{},volume={:.2f}\" \"{}\"",
-        ffmpegPath,
+        toasty::pathToUtf8(ffmpegPath),
         audioOffset,
-        audioInput,
-        videoInput,
+        toasty::pathToUtf8(audioInput),
+        toasty::pathToUtf8(videoInput),
         totalTime,
         extraAudioArgs,
         fadeInString,
         fadeOutString,
         audioVolume,
-        outputPath.string()
+        toasty::pathToUtf8(outputPath)
     );
 
     log::info("Executing (Audio): {}", command);
@@ -287,12 +305,13 @@ static bool tryMuxAudioWithExe(
 }
 #endif
 
-static std::vector<float> decodeSongToRaw(const std::string& filePath, float offsetSec, float durationSec, float volume) {
+static std::vector<float> decodeSongToRaw(std::filesystem::path const& filePath, float offsetSec, float durationSec, float volume) {
     std::vector<float> result;
     auto* system = FMODAudioEngine::sharedEngine()->m_system;
     FMOD::Sound* sound = nullptr;
+    auto filePathUtf8 = toasty::pathToUtf8(filePath);
 
-    if (system->createSound(filePath.c_str(), FMOD_CREATESAMPLE, nullptr, &sound) != FMOD_OK || !sound)
+    if (system->createSound(filePathUtf8.c_str(), FMOD_CREATESAMPLE, nullptr, &sound) != FMOD_OK || !sound)
         return result;
 
     FMOD_SOUND_FORMAT format;
@@ -554,7 +573,7 @@ bool Renderer::toggle() {
 
     std::filesystem::path exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
 #ifdef GEODE_IS_WINDOWS
-    std::string resolvedFfmpegPath;
+    std::filesystem::path resolvedFfmpegPath;
     bool foundExe = false;
     if (!foundApi) {
         resolvedFfmpegPath = resolveUsableFfmpegExecutable(exePath);
@@ -564,13 +583,20 @@ bool Renderer::toggle() {
 
 #ifdef GEODE_IS_WINDOWS
     if (!foundExe && !foundApi) {
+        auto popupTitle = trString("Error");
+        auto popupMessage = trString("<cl>FFmpeg</c> not found. Set the path to ffmpeg.exe in mod settings or install FFmpeg API.\nOpen download link?");
+        auto cancelText = trString("Cancel");
+        auto yesText = trString("Yes");
         geode::createQuickPopup(
-            "Error",
-            "<cl>FFmpeg</c> not found. Set the path to ffmpeg.exe in mod settings or install FFmpeg API.\nOpen download link?",
-            "Cancel", "Yes",
+            popupTitle.c_str(),
+            popupMessage.c_str(),
+            cancelText.c_str(), yesText.c_str(),
             [](auto, bool btn2) {
                 if (btn2) {
-                    FLAlertLayer::create("Info", "Unzip the downloaded file and look for <cl>ffmpeg.exe</c> in the 'bin' folder.", "Ok")->show();
+                    auto infoTitle = trString("Info");
+                    auto infoMessage = trString("Unzip the downloaded file and look for <cl>ffmpeg.exe</c> in the 'bin' folder.");
+                    auto okText = trString("Ok");
+                    FLAlertLayer::create(infoTitle.c_str(), infoMessage.c_str(), okText.c_str())->show();
                     utils::web::openLinkInBrowser("https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z");
                 }
             }
@@ -580,27 +606,36 @@ bool Renderer::toggle() {
     engine->renderer.ffmpegPath = resolvedFfmpegPath;
 #else
     if (!foundApi) {
-        FLAlertLayer::create("Error", "<cl>FFmpeg API</c> not found. Download it to render a level.", "Ok")->show();
+        auto errorTitle = trString("Error");
+        auto errorMessage = trString("<cl>FFmpeg API</c> not found. Download it to render a level.");
+        auto okText = trString("Ok");
+        FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
         return false;
     }
 #endif
 
     if (!PlayLayer::get()) {
-        FLAlertLayer::create("Warning", "<cl>Open a level</c> to start rendering.", "Ok")->show();
+        auto warningTitle = trString("Warning");
+        auto warningMessage = trString("<cl>Open a level</c> to start rendering.");
+        auto okText = trString("Ok");
+        FLAlertLayer::create(warningTitle.c_str(), warningMessage.c_str(), okText.c_str())->show();
         return false;
     }
 
     std::filesystem::path renderPath = Mod::get()->getSettingValue<std::filesystem::path>("render_folder");
-    if (renderPath.empty() || renderPath.string().find("{gd_dir}") != std::string::npos) {
+    if (renderPath.empty() || pathContainsMarker(renderPath, "{gd_dir}")) {
         renderPath = dirs::getGameDir() / "renders";
     }
-    if (std::filesystem::exists(renderPath)) {
+    if (pathExists(renderPath)) {
         engine->renderer.start();
     } else {
         if (utils::file::createDirectoryAll(renderPath).isOk())
             engine->renderer.start();
         else {
-            FLAlertLayer::create("Error", "Could not create renders folder.", "Ok")->show();
+            auto errorTitle = trString("Error");
+            auto errorMessage = trString("Could not create renders folder.");
+            auto okText = trString("Ok");
+            FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
             return false;
         }
     }
@@ -659,10 +694,10 @@ void Renderer::start() {
             std::string_view(pl->m_level->m_levelName), width, height, std::to_string(timestamp), extension);
     }
     std::filesystem::path renderFolder = Mod::get()->getSettingValue<std::filesystem::path>("render_folder");
-    if (renderFolder.empty() || renderFolder.string().find("{gd_dir}") != std::string::npos) {
+    if (renderFolder.empty() || pathContainsMarker(renderFolder, "{gd_dir}")) {
         renderFolder = dirs::getGameDir() / "renders";
     }
-    path = (renderFolder / filename).string();
+    path = renderFolder / filename;
 
     if (width % 2 != 0) width++;
     if (height % 2 != 0) height++;
@@ -708,7 +743,8 @@ void Renderer::start() {
         progressLabel = nullptr;
     }
     {
-        progressLabel = cocos2d::CCLabelBMFont::create("Rendering... 0%", "goldFont.fnt");
+        auto progressText = trFormat("Rendering... {percent}%", fmt::arg("percent", 0));
+        progressLabel = cocos2d::CCLabelBMFont::create(progressText.c_str(), "goldFont.fnt");
         progressLabel->setPosition(ccp(ogRes.width / 2.0f, ogRes.height - 20.0f));
         progressLabel->setScale(0.55f);
         progressLabel->setOpacity(200);
@@ -732,23 +768,31 @@ void Renderer::start() {
         fmod->m_backgroundMusicChannel->getVolume(&ogMusicVol);
     }
 
-    std::string songFile = pl->m_level->getAudioFileName();
+    std::filesystem::path songFile = toasty::stringToPath(pl->m_level->getAudioFileName());
     if (pl->m_level->m_songID == 0) {
-        songFile = cocos2d::CCFileUtils::sharedFileUtils()->fullPathForFilename(songFile.c_str(), false);
+        auto resolved = cocos2d::CCFileUtils::sharedFileUtils()->fullPathForFilename(
+            toasty::pathToUtf8(songFile).c_str(),
+            false
+        );
+        songFile = toasty::stringToPath(resolved);
     } else {
-        std::string writablePath = cocos2d::CCFileUtils::sharedFileUtils()->getWritablePath();
-        auto fullPath = std::filesystem::path(writablePath) / songFile;
-        if (std::filesystem::exists(fullPath)) {
-            songFile = fullPath.string();
+        auto writablePath = toasty::stringToPath(cocos2d::CCFileUtils::sharedFileUtils()->getWritablePath());
+        auto fullPath = writablePath / songFile;
+        if (pathExists(fullPath)) {
+            songFile = fullPath;
         } else {
-            
-            auto resolved = cocos2d::CCFileUtils::sharedFileUtils()->fullPathForFilename(songFile.c_str(), false);
-            if (std::filesystem::exists(resolved))
-                songFile = resolved;
+            auto resolved = cocos2d::CCFileUtils::sharedFileUtils()->fullPathForFilename(
+                toasty::pathToUtf8(songFile).c_str(),
+                false
+            );
+            auto resolvedPath = toasty::stringToPath(resolved);
+            if (pathExists(resolvedPath)) {
+                songFile = resolvedPath;
+            }
         }
     }
 
-    log::info("Song file: {} (exists: {})", songFile, std::filesystem::exists(songFile));
+    log::info("Song file: {} (exists: {})", toasty::pathToUtf8(songFile), pathExists(songFile));
 
     float songOffset = pl->m_levelSettings->m_songOffset +
         (static_cast<float>(levelStartFrame) / getTPS());
@@ -764,7 +808,6 @@ void Renderer::start() {
     }
 
     std::thread([this, songFile, songOffset, fadeIn, fadeOut, extension, bitrateApi]() {
-        try {
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
         settings.m_codec = codec;
@@ -777,7 +820,8 @@ void Renderer::start() {
         settings.m_colorspaceFilters = "";
 
         log::info("Render settings: codec={}, bitrate={}, {}x{} @{}fps, output={}",
-            settings.m_codec, settings.m_bitrate, settings.m_width, settings.m_height, settings.m_fps, settings.m_outputFile.string());
+            settings.m_codec, settings.m_bitrate, settings.m_width, settings.m_height, settings.m_fps,
+            toasty::pathToUtf8(settings.m_outputFile));
 
         auto availableCodecs = ffmpeg::events::Recorder::getAvailableCodecs();
         std::string codecList;
@@ -820,15 +864,18 @@ void Renderer::start() {
             if (res.isErr()) {
                 log::error("FFmpeg init error: {}", res.unwrapErr());
 #ifdef GEODE_IS_WINDOWS
-                if (!ffmpegPath.empty() && std::filesystem::exists(ffmpegPath)) {
+                if (pathExists(ffmpegPath)) {
                     useApiForEncoding = false;
                     Loader::get()->queueInMainThread([] {
-                        Notification::create("FFmpeg API unavailable, using ffmpeg.exe", NotificationIcon::Warning)->show();
+                        Notification::create(trString("FFmpeg API unavailable, using ffmpeg.exe"), NotificationIcon::Warning)->show();
                     });
                 } else {
 #endif
                     Loader::get()->queueInMainThread([this] {
-                        FLAlertLayer::create("Error", "FFmpeg API failed to initialize.", "Ok")->show();
+                        auto errorTitle = trString("Error");
+                        auto errorMessage = trString("FFmpeg API failed to initialize.");
+                        auto okText = trString("Ok");
+                        FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
                         stop();
                     });
                     audioMode = AUDIO_OFF;
@@ -849,7 +896,7 @@ void Renderer::start() {
 
             std::string command = fmt::format(
                 "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - {}{}{} -vf \"vflip,{}\" -an \"{}\"",
-                ffmpegPath,
+                toasty::pathToUtf8(ffmpegPath),
                 std::to_string(width),
                 std::to_string(height),
                 std::to_string(fps),
@@ -857,7 +904,7 @@ void Renderer::start() {
                 localBitrate,
                 localExtraArgs,
                 localVideoArgs,
-                path
+                toasty::pathToUtf8(path)
             );
 
             log::info("Executing: {}", command);
@@ -872,7 +919,10 @@ void Renderer::start() {
                     auto res = recorder.writeFrame(frame);
                     if (res.isErr()) {
                         Loader::get()->queueInMainThread([this] {
-                            FLAlertLayer::create("Error", "FFmpeg API failed to write frame.", "Ok")->show();
+                            auto errorTitle = trString("Error");
+                            auto errorMessage = trString("FFmpeg API failed to write frame.");
+                            auto okText = trString("Ok");
+                            FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
                             stop();
                         });
                         audioMode = AUDIO_OFF;
@@ -896,7 +946,10 @@ void Renderer::start() {
 #ifdef GEODE_IS_WINDOWS
             if (process.close()) {
                 Loader::get()->queueInMainThread([] {
-                    FLAlertLayer::create("Error", "There was an error saving the render.", "Ok")->show();
+                    auto errorTitle = trString("Error");
+                    auto errorMessage = trString("There was an error saving the render.");
+                    auto okText = trString("Ok");
+                    FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
                 });
                 return;
             }
@@ -906,14 +959,14 @@ void Renderer::start() {
 
         bool preferExeAudioMux = false;
 #ifdef GEODE_IS_WINDOWS
-        preferExeAudioMux = !ffmpegPath.empty();
+        preferExeAudioMux = pathExists(ffmpegPath);
 #endif
 
         bool needMixedAudio = includeClickSounds || (!preferExeAudioMux && musicVolume != 1.0f);
 
         audioCapture.rawMixBuffer.clear();
         auto& rawAudio = audioCapture.rawMixBuffer;
-        if (needMixedAudio && audioMode == AUDIO_SONG && std::filesystem::exists(songFile)) {
+        if (needMixedAudio && audioMode == AUDIO_SONG && pathExists(songFile)) {
             rawAudio = decodeSongToRaw(songFile, songOffset, lastFrame_t, musicVolume);
         }
 
@@ -994,22 +1047,22 @@ void Renderer::start() {
         }
 
         Loader::get()->queueInMainThread([] {
-            Notification::create("Saving Render...", NotificationIcon::Loading)->show();
+            Notification::create(trString("Saving Render..."), NotificationIcon::Loading)->show();
         });
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         bool hasRawAudio = !rawAudio.empty();
-        bool hasAudio = hasRawAudio || (audioMode == AUDIO_SONG && (musicVolume > 0.f && std::filesystem::exists(songFile)));
+        bool hasAudio = hasRawAudio || (audioMode == AUDIO_SONG && (musicVolume > 0.f && pathExists(songFile)));
         log::info("Audio mux: hasRawAudio={}, rawAudio.size={}, hasAudio={}, musicVolume={:.3f}, useApi={}",
             hasRawAudio, rawAudio.size(), hasAudio, musicVolume, useApiForEncoding);
-        if (audioMode == AUDIO_SONG && !hasRawAudio && !std::filesystem::exists(songFile) && !includeClickSounds) {
-            log::error("Song file not found and no raw audio captured: {}", songFile);
+        if (audioMode == AUDIO_SONG && !hasRawAudio && !pathExists(songFile) && !includeClickSounds) {
+            log::error("Song file not found and no raw audio captured: {}", toasty::pathToUtf8(songFile));
         }
 
         if (!hasAudio) {
             Loader::get()->queueInMainThread([this] {
-                Notification::create("Render Saved Without Audio", NotificationIcon::Success)->show();
+                Notification::create(trString("Render Saved Without Audio"), NotificationIcon::Success)->show();
                 if (Mod::get()->getSavedValue<bool>("render_hide_endscreen", false)) {
                     if (PlayLayer* pl = PlayLayer::get())
                         if (EndLevelLayer* layer = pl->getChildByType<EndLevelLayer>(0))
@@ -1019,17 +1072,17 @@ void Renderer::start() {
             return;
         }
 
-        std::filesystem::path tempPath = std::filesystem::path(path).parent_path() /
-            ("temp_" + std::filesystem::path(path).filename().string());
+        std::filesystem::path tempPath = path.parent_path() /
+            ("temp_" + toasty::pathToUtf8(path.filename()));
         std::filesystem::path rawAudioPath;
         auto ensureRawAudioFile = [&]() -> bool {
             if (rawAudioPath.empty()) {
-                rawAudioPath = std::filesystem::path(path).parent_path() /
+                rawAudioPath = path.parent_path() /
                     fmt::format("temp_audio_{}.wav", std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
 
                 if (!writeRawAudioWav(rawAudioPath, rawAudio, static_cast<uint32_t>(rawAudioSampleRate))) {
-                    log::error("Failed to write temporary render audio '{}'", rawAudioPath.string());
+                    log::error("Failed to write temporary render audio '{}'", toasty::pathToUtf8(rawAudioPath));
                     rawAudioPath.clear();
                     return false;
                 }
@@ -1082,19 +1135,22 @@ void Renderer::start() {
         }
 
 #ifdef GEODE_IS_WINDOWS
-        if (!audioMuxed && !ffmpegPath.empty()) {
-            std::string audioInput;
+        if (!audioMuxed && pathExists(ffmpegPath)) {
+            std::filesystem::path audioInput;
             float audioOffset = 0.0f;
             float audioVolume = 1.0f;
 
             if (hasRawAudio) {
                 if (!ensureRawAudioFile()) {
                     Loader::get()->queueInMainThread([] {
-                        FLAlertLayer::create("Error", "Failed to write temporary render audio.", "Ok")->show();
+                        auto errorTitle = trString("Error");
+                        auto errorMessage = trString("Failed to write temporary render audio.");
+                        auto okText = trString("Ok");
+                        FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
                     });
                     return;
                 }
-                audioInput = rawAudioPath.string();
+                audioInput = rawAudioPath;
             } else {
                 audioInput = songFile;
                 audioOffset = songOffset;
@@ -1119,7 +1175,10 @@ void Renderer::start() {
 
         if (!audioMuxed) {
             Loader::get()->queueInMainThread([] {
-                FLAlertLayer::create("Error", "FFmpeg failed to add audio.", "Ok")->show();
+                auto errorTitle = trString("Error");
+                auto errorMessage = trString("FFmpeg failed to add audio.");
+                auto okText = trString("Ok");
+                FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
             });
             if (!rawAudioPath.empty()) cleanupTempFile(rawAudioPath, "temporary render audio");
             return;
@@ -1134,28 +1193,16 @@ void Renderer::start() {
             ec.clear();
             std::filesystem::rename(tempPath, path, ec);
             if (ec) log::warn("Failed to rename temp render file: {}", ec.message());
-            else log::info("Render with audio saved to: {}", path);
+            else log::info("Render with audio saved to: {}", toasty::pathToUtf8(path));
         }
 
         if (!ec) {
             Loader::get()->queueInMainThread([] {
-                Notification::create("Render Saved With Audio", NotificationIcon::Success)->show();
+                Notification::create(trString("Render Saved With Audio"), NotificationIcon::Success)->show();
             });
         } else {
             Loader::get()->queueInMainThread([] {
-                Notification::create("Error saving render with audio", NotificationIcon::Error)->show();
-            });
-        }
-
-        } catch (std::exception const& e) {
-            log::error("Unhandled render worker exception: {}", e.what());
-            Loader::get()->queueInMainThread([] {
-                FLAlertLayer::create("Error", "Render finalization failed. Check the log for details.", "Ok")->show();
-            });
-        } catch (...) {
-            log::error("Unhandled render worker exception: unknown error");
-            Loader::get()->queueInMainThread([] {
-                FLAlertLayer::create("Error", "Render finalization failed. Check the log for details.", "Ok")->show();
+                Notification::create(trString("Error saving render with audio"), NotificationIcon::Error)->show();
             });
         }
 
@@ -1207,7 +1254,8 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
 
     if (progressLabel) {
         int pct = pl->getCurrentPercentInt();
-        progressLabel->setString(fmt::format("Rendering... {}%", pct).c_str());
+        auto progressText = trFormat("Rendering... {percent}%", fmt::arg("percent", pct));
+        progressLabel->setString(progressText.c_str());
     }
 
     if (!pl->m_player1 || pl->m_player1->m_isDead) {

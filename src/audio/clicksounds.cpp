@@ -1,5 +1,6 @@
 #include "clicksounds.hpp"
 #include "replay.hpp"
+#include "utils.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/Bindings.hpp>
 #include <filesystem>
@@ -50,7 +51,7 @@ void ClickSoundManager::scanClickPacks() {
 
     for (auto& entry : std::filesystem::directory_iterator(dir)) {
         if (entry.is_directory()) {
-            availablePacks.push_back(entry.path().filename().string());
+            availablePacks.push_back(toasty::pathToUtf8(entry.path().filename()));
         }
     }
     std::sort(availablePacks.begin(), availablePacks.end());
@@ -63,14 +64,14 @@ void ClickSoundManager::scanClickPacksP2() {
 
     for (auto& entry : std::filesystem::directory_iterator(dir)) {
         if (entry.is_directory()) {
-            availablePacksP2.push_back(entry.path().filename().string());
+            availablePacksP2.push_back(toasty::pathToUtf8(entry.path().filename()));
         }
     }
     std::sort(availablePacksP2.begin(), availablePacksP2.end());
 }
 
 static bool isSupportedAudio(const std::filesystem::path& p) {
-    auto ext = p.extension().string();
+    auto ext = toasty::pathToUtf8(p.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     return ext == ".wav" || ext == ".ogg";
 }
@@ -153,7 +154,7 @@ static void scanSubfolder(const std::filesystem::path& dir, const std::vector<st
         if (!std::filesystem::exists(sub) || !std::filesystem::is_directory(sub)) continue;
         for (auto& entry : std::filesystem::directory_iterator(sub)) {
             if (entry.is_regular_file() && isSupportedAudio(entry.path())) {
-                out.push_back(entry.path().string());
+                out.push_back(toasty::pathToUtf8(entry.path()));
             }
         }
         if (!out.empty()) break;
@@ -185,12 +186,12 @@ void ClickSoundManager::loadClickPack(const std::string& packName, ClickPack& ta
         static const std::vector<std::string> noiseNames = {"noise", "background", "bg", "mic"};
         for (auto& entry : std::filesystem::directory_iterator(packDir)) {
             if (!entry.is_regular_file() || !isSupportedAudio(entry.path())) continue;
-            auto stem = entry.path().stem().string();
+            auto stem = toasty::pathToUtf8(entry.path().stem());
             std::string lowerStem = stem;
             std::transform(lowerStem.begin(), lowerStem.end(), lowerStem.begin(), ::tolower);
             for (auto& name : noiseNames) {
                 if (lowerStem == name) {
-                    target.noiseFiles.push_back(entry.path().string());
+                    target.noiseFiles.push_back(toasty::pathToUtf8(entry.path()));
                     break;
                 }
             }
@@ -201,7 +202,7 @@ void ClickSoundManager::loadClickPack(const std::string& packName, ClickPack& ta
     if (target.hardClicks.empty()) {
         for (auto& entry : std::filesystem::directory_iterator(packDir)) {
             if (entry.is_regular_file() && isSupportedAudio(entry.path())) {
-                target.hardClicks.push_back(entry.path().string());
+                target.hardClicks.push_back(toasty::pathToUtf8(entry.path()));
             }
         }
         std::sort(target.hardClicks.begin(), target.hardClicks.end());

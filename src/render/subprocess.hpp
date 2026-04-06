@@ -4,8 +4,26 @@
 
 #include <windows.h>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
+
+namespace {
+    inline std::wstring utf8ToWide(std::string_view text) {
+        if (text.empty()) {
+            return {};
+        }
+
+        int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        if (size <= 0) {
+            return {};
+        }
+
+        std::wstring result(static_cast<size_t>(size), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), size);
+        return result;
+    }
+}
 
 class Subprocess {
 public:
@@ -20,16 +38,18 @@ public:
         if (!CreatePipe(&m_stdinRead, &m_stdinWrite, &sa, 0)) return;
         SetHandleInformation(m_stdinWrite, HANDLE_FLAG_INHERIT, 0);
 
-        STARTUPINFOA si = {};
-        si.cb = sizeof(STARTUPINFOA);
+        STARTUPINFOW si = {};
+        si.cb = sizeof(STARTUPINFOW);
         si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
         si.hStdInput = m_stdinRead;
         si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
         si.wShowWindow = SW_HIDE;
 
-        std::string cmd = command;
-        m_running = CreateProcessA(
+        std::wstring cmd = utf8ToWide(command);
+        if (cmd.empty()) return;
+
+        m_running = CreateProcessW(
             nullptr, cmd.data(), nullptr, nullptr, TRUE,
             CREATE_NO_WINDOW, nullptr, nullptr, &si, &m_pi
         );

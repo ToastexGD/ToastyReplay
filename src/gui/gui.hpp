@@ -211,7 +211,7 @@ private:
     void drawAutoclickerTab();
     void drawOnlineTab();
     char issueTitleBuf[128] = {0};
-    char issueDescBuf[1024] = {0};
+    char issueDescBuf[1501] = {0};
     int selectedUploadMacro = -1;
     char uploadCommentBuf[501] = {0};
 };

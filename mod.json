@@ -18,6 +18,16 @@
 		}
 	},
 	"settings": {
+		"ui_language": {
+			"name": "UI Language",
+			"type": "string",
+			"default": "Auto",
+			"one-of": [
+				"Auto",
+				"English",
+				"Spanish"
+			]
+		},
 		"ffmpeg_path": {
 			"name": "ffmpeg.exe Path",
 			"type": "file",
@@ -30,7 +40,7 @@
 		}
 	},
 	"resources": {
-		"files": ["resources/*.ttf"]
+		"files": ["resources/*.ttf", "resources/lang/*.json"]
 	},
 	"tags": ["gameplay", "utility", "cheat"]
 }

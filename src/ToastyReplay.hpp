@@ -1,6 +1,8 @@
 #ifndef _ToastyReplay_hpp
 #define _ToastyReplay_hpp
 
+#include "utils.hpp"
+#include "i18n/localization.hpp"
 #include "replay.hpp"
 #include "ttr_format.hpp"
 #include "core/cbf_integration.hpp"
@@ -147,6 +149,7 @@ public:
     int tickOffset = 0;
     bool startPosActive = false;
     std::string startPosWarning;
+    bool startPosWarningIsKey = false;
 
     std::vector<std::string> storedMacros;
     std::unordered_set<std::string> incompatibleMacros;
@@ -161,6 +164,30 @@ public:
     int hotkey_collision = 0;
     int hotkey_rngLock = 0;
     int hotkey_hitboxes = 0;
+
+    void clearStartPosWarning() {
+        startPosWarning.clear();
+        startPosWarningIsKey = false;
+    }
+
+    void setStartPosWarningKey(std::string_view key) {
+        startPosWarning = std::string(key);
+        startPosWarningIsKey = true;
+    }
+
+    bool hasStartPosWarning() const {
+        return !startPosWarning.empty();
+    }
+
+    std::string getStartPosWarningText() const {
+        if (startPosWarning.empty()) {
+            return {};
+        }
+        if (startPosWarningIsKey) {
+            return std::string(toasty::i18n::tr(startPosWarning));
+        }
+        return startPosWarning;
+    }
 
     void reloadMacroList() {
         storedMacros.clear();
@@ -185,7 +212,7 @@ public:
             }
 
             auto path = it->path();
-            auto stem = path.stem().string();
+            auto stem = toasty::pathToUtf8(path.stem());
             auto extension = path.extension();
 
             if (extension == ".ttr") {
@@ -223,21 +250,20 @@ public:
                 continue;
             }
 
-            try {
-                MacroSequence temp = MacroSequence::importData(*bytes);
+            if (auto temp = MacroSequence::tryImportData(*bytes)) {
                 storedMacros.push_back(stem);
-                if (temp.accuracyMode == AccuracyMode::CBF) {
+                if (temp->accuracyMode == AccuracyMode::CBF) {
                     cbfMacros.insert(stem);
-                } else if (temp.accuracyMode == AccuracyMode::CBS) {
+                } else if (temp->accuracyMode == AccuracyMode::CBS) {
                     cbsMacros.insert(stem);
                 }
-            } catch (...) {
+            } else {
                 markIncompatible(stem);
             }
         }
 
         if (ec) {
-            log::warn("Failed while scanning replay directory {}: {}", directory.string(), ec.message());
+            log::warn("Failed while scanning replay directory {}: {}", toasty::pathToUtf8(directory), ec.message());
         }
     }
 
@@ -316,12 +342,12 @@ public:
 
         if (ttrMode && activeTTR) {
             if (activeTTR->accuracyMode == AccuracyMode::CBF && !AccuracyRuntime::isSyzziCBFAvailable()) {
-                startPosWarning = "CBF playback requires syzzi.click_between_frames.";
+                setStartPosWarningKey("CBF playback requires syzzi.click_between_frames.");
                 return false;
             }
         } else if (activeMacro) {
             if (activeMacro->accuracyMode == AccuracyMode::CBF && !AccuracyRuntime::isSyzziCBFAvailable()) {
-                startPosWarning = "CBF playback requires syzzi.click_between_frames.";
+                setStartPosWarningKey("CBF playback requires syzzi.click_between_frames.");
                 return false;
             }
         }
@@ -343,7 +369,7 @@ public:
         respawnTickIndex = -1;
         tickOffset = 0;
         startPosActive = false;
-        startPosWarning.clear();
+        clearStartPosWarning();
         anchorReconciliation = true;
         resetTimingTracking();
 
@@ -395,7 +421,7 @@ public:
             return beginExecutionImmediate();
         }
 
-        startPosWarning.clear();
+        clearStartPosWarning();
         pendingPlaybackStart = true;
         return true;
     }

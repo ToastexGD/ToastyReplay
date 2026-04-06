@@ -1,18 +1,22 @@
 #include "gui/gui.hpp"
+#include "i18n/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "audio/clicksounds.hpp"
 #include "hacks/autoclicker.hpp"
 #include "online/online_client.hpp"
+#include "utils.hpp"
 #include <Geode/Bindings.hpp>
 #include <Geode/modify/LoadingLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <filesystem>
+#include <array>
 #include <cmath>
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
 #include <cstring>
 #include <cstdint>
+#include <fmt/format.h>
 #include <regex>
 #include <system_error>
 #include <vector>
@@ -137,6 +141,47 @@ static void drawSolidRect(ImDrawList* dl, ImVec2 min, ImVec2 max, float rounding
         dl->AddRect(min, max, theme.getAccentU32(0.18f * alpha), rounding, 0, 1.0f);
 }
 
+static std::string trString(std::string_view key) {
+    return std::string(toasty::i18n::tr(key));
+}
+
+static std::string trFormat(std::string_view key, fmt::format_args args) {
+    return toasty::i18n::trf(key, args);
+}
+
+template <class... Args>
+static std::string trFormat(std::string_view key, Args&&... args) {
+    return toasty::i18n::trf(key, std::forward<Args>(args)...);
+}
+
+static std::string getLocalizedDisplayLabel(const char* label) {
+    if (!label) {
+        return {};
+    }
+
+    std::string_view raw(label);
+    size_t suffixPos = raw.find("##");
+    std::string_view display = suffixPos == std::string_view::npos
+        ? raw
+        : raw.substr(0, suffixPos);
+
+    if (display.empty()) {
+        return {};
+    }
+
+    return trString(display);
+}
+
+static void imguiTextTr(std::string_view key) {
+    auto text = trString(key);
+    ImGui::TextUnformatted(text.c_str());
+}
+
+static void imguiTextWrappedTr(std::string_view key) {
+    auto text = trString(key);
+    ImGui::TextWrapped("%s", text.c_str());
+}
+
 namespace {
     static std::filesystem::path getReplayDirectoryPath() {
         return ReplayStorage::getReplayDirectoryPath();
@@ -213,7 +258,7 @@ namespace {
         for (auto const& entry : std::filesystem::directory_iterator(replayDir, ec)) {
             if (ec) break;
             if (!entry.is_regular_file()) continue;
-            if (entry.path().stem().string() == oldName) {
+            if (toasty::pathToUtf8(entry.path().stem()) == oldName) {
                 sourcePath = entry.path();
                 break;
             }
@@ -225,7 +270,7 @@ namespace {
         }
 
         std::string resolvedName = ReplayStorage::makeUniqueReplayName(sanitizedName, oldName);
-        auto destPath = sourcePath.parent_path() / (resolvedName + sourcePath.extension().string());
+        auto destPath = sourcePath.parent_path() / (resolvedName + toasty::pathToUtf8(sourcePath.extension()));
         if (destPath == sourcePath) {
             finalName = resolvedName;
             return true;
@@ -562,8 +607,12 @@ static std::string checkKeybindConflict(int* target, int newKey, const KeybindSe
         {"No Mirror",     &keybinds.noMirror},
     };
     for (auto& e : entries) {
-        if (e.ptr != target && *e.ptr == newKey)
-            return std::string("Already bound to ") + e.name;
+        if (e.ptr != target && *e.ptr == newKey) {
+            return trFormat(
+                "Already bound to {keybind}",
+                fmt::arg("keybind", toasty::i18n::tr(e.name))
+            );
+        }
     }
     return "";
 }
@@ -576,11 +625,12 @@ bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationS
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec4 accent = theme.getAccent();
     float dt = ImGui::GetIO().DeltaTime;
+    std::string displayLabel = getLocalizedDisplayLabel(label);
 
     const float width = 44.0f;
     const float height = 22.0f;
     const float radius = height * 0.5f;
-    float labelWidth = ImGui::CalcTextSize(label).x;
+    float labelWidth = ImGui::CalcTextSize(displayLabel.c_str()).x;
 
     ImGui::InvisibleButton(label, ImVec2(width + 12.0f + labelWidth, height));
     ImGuiID id = ImGui::GetItemID();
@@ -616,7 +666,7 @@ bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationS
     dl->AddCircle(knobCenter, radius - 2.0f, theme.getAccentU32(0.30f + toggleT * 0.40f), 0, 1.0f);
 
     ImU32 textCol = hovered ? theme.getTextU32() : theme.getTextSecondaryU32();
-    dl->AddText(ImVec2(pos.x + width + 12.0f, pos.y + 2.0f), textCol, label);
+    dl->AddText(ImVec2(pos.x + width + 12.0f, pos.y + 2.0f), textCol, displayLabel.c_str());
 
     ImGui::PopID();
     return clicked;
@@ -627,6 +677,7 @@ bool StyledButton(const char* label, ImVec2 size, ThemeEngine& theme, AnimationS
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec4 accent = theme.getAccent();
     float dt = ImGui::GetIO().DeltaTime;
+    std::string displayLabel = getLocalizedDisplayLabel(label);
 
     if (size.x <= 0) size.x = ImGui::GetContentRegionAvail().x;
     if (size.y <= 0) size.y = 32.0f;
@@ -651,12 +702,7 @@ bool StyledButton(const char* label, ImVec2 size, ThemeEngine& theme, AnimationS
 
     drawSolidRect(dl, bMin, bMax, rounding, theme, 1.0f + hoverT * 0.6f);
 
-    const char* displayEnd = label;
-    while (*displayEnd) {
-        if (displayEnd[0] == '#' && displayEnd[1] == '#') break;
-        displayEnd++;
-    }
-    ImVec2 textSize = ImGui::CalcTextSize(label, displayEnd);
+    ImVec2 textSize = ImGui::CalcTextSize(displayLabel.c_str());
     ImVec2 textPos(
         bMin.x + (scaled.x - textSize.x) * 0.5f,
         bMin.y + (scaled.y - textSize.y) * 0.5f
@@ -664,8 +710,7 @@ bool StyledButton(const char* label, ImVec2 size, ThemeEngine& theme, AnimationS
     dl->AddText(
         textPos,
         hovered ? toU32(brighten(theme.textPrimary, 0.05f)) : theme.getTextU32(),
-        label,
-        displayEnd
+        displayLabel.c_str()
     );
 
     return clicked;
@@ -678,6 +723,7 @@ bool StyledSliderFloat(const char* label, float* value, float vmin, float vmax, 
     float availWidth = ImGui::GetContentRegionAvail().x - 10.0f;
     float dt = ImGui::GetIO().DeltaTime;
     ImVec4 accent = theme.getAccent();
+    std::string displayLabel = getLocalizedDisplayLabel(label);
 
     float displayVal = *value;
     float sliderFrac = std::clamp((*value - vmin) / std::max(vmax - vmin, FLT_EPSILON), 0.0f, 1.0f);
@@ -688,7 +734,7 @@ bool StyledSliderFloat(const char* label, float* value, float vmin, float vmax, 
     else
         snprintf(valBuf, sizeof(valBuf), "%.2f", displayVal);
 
-    dl->AddText(pos, theme.getTextSecondaryU32(), label);
+    dl->AddText(pos, theme.getTextSecondaryU32(), displayLabel.c_str());
 
     if (allowManualInput) {
         float inputW = 52.0f;
@@ -770,10 +816,11 @@ void SectionHeader(const char* text, ThemeEngine& theme) {
     ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float width = ImGui::GetContentRegionAvail().x;
-    ImVec2 textSize = ImGui::CalcTextSize(text);
+    std::string displayText = getLocalizedDisplayLabel(text);
+    ImVec2 textSize = ImGui::CalcTextSize(displayText.c_str());
     ImVec4 accent = theme.getAccent();
 
-    dl->AddText(pos, theme.getAccentU32(0.96f), text);
+    dl->AddText(pos, theme.getAccentU32(0.96f), displayText.c_str());
     float lineY = pos.y + textSize.y + 5.0f;
     float leftW = std::min(120.0f, width * 0.35f);
     dl->AddRectFilledMultiColor(
@@ -807,6 +854,8 @@ bool ModuleCard(const char* name, const char* description, bool* enabled,
     float dt = ImGui::GetIO().DeltaTime;
     ImVec4 accent = theme.getAccent();
     float rounding = theme.cornerRadius;
+    std::string displayName = getLocalizedDisplayLabel(name);
+    std::string displayDescription = description ? getLocalizedDisplayLabel(description) : std::string();
 
     ImGui::InvisibleButton(name, ImVec2(width, height));
     bool hovered = ImGui::IsItemHovered();
@@ -828,10 +877,10 @@ bool ModuleCard(const char* name, const char* description, bool* enabled,
     }
 
     ImU32 nameCol = *enabled ? theme.getAccentU32(0.98f) : theme.getTextU32();
-    dl->AddText(ImVec2(pos.x + 14.0f, pos.y + (description ? 9.0f : 12.0f)), nameCol, name);
+    dl->AddText(ImVec2(pos.x + 14.0f, pos.y + (description ? 9.0f : 12.0f)), nameCol, displayName.c_str());
 
     if (description) {
-        dl->AddText(ImVec2(pos.x + 14.0f, pos.y + 31.0f), theme.getTextSecondaryU32(), description);
+        dl->AddText(ImVec2(pos.x + 14.0f, pos.y + 31.0f), theme.getTextSecondaryU32(), displayDescription.c_str());
     }
 
     float toggleW = 40.0f, toggleH = 20.0f;
@@ -919,7 +968,8 @@ void ModuleCardEnd() {
 void StatusBadge(const char* text, ImVec4 color) {
     ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 textSize = ImGui::CalcTextSize(text);
+    std::string displayText = getLocalizedDisplayLabel(text);
+    ImVec2 textSize = ImGui::CalcTextSize(displayText.c_str());
     float padX = 9.0f, padY = 4.0f;
 
     ImVec4 bgCol(color.x * 0.25f, color.y * 0.25f, color.z * 0.25f, 0.85f);
@@ -927,7 +977,7 @@ void StatusBadge(const char* text, ImVec4 color) {
         toU32(bgCol), 999.0f);
     dl->AddRect(pos, ImVec2(pos.x + textSize.x + padX * 2, pos.y + textSize.y + padY * 2),
         toU32(withAlpha(color, 0.95f)), 999.0f, 0, 1.0f);
-    dl->AddText(ImVec2(pos.x + padX, pos.y + padY), toU32(withAlpha(color, 0.98f)), text);
+    dl->AddText(ImVec2(pos.x + padX, pos.y + padY), toU32(withAlpha(color, 0.98f)), displayText.c_str());
 
     ImGui::Dummy(ImVec2(textSize.x + padX * 2, textSize.y + padY * 2));
 }
@@ -939,6 +989,7 @@ bool PillButton(const char* label, bool active, float width, ThemeEngine& theme,
     float dt = ImGui::GetIO().DeltaTime;
     float rounding = height * 0.5f;
     ImVec4 accent = theme.getAccent();
+    std::string displayLabel = getLocalizedDisplayLabel(label);
 
     ImGui::InvisibleButton(label, ImVec2(width, height));
     ImGuiID id = ImGui::GetItemID();
@@ -958,10 +1009,10 @@ bool PillButton(const char* label, bool active, float width, ThemeEngine& theme,
         dl->AddRectFilled(ImVec2(pos.x + 12.0f, pMax.y - 2.0f), ImVec2(pMax.x - 12.0f, pMax.y), theme.getAccentU32(0.92f), 4.0f);
     }
 
-    ImVec2 textSize = ImGui::CalcTextSize(label);
+    ImVec2 textSize = ImGui::CalcTextSize(displayLabel.c_str());
     ImVec2 textPos(pos.x + (width - textSize.x) * 0.5f, pos.y + (height - textSize.y) * 0.5f);
     ImU32 textCol = active ? toU32(ImVec4(0.97f, 0.99f, 1.0f, 0.98f)) : (hovered ? theme.getTextU32() : theme.getTextSecondaryU32());
-    dl->AddText(textPos, textCol, label);
+    dl->AddText(textPos, textCol, displayLabel.c_str());
 
     return clicked;
 }
@@ -969,6 +1020,7 @@ bool PillButton(const char* label, bool active, float width, ThemeEngine& theme,
 void KeybindButton(const char* label, int* keyCode, ThemeEngine& theme, AnimationState& anim) {
     MenuInterface* ui = MenuInterface::get();
     ImGui::PushID(keyCode);
+    std::string displayLabel = getLocalizedDisplayLabel(label);
 
     
     static int* settingsRebindActive = nullptr;
@@ -1018,7 +1070,7 @@ void KeybindButton(const char* label, int* keyCode, ThemeEngine& theme, Animatio
     ImVec2 rowMax(pos.x + width, pos.y + height);
     drawSolidRect(dl, pos, rowMax, rounding, theme, 1.0f + hoverT * 0.7f);
 
-    dl->AddText(ImVec2(pos.x + 12.0f, pos.y + (height - ImGui::CalcTextSize(label).y) * 0.5f), theme.getTextU32(), label);
+    dl->AddText(ImVec2(pos.x + 12.0f, pos.y + (height - ImGui::CalcTextSize(displayLabel.c_str()).y) * 0.5f), theme.getTextU32(), displayLabel.c_str());
     ImVec2 txtSize = ImGui::CalcTextSize(keyText.c_str());
     float btnW = std::max(txtSize.x + 22.0f, 54.0f);
     float btnH = 26.0f;
@@ -1060,6 +1112,9 @@ void MenuInterface::switchTab(int newTab) {
     previousTab = activeTab;
     activeTab = newTab;
     anim.tabTransition = 0.0f;
+    if (newTab == 5) {
+        OnlineClient::get()->refreshAuthStatus();
+    }
 }
 
 void MenuInterface::drawBackdrop() {
@@ -1213,10 +1268,11 @@ void MenuInterface::drawTabBar() {
         }
 
         bool active = (activeTab == i);
-        ImVec2 textSize = ImGui::CalcTextSize(tabNames[i]);
+        std::string displayName = trString(tabNames[i]);
+        ImVec2 textSize = ImGui::CalcTextSize(displayName.c_str());
         ImVec2 textPos(tabMin.x + (tabW - textSize.x) * 0.5f, tabMin.y + (tabH - textSize.y) * 0.5f);
         ImU32 color = active ? toU32(ImVec4(0.98f, 0.99f, 1.0f, 0.98f)) : (hovered ? theme.getTextU32() : theme.getTextSecondaryU32());
-        dl->AddText(textPos, color, tabNames[i]);
+        dl->AddText(textPos, color, displayName.c_str());
     }
 
     if (fontBody) ImGui::PopFont();
@@ -1289,10 +1345,11 @@ void MenuInterface::drawMainSubTabBar() {
 
         bool active = (mainSubTab == i);
         if (fontSmall) ImGui::PushFont(fontSmall);
-        ImVec2 textSize = ImGui::CalcTextSize(subNames[i]);
+        std::string displayName = trString(subNames[i]);
+        ImVec2 textSize = ImGui::CalcTextSize(displayName.c_str());
         ImVec2 textPos(tabMin.x + (subW - textSize.x) * 0.5f, tabMin.y + (subH - textSize.y) * 0.5f);
         ImU32 color = active ? theme.getAccentU32(0.98f) : (hovered ? theme.getTextU32() : theme.getTextSecondaryU32());
-        dl->AddText(textPos, color, subNames[i]);
+        dl->AddText(textPos, color, displayName.c_str());
         if (fontSmall) ImGui::PopFont();
     }
 
@@ -1330,20 +1387,26 @@ void MenuInterface::drawStatusBar() {
 
     if (fontSmall) ImGui::PushFont(fontSmall);
 
-    char statusBuf[256];
     int tick = PlayLayer::get() ? engine->lastTickIndex : 0;
-    snprintf(statusBuf, sizeof(statusBuf), "TPS: %.0f    Speed: %.2fx    Tick: %d",
-        engine->tickRate, engine->gameSpeed, tick);
+    auto statusText = trFormat(
+        "TPS: {tps}    Speed: {speed}x    Tick: {tick}",
+        fmt::arg("tps", fmt::format("{:.0f}", engine->tickRate)),
+        fmt::arg("speed", fmt::format("{:.2f}", engine->gameSpeed)),
+        fmt::arg("tick", tick)
+    );
 
-    ImVec2 textSize = ImGui::CalcTextSize(statusBuf);
+    ImVec2 textSize = ImGui::CalcTextSize(statusText.c_str());
     float textY = barY + (barH - textSize.y) / 2;
-    dl->AddText(ImVec2(windowPos.x + padX + 12.0f, textY), theme.getTextSecondaryU32(), statusBuf);
+    dl->AddText(ImVec2(windowPos.x + padX + 12.0f, textY), theme.getTextSecondaryU32(), statusText.c_str());
 
     AccuracyMode statusAccuracyMode = engine->engineMode == MODE_EXECUTE
         ? engine->activeMacroAccuracyMode()
         : engine->selectedAccuracyMode;
     if (statusAccuracyMode != AccuracyMode::Vanilla) {
-        std::string accuracyText = std::string(getAccuracyTag(statusAccuracyMode)) + " ON";
+        std::string accuracyText = trFormat(
+            "{mode} ON",
+            fmt::arg("mode", getAccuracyTag(statusAccuracyMode))
+        );
         const char* cbfTxt = accuracyText.c_str();
         ImVec2 cbfSize = ImGui::CalcTextSize(cbfTxt);
         float badgeX = windowPos.x + padX + 12.0f + textSize.x + 14.0f;
@@ -1383,7 +1446,7 @@ void MenuInterface::drawReplayTab() {
         } else {
             engine->engineMode = MODE_DISABLED;
         }
-        engine->startPosWarning.clear();
+        engine->clearStartPosWarning();
     }
     ImGui::SameLine(0, 10);
     static bool showFormatPopup = false;
@@ -1414,7 +1477,8 @@ void MenuInterface::drawReplayTab() {
     ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
     if (ImGui::BeginPopup("##FormatSelect", ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
-        drawPopupChrome(*this, "Select Format", kPopupRounding);
+        auto popupTitle = trString("Select Format");
+        drawPopupChrome(*this, popupTitle.c_str(), kPopupRounding);
         float popupBtnW = 120.0f;
         bool cbfRecording = engine->selectedAccuracyMode == AccuracyMode::CBF;
         if (Widgets::StyledButton("TTR", ImVec2(popupBtnW, 30), theme, anim, 6.0f)) {
@@ -1439,7 +1503,7 @@ void MenuInterface::drawReplayTab() {
         if (cbfRecording) {
             ImGui::Dummy(ImVec2(0, 6));
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            ImGui::TextWrapped("CBF recording is only available in TTR format.");
+            imguiTextWrappedTr("CBF recording is only available in TTR format.");
             ImGui::PopStyleColor();
         }
         ImGui::EndPopup();
@@ -1466,7 +1530,8 @@ void MenuInterface::drawReplayTab() {
             Widgets::StatusBadge(accuracyTag, getAccuracyTagColor(engine->selectedAccuracyMode));
         }
         ImGui::SameLine();
-        ImGui::Text("Actions: %zu", actionCount);
+        auto actionsText = trFormat("Actions: {count}", fmt::arg("count", actionCount));
+        ImGui::TextUnformatted(actionsText.c_str());
         ImGui::Dummy(ImVec2(0, 4));
 
         if (!macroNameReady) {
@@ -1476,7 +1541,7 @@ void MenuInterface::drawReplayTab() {
             macroNameReady = true;
         }
 
-        ImGui::Text("Macro Name:");
+        imguiTextTr("Macro Name:");
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##recordingName", macroNameBuffer, sizeof(macroNameBuffer))) {
             if (engine->ttrMode && engine->activeTTR)
@@ -1545,12 +1610,18 @@ void MenuInterface::drawReplayTab() {
             }
         }
         ImGui::SameLine();
-        ImGui::Text("%s | Actions: %zu", macName.c_str(), actionCount);
+        auto playbackInfo = trFormat(
+            "{name} | Actions: {count}",
+            fmt::arg("name", macName),
+            fmt::arg("count", actionCount)
+        );
+        ImGui::TextUnformatted(playbackInfo.c_str());
 
         if (engine->startPosActive) {
             Widgets::StatusBadge("STARTPOS", ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
             ImGui::SameLine();
-            ImGui::Text("Offset: %d ticks", engine->tickOffset);
+            auto offsetText = trFormat("Offset: {ticks} ticks", fmt::arg("ticks", engine->tickOffset));
+            ImGui::TextUnformatted(offsetText.c_str());
         }
 
         ImGui::Dummy(ImVec2(0, 4));
@@ -1561,17 +1632,15 @@ void MenuInterface::drawReplayTab() {
         ImGui::Dummy(ImVec2(0, 4));
     }
 
-    if (!engine->startPosWarning.empty()) {
+    if (engine->hasStartPosWarning()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
-        ImGui::TextWrapped("%s", engine->startPosWarning.c_str());
+        auto warningText = engine->getStartPosWarningText();
+        ImGui::TextWrapped("%s", warningText.c_str());
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
     }
 
     Widgets::SectionHeader("Saved Replays", theme);
-
-    std::string currentMacroName = (engine->hasMacro() && engine->engineMode != MODE_CAPTURE)
-        ? engine->getMacroName() : "Select a replay...";
 
     float listPadY = 8.0f;
     float listPadX = 10.0f;
@@ -1591,7 +1660,7 @@ void MenuInterface::drawReplayTab() {
     if (engine->storedMacros.empty()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
-        ImGui::Text("No saved replays");
+        imguiTextTr("No saved replays");
         ImGui::PopStyleColor();
     }
 
@@ -1616,9 +1685,10 @@ void MenuInterface::drawReplayTab() {
         } else if (!isIncompatible && isCBS) {
             accuracyLabelW = ImGui::CalcTextSize("CBS").x + 16.0f;
         }
+        auto incompatibleText = trString("Incompatible");
         float ttrLabelW = (!isIncompatible && isTTR) ? ImGui::CalcTextSize("TTR").x + 16.0f : 0.0f;
         float gdrLabelW = (!isIncompatible && !isTTR) ? ImGui::CalcTextSize("GDR").x + 16.0f : 0.0f;
-        float incompatLabelW = isIncompatible ? ImGui::CalcTextSize("Incompatible").x + 16.0f : 0.0f;
+        float incompatLabelW = isIncompatible ? ImGui::CalcTextSize(incompatibleText.c_str()).x + 16.0f : 0.0f;
         float maxNameW = std::max(40.0f, fullRowW - xBtnW - accuracyLabelW - ttrLabelW - gdrLabelW - incompatLabelW - listPadX * 2.0f - 24.0f);
         if (ImGui::CalcTextSize(rowLabel.c_str()).x > maxNameW) {
             std::string clipped = rowLabel;
@@ -1638,11 +1708,11 @@ void MenuInterface::drawReplayTab() {
         if (ImGui::IsItemHovered() && ImGui::IsMouseDown(1)) {
             std::string tooltip;
             if (isCBS || isCBF) {
-                tooltip += "CBF or CBS macros do not work on other menus!";
+                tooltip += trString("CBF or CBS macros do not work on other menus!");
             }
             if (isTTR) {
                 if (!tooltip.empty()) tooltip += "\n";
-                tooltip += "TTR macros do not work on other menus!";
+                tooltip += trString("TTR macros do not work on other menus!");
             }
             if (!tooltip.empty()) {
                 ImGui::SetTooltip("%s", tooltip.c_str());
@@ -1691,12 +1761,11 @@ void MenuInterface::drawReplayTab() {
 
         float tagX = rowStart.x + fullRowW - xBtnW - listPadX;
         if (isIncompatible) {
-            const char* tag = "Incompatible";
-            ImVec2 tagSize = ImGui::CalcTextSize(tag);
+            ImVec2 tagSize = ImGui::CalcTextSize(incompatibleText.c_str());
             tagX -= tagSize.x + 8.0f;
             ImGui::GetWindowDrawList()->AddText(
                 ImVec2(tagX, itemMinY + (itemH - tagSize.y) * 0.5f),
-                toU32(ImVec4(1.0f, 0.2f, 0.2f, 1.0f)), tag
+                toU32(ImVec4(1.0f, 0.2f, 0.2f, 1.0f)), incompatibleText.c_str()
             );
         }
         if (!isIncompatible && (isCBS || isCBF)) {
@@ -1735,7 +1804,7 @@ void MenuInterface::drawReplayTab() {
             auto dir = getReplayDirectoryPath();
             bool deleted = false;
             for (auto& entry : std::filesystem::directory_iterator(dir)) {
-                if (entry.is_regular_file() && entry.path().stem().string() == macroName) {
+                if (entry.is_regular_file() && toasty::pathToUtf8(entry.path().stem()) == macroName) {
                     std::filesystem::remove(entry.path());
                     deleted = true;
                     break;
@@ -1777,7 +1846,8 @@ void MenuInterface::drawReplayTab() {
         nullptr,
         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
     )) {
-        drawPopupChrome(*this, "Macro Actions", kActionPopupRounding);
+        auto actionTitle = trString("Macro Actions");
+        drawPopupChrome(*this, actionTitle.c_str(), kActionPopupRounding);
         ImGui::TextColored(theme.getAccent(), "%s", replayActionMacroName.c_str());
         ImGui::Dummy(ImVec2(0, 6));
 
@@ -1816,7 +1886,8 @@ void MenuInterface::drawReplayTab() {
                 ImGui::PopStyleVar();
                 ImVec2 tipPos = ImGui::GetItemRectMin();
                 tipPos.y += 34.0f;
-                ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), "CBS/CBF macros cannot be edited");
+                auto tipText = trString("CBS/CBF macros cannot be edited");
+                ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), tipText.c_str());
             } else if (Widgets::StyledButton("Open Macro Editor##actionEdit", ImVec2(actionBtnW, 30.0f), theme, anim, 6.0f)) {
                 if (replayActionIsTTR) {
                     TTRMacro* loaded = TTRMacro::loadFromDisk(replayActionMacroName);
@@ -1858,8 +1929,9 @@ void MenuInterface::drawReplayTab() {
         nullptr,
         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
     )) {
-        drawPopupChrome(*this, "Rename Replay", kRenamePopupRounding);
-        ImGui::Text("Rename replay:");
+        auto renameTitle = trString("Rename Replay");
+        drawPopupChrome(*this, renameTitle.c_str(), kRenamePopupRounding);
+        imguiTextTr("Rename replay:");
         ImGui::TextColored(theme.getAccent(), "%s", replayRenameOriginalName.c_str());
         ImGui::Dummy(ImVec2(0, 6));
 
@@ -1952,7 +2024,8 @@ void MenuInterface::drawReplayTab() {
 
         ImGui::Dummy(ImVec2(0, 4));
         Widgets::SectionHeader("Loaded Macro", theme);
-        ImGui::Text("Name: %s", loadedName.c_str());
+        auto nameText = trFormat("Name: {name}", fmt::arg("name", loadedName));
+        ImGui::TextUnformatted(nameText.c_str());
         if (engine->ttrMode) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, getTTRTagColor());
@@ -1965,9 +2038,11 @@ void MenuInterface::drawReplayTab() {
             ImGui::Text("(%s)", accuracyTag);
             ImGui::PopStyleColor();
         }
-        ImGui::Text("Actions: %zu", actionCount);
+        auto loadedActions = trFormat("Actions: {count}", fmt::arg("count", actionCount));
+        ImGui::TextUnformatted(loadedActions.c_str());
         if (engine->ttrMode && engine->activeTTR) {
-            ImGui::Text("Anchors: %zu", engine->activeTTR->anchors.size());
+            auto anchorsText = trFormat("Anchors: {count}", fmt::arg("count", engine->activeTTR->anchors.size()));
+            ImGui::TextUnformatted(anchorsText.c_str());
         }
 
         if (engine->engineMode == MODE_EXECUTE) {
@@ -1981,7 +2056,8 @@ void MenuInterface::drawToolsTab() {
     ReplayEngine* engine = ReplayEngine::get();
 
     Widgets::SectionHeader("TPS Control", theme);
-    ImGui::TextColored(theme.getAccent(), "Current: %.0f TPS", engine->tickRate);
+    auto currentTpsText = trFormat("Current: {value} TPS", fmt::arg("value", fmt::format("{:.0f}", engine->tickRate)));
+    ImGui::TextColored(theme.getAccent(), "%s", currentTpsText.c_str());
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
     ImGui::InputFloat("##tps", &tempTickRate, 0, 0, "%.0f");
@@ -1996,7 +2072,8 @@ void MenuInterface::drawToolsTab() {
 
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Speed Control", theme);
-    ImGui::TextColored(theme.getAccent(), "Current: %.2fx", engine->gameSpeed);
+    auto currentSpeedText = trFormat("Current: {value}x", fmt::arg("value", fmt::format("{:.2f}", engine->gameSpeed)));
+    ImGui::TextColored(theme.getAccent(), "%s", currentSpeedText.c_str());
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
     ImGui::InputFloat("##speed", &tempGameSpeed, 0, 0, "%.2f");
@@ -2067,10 +2144,15 @@ void MenuInterface::drawHacksTab() {
         else if (hitRate >= 70.0f) hitColor = ImVec4(1.0f, 1.0f, 0.3f, 1.0f);
         else hitColor = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
 
-        ImGui::Text("Accuracy: ");
+        imguiTextTr("Accuracy:");
         ImGui::SameLine();
         ImGui::TextColored(hitColor, "%.2f%%", hitRate);
-        ImGui::Text("Deaths: %d | Frames: %d", engine->bypassedCollisions, engine->totalTickCount);
+        auto deathFrameText = trFormat(
+            "Deaths: {deaths} | Frames: {frames}",
+            fmt::arg("deaths", engine->bypassedCollisions),
+            fmt::arg("frames", engine->totalTickCount)
+        );
+        ImGui::TextUnformatted(deathFrameText.c_str());
 
         ImGui::Dummy(ImVec2(0, 4));
         if (engine->collisionLimitActive) {
@@ -2109,15 +2191,11 @@ void MenuInterface::drawHacksTab() {
             rngBufferInit = true;
         }
 
-        ImGui::Text("Seed Value:");
+        imguiTextTr("Seed Value:");
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##seedValue", rngBuffer, sizeof(rngBuffer), ImGuiInputTextFlags_CharsDecimal)) {
-            try {
-                unsigned long long parsed = std::stoull(rngBuffer);
-                engine->rngSeedVal = static_cast<unsigned int>(parsed);
-            } catch (...) {
-                engine->rngSeedVal = 1;
-            }
+            auto parsed = toasty::parseInteger<unsigned long long>(rngBuffer);
+            engine->rngSeedVal = parsed ? static_cast<unsigned int>(*parsed) : 1u;
         }
         Widgets::ModuleCardEnd();
     }
@@ -2146,7 +2224,7 @@ void MenuInterface::drawRenderTab() {
 
     float inputW = ImGui::GetContentRegionAvail().x * 0.45f;
 
-    ImGui::Text("Name");
+    imguiTextTr("Name");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderName", renderNameBuf, sizeof(renderNameBuf)))
@@ -2167,7 +2245,7 @@ void MenuInterface::drawRenderTab() {
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Resolution", theme);
 
-    ImGui::Text("Preset");
+    imguiTextTr("Preset");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##resPreset", presets[renderPresetIndex].name)) {
@@ -2185,7 +2263,7 @@ void MenuInterface::drawRenderTab() {
         ImGui::EndCombo();
     }
 
-    ImGui::Text("FPS");
+    imguiTextTr("FPS");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderFPS", renderFpsBuf, sizeof(renderFpsBuf), ImGuiInputTextFlags_CharsDecimal))
@@ -2208,7 +2286,7 @@ void MenuInterface::drawRenderTab() {
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.25f, 0.25f, 1.0f));
-        ImGui::TextWrapped("You are editing advanced changes. Are you sure you would like to continue?");
+        imguiTextWrappedTr("You are editing advanced changes. Are you sure you would like to continue?");
         ImGui::PopStyleColor();
 
         ImGui::Dummy(ImVec2(0, 12));
@@ -2219,7 +2297,8 @@ void MenuInterface::drawRenderTab() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.20f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.65f, 0.25f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.45f, 0.16f, 1.0f));
-        if (ImGui::Button("Yes", ImVec2(btnW, 34))) {
+        auto yesText = trString("Yes");
+        if (ImGui::Button(yesText.c_str(), ImVec2(btnW, 34))) {
             advancedWarningAccepted = true;
             showAdvancedWarning = false;
             snprintf(backupCodecBuf, sizeof(backupCodecBuf), "%s", renderCodecBuf);
@@ -2238,7 +2317,8 @@ void MenuInterface::drawRenderTab() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.15f, 0.15f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.20f, 0.20f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.50f, 0.10f, 0.10f, 1.0f));
-        if (ImGui::Button("No", ImVec2(btnW, 34))) {
+        auto noText = trString("No");
+        if (ImGui::Button(noText.c_str(), ImVec2(btnW, 34))) {
             showAdvancedWarning = false;
             
             snprintf(renderCodecBuf, sizeof(renderCodecBuf), "%s", backupCodecBuf);
@@ -2280,7 +2360,7 @@ void MenuInterface::drawRenderTab() {
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Encoding", theme);
 
-    ImGui::Text("Codec");
+    imguiTextTr("Codec");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderCodec", renderCodecBuf, sizeof(renderCodecBuf))) {
@@ -2289,7 +2369,7 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_codec", std::string(renderCodecBuf));
     }
 
-    ImGui::Text("Bitrate (M)");
+    imguiTextTr("Bitrate (M)");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderBitrate", renderBitrateBuf, sizeof(renderBitrateBuf))) {
@@ -2298,7 +2378,7 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_bitrate", std::string(renderBitrateBuf));
     }
 
-    ImGui::Text("Extension");
+    imguiTextTr("Extension");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderExt", renderExtBuf, sizeof(renderExtBuf))) {
@@ -2320,7 +2400,7 @@ void MenuInterface::drawRenderTab() {
         auto* csm = ClickSoundManager::get();
         if (csm->p1Pack.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.3f, 0.8f));
-            ImGui::TextWrapped("Configure a click pack in the Clicks tab first.");
+            imguiTextWrappedTr("Configure a click pack in the Clicks tab first.");
             ImGui::PopStyleColor();
         }
     }
@@ -2343,7 +2423,7 @@ void MenuInterface::drawRenderTab() {
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Advanced", theme);
 
-    ImGui::Text("Extra Args");
+    imguiTextTr("Extra Args");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderArgs", renderArgsBuf, sizeof(renderArgsBuf))) {
@@ -2352,7 +2432,7 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_args", std::string(renderArgsBuf));
     }
 
-    ImGui::Text("Video Filter");
+    imguiTextTr("Video Filter");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderVArgs", renderVideoArgsBuf, sizeof(renderVideoArgsBuf))) {
@@ -2361,7 +2441,7 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_video_args", std::string(renderVideoArgsBuf));
     }
 
-    ImGui::Text("Audio Args");
+    imguiTextTr("Audio Args");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderAArgs", renderAudioArgsBuf, sizeof(renderAudioArgsBuf))) {
@@ -2370,7 +2450,7 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_audio_args", std::string(renderAudioArgsBuf));
     }
 
-    ImGui::Text("Seconds After");
+    imguiTextTr("Seconds After");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##renderSecAfter", renderSecondsAfterBuf, sizeof(renderSecondsAfterBuf))) {
@@ -2388,7 +2468,7 @@ void MenuInterface::drawRenderTab() {
     Widgets::SectionHeader("Rendered Videos", theme);
 
     std::filesystem::path renderFolder = Mod::get()->getSettingValue<std::filesystem::path>("render_folder");
-    if (renderFolder.empty() || renderFolder.string().find("{gd_dir}") != std::string::npos)
+    if (renderFolder.empty() || toasty::pathToUtf8(renderFolder).find("{gd_dir}") != std::string::npos)
         renderFolder = geode::dirs::getGameDir() / "renders";
 
     std::vector<std::filesystem::directory_entry> renderFiles;
@@ -2415,13 +2495,13 @@ void MenuInterface::drawRenderTab() {
     if (renderFiles.empty()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + rvListPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
-        ImGui::Text("No rendered videos");
+        imguiTextTr("No rendered videos");
         ImGui::PopStyleColor();
     }
 
     for (auto& entry : renderFiles) {
-        std::string name = entry.path().stem().string();
-        std::string ext = entry.path().extension().string();
+        std::string name = toasty::pathToUtf8(entry.path().stem());
+        std::string ext = toasty::pathToUtf8(entry.path().extension());
         ImGui::PushID(name.c_str());
 
         float rowH = ImGui::GetTextLineHeight() + 8.0f;
@@ -2443,8 +2523,12 @@ void MenuInterface::drawRenderTab() {
         std::regex resRegex("_(\\d+)x(\\d+)_");
         std::smatch resMatch;
         if (std::regex_search(name, resMatch, resRegex)) {
-            parsedW = std::stoi(resMatch[1].str());
-            parsedH = std::stoi(resMatch[2].str());
+            if (auto widthValue = toasty::parseInteger<int>(resMatch[1].str())) {
+                parsedW = *widthValue;
+            }
+            if (auto heightValue = toasty::parseInteger<int>(resMatch[2].str())) {
+                parsedH = *heightValue;
+            }
         }
         if (parsedW == 1280 && parsedH == 720) { resBadge = "720p"; badgeColor = ImVec4(0.4f, 0.7f, 1.0f, 1.0f); }
         else if (parsedW == 1920 && parsedH == 1080) { resBadge = "1080p"; badgeColor = ImVec4(0.3f, 0.85f, 0.4f, 1.0f); }
@@ -2543,7 +2627,12 @@ void MenuInterface::drawAutoclickerTab() {
 
     float cps = static_cast<float>(eng->tickRate) / static_cast<float>(ac->holdTicks + ac->releaseTicks);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
-    ImGui::Text("~%.1f clicks/sec at %.0f TPS", cps, eng->tickRate);
+    auto cpsText = trFormat(
+        "~{cps} clicks/sec at {tps} TPS",
+        fmt::arg("cps", fmt::format("{:.1f}", cps)),
+        fmt::arg("tps", fmt::format("{:.0f}", eng->tickRate))
+    );
+    ImGui::TextUnformatted(cpsText.c_str());
     ImGui::PopStyleColor();
 
     ImGui::Dummy(ImVec2(0, 8));
@@ -2553,7 +2642,7 @@ void MenuInterface::drawAutoclickerTab() {
         mod->setSavedValue("ac_only_holding", ac->onlyWhileHolding);
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
-    ImGui::TextWrapped("When enabled, only auto-clicks while you hold the jump button.");
+    imguiTextWrappedTr("When enabled, only auto-clicks while you hold the jump button.");
     ImGui::PopStyleColor();
 
     ImGui::Dummy(ImVec2(0, 8));
@@ -2595,7 +2684,7 @@ void MenuInterface::drawClicksTab() {
 
     if (csm->availablePacks.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 0.6f));
-        ImGui::TextWrapped("No click packs found. Use Open Folder to add packs.");
+        imguiTextWrappedTr("No click packs found. Use Open Folder to add packs.");
         ImGui::PopStyleColor();
     } else {
         ImGui::SetNextItemWidth(comboW);
@@ -2632,9 +2721,14 @@ void MenuInterface::drawClicksTab() {
     if (!csm->p1Pack.empty()) {
         ImGui::Dummy(ImVec2(0, 4));
         ImGui::PushStyleColor(ImGuiCol_Text, theme.getAccentU32() ? ImVec4(theme.textSecondary) : ImVec4(0.6f, 0.6f, 0.65f, 1.0f));
-        ImGui::Text("Hard: %d  Soft: %d  Release: %d  Noise: %d",
-            csm->p1Pack.hardCount(), csm->p1Pack.softCount(),
-            csm->p1Pack.releaseCount(), csm->p1Pack.noiseCount());
+        auto packStats = trFormat(
+            "Hard: {hard}  Soft: {soft}  Release: {release}  Noise: {noise}",
+            fmt::arg("hard", csm->p1Pack.hardCount()),
+            fmt::arg("soft", csm->p1Pack.softCount()),
+            fmt::arg("release", csm->p1Pack.releaseCount()),
+            fmt::arg("noise", csm->p1Pack.noiseCount())
+        );
+        ImGui::TextUnformatted(packStats.c_str());
         ImGui::PopStyleColor();
     }
 
@@ -2642,7 +2736,7 @@ void MenuInterface::drawClicksTab() {
     ImVec4 linkColor = theme.getAccent();
     linkColor.w = 0.9f;
     ImGui::PushStyleColor(ImGuiCol_Text, linkColor);
-    ImGui::TextWrapped("Find click sounds here");
+    imguiTextWrappedTr("Find click sounds here");
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -2673,7 +2767,7 @@ void MenuInterface::drawClicksTab() {
 
     if (csm->p1Pack.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 0.6f));
-        ImGui::TextWrapped("Select a click pack to see volume controls.");
+        imguiTextWrappedTr("Select a click pack to see volume controls.");
         ImGui::PopStyleColor();
     }
 
@@ -2700,7 +2794,7 @@ void MenuInterface::drawClicksTab() {
 
     if (csm->p1Pack.noiseFiles.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 0.6f));
-        ImGui::TextWrapped("No noise files found. Add a 'noise' folder to your click pack.");
+        imguiTextWrappedTr("No noise files found. Add a 'noise' folder to your click pack.");
         ImGui::PopStyleColor();
     } else {
         if (Widgets::ToggleSwitch("Enable Background Noise", &csm->backgroundNoiseEnabled, theme, anim)) {
@@ -2732,7 +2826,7 @@ void MenuInterface::drawClicksTab() {
 
         if (csm->availablePacksP2.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 0.6f));
-            ImGui::TextWrapped("No P2 click packs found. Use Open P2 Folder to add packs.");
+            imguiTextWrappedTr("No P2 click packs found. Use Open P2 Folder to add packs.");
             ImGui::PopStyleColor();
         } else {
             ImGui::SetNextItemWidth(p2ComboW);
@@ -2768,9 +2862,14 @@ void MenuInterface::drawClicksTab() {
         if (!csm->p2Pack.empty()) {
             ImGui::Dummy(ImVec2(0, 4));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.65f, 1.0f));
-            ImGui::Text("Hard: %d  Soft: %d  Release: %d  Noise: %d",
-                csm->p2Pack.hardCount(), csm->p2Pack.softCount(),
-                csm->p2Pack.releaseCount(), csm->p2Pack.noiseCount());
+            auto packStats = trFormat(
+                "Hard: {hard}  Soft: {soft}  Release: {release}  Noise: {noise}",
+                fmt::arg("hard", csm->p2Pack.hardCount()),
+                fmt::arg("soft", csm->p2Pack.softCount()),
+                fmt::arg("release", csm->p2Pack.releaseCount()),
+                fmt::arg("noise", csm->p2Pack.noiseCount())
+            );
+            ImGui::TextUnformatted(packStats.c_str());
             ImGui::PopStyleColor();
         }
 
@@ -2793,14 +2892,45 @@ void MenuInterface::drawClicksTab() {
 
 void MenuInterface::drawSettingsTab() {
     auto* eng = ReplayEngine::get();
+    auto* mod = Mod::get();
 
     Widgets::SectionHeader("Customization", theme);
 
-    ImGui::Text("Theme Preset");
+    imguiTextTr("Language");
+    ImGui::SetNextItemWidth(-1);
+    {
+        using toasty::i18n::UiLanguage;
+        static constexpr UiLanguage languages[] = {
+            UiLanguage::Auto,
+            UiLanguage::English,
+            UiLanguage::Spanish,
+        };
+
+        UiLanguage configuredLanguage = toasty::i18n::getConfiguredLanguage();
+        std::string preview = std::string(toasty::i18n::getLanguageDisplayName(configuredLanguage));
+        if (ImGui::BeginCombo("##uiLanguage", preview.c_str())) {
+            for (auto language : languages) {
+                std::string displayName = std::string(toasty::i18n::getLanguageDisplayName(language));
+                bool selected = configuredLanguage == language;
+                if (ImGui::Selectable(displayName.c_str(), selected)) {
+                    mod->setSettingValue<std::string>(
+                        "ui_language",
+                        std::string(toasty::i18n::getLanguageSettingValue(language))
+                    );
+                    toasty::i18n::refresh();
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    imguiTextTr("Theme Preset");
     ImGui::SetNextItemWidth(-1);
     int presetCount = ThemeEngine::getPresetCount();
     const ThemePreset* presets = ThemeEngine::getPresets();
-    if (ImGui::BeginCombo("##themePreset", theme.activePreset >= 0 && theme.activePreset < presetCount ? presets[theme.activePreset].name : "Custom")) {
+    auto customPresetText = trString("Custom");
+    if (ImGui::BeginCombo("##themePreset", theme.activePreset >= 0 && theme.activePreset < presetCount ? presets[theme.activePreset].name : customPresetText.c_str())) {
         for (int i = 0; i < presetCount; i++) {
             bool selected = (theme.activePreset == i);
             if (ImGui::Selectable(presets[i].name, selected)) {
@@ -2813,7 +2943,7 @@ void MenuInterface::drawSettingsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 8));
-    ImGui::Text("Accent Color");
+    imguiTextTr("Accent Color");
     ImGui::SameLine();
     if (ImGui::ColorEdit4("##accentColor", (float*)&theme.accentColor,
         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
@@ -2821,7 +2951,7 @@ void MenuInterface::drawSettingsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 4));
-    ImGui::Text("Background Color");
+    imguiTextTr("Background Color");
     ImGui::SameLine();
     if (ImGui::ColorEdit4("##bgColor", (float*)&theme.bgColor,
         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
@@ -2829,7 +2959,7 @@ void MenuInterface::drawSettingsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 4));
-    ImGui::Text("Card Color");
+    imguiTextTr("Card Color");
     ImGui::SameLine();
     if (ImGui::ColorEdit4("##cardColor", (float*)&theme.cardColor,
         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
@@ -2837,7 +2967,7 @@ void MenuInterface::drawSettingsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 4));
-    ImGui::Text("Text Color");
+    imguiTextTr("Text Color");
     ImGui::SameLine();
     if (ImGui::ColorEdit4("##textColor", (float*)&theme.textPrimary,
         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
@@ -2845,7 +2975,7 @@ void MenuInterface::drawSettingsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 4));
-    ImGui::Text("Secondary Text");
+    imguiTextTr("Secondary Text");
     ImGui::SameLine();
     if (ImGui::ColorEdit4("##text2Color", (float*)&theme.textSecondary,
         ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
@@ -2861,8 +2991,21 @@ void MenuInterface::drawSettingsTab() {
     Widgets::StyledSliderFloat("Animation Speed", &anim.animSpeed, 2.0f, 24.0f, theme);
 
     ImGui::Dummy(ImVec2(0, 8));
-    ImGui::Text("Open Animation");
-    const char* animDirNames[] = { "Center", "From Left", "From Right", "From Top", "From Bottom" };
+    imguiTextTr("Open Animation");
+    std::array<std::string, 5> animDirNamesStorage = {
+        trString("Center"),
+        trString("From Left"),
+        trString("From Right"),
+        trString("From Top"),
+        trString("From Bottom"),
+    };
+    const char* animDirNames[] = {
+        animDirNamesStorage[0].c_str(),
+        animDirNamesStorage[1].c_str(),
+        animDirNamesStorage[2].c_str(),
+        animDirNamesStorage[3].c_str(),
+        animDirNamesStorage[4].c_str(),
+    };
     int currentDir = (int)anim.openDirection;
     ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("##animDir", &currentDir, animDirNames, 5))
@@ -2902,11 +3045,11 @@ void MenuInterface::drawSettingsTab() {
 
     if (!hasSyzziCBF) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::TextWrapped("Install syzzi.click_between_frames to enable CBF mode.");
+        imguiTextWrappedTr("Install syzzi.click_between_frames to enable CBF mode.");
         ImGui::PopStyleColor();
     } else if (eng->engineMode != MODE_DISABLED) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::TextWrapped("Stop recording or playback before changing accuracy mode.");
+        imguiTextWrappedTr("Stop recording or playback before changing accuracy mode.");
         ImGui::PopStyleColor();
     }
 
@@ -2980,6 +3123,8 @@ static ImVec4 loadColor(const char* prefix, const ImVec4& def) {
 void MenuInterface::drawOnlineTab() {
     auto* online = OnlineClient::get();
     auto* engine = ReplayEngine::get();
+    auto uploadRestriction = online->getRestrictionMessage(true);
+    auto issueRestriction = online->getRestrictionMessage(false);
 
     
     Widgets::SectionHeader("Discord Account", theme);
@@ -3012,8 +3157,15 @@ void MenuInterface::drawOnlineTab() {
             ImGui::PopStyleColor();
             if (fontHeading) ImGui::PopFont();
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            ImGui::Text("ID: %s", online->discordId.c_str());
+            auto idText = trFormat("ID: {id}", fmt::arg("id", online->discordId));
+            ImGui::TextUnformatted(idText.c_str());
             ImGui::PopStyleColor();
+            auto blacklistText = online->getBlacklistStatusText();
+            if (!blacklistText.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.65f, 0.25f, 1.0f));
+                ImGui::TextWrapped("%s", blacklistText.c_str());
+                ImGui::PopStyleColor();
+            }
             ImGui::EndGroup();
 
             ImGui::Dummy(ImVec2(0, avatarSize - ImGui::GetCursorPosY() + cursorPos.y - ImGui::GetWindowPos().y));
@@ -3024,8 +3176,15 @@ void MenuInterface::drawOnlineTab() {
             ImGui::PopStyleColor();
             if (fontHeading) ImGui::PopFont();
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            ImGui::Text("ID: %s", online->discordId.c_str());
+            auto idText = trFormat("ID: {id}", fmt::arg("id", online->discordId));
+            ImGui::TextUnformatted(idText.c_str());
             ImGui::PopStyleColor();
+            auto blacklistText = online->getBlacklistStatusText();
+            if (!blacklistText.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.65f, 0.25f, 1.0f));
+                ImGui::TextWrapped("%s", blacklistText.c_str());
+                ImGui::PopStyleColor();
+            }
 
             if (!online->avatarLoading && !online->avatarLoaded) {
                 online->fetchAvatar();
@@ -3038,7 +3197,7 @@ void MenuInterface::drawOnlineTab() {
         }
     } else if (online->authPolling) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::TextWrapped("Waiting for Discord authorization...");
+        imguiTextWrappedTr("Waiting for Discord authorization...");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
         if (Widgets::StyledButton("Cancel", ImVec2(-1, 32), theme, anim)) {
@@ -3046,7 +3205,7 @@ void MenuInterface::drawOnlineTab() {
         }
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::Text("Not linked");
+        imguiTextTr("Not linked");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
         if (Widgets::StyledButton("Link Discord Account", ImVec2(-1, 32), theme, anim)) {
@@ -3063,14 +3222,15 @@ void MenuInterface::drawOnlineTab() {
 
     if (macros.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 0.6f));
-        ImGui::TextWrapped("No saved macros found.");
+        imguiTextWrappedTr("No saved macros found.");
         ImGui::PopStyleColor();
     } else {
         
         if (selectedUploadMacro >= static_cast<int>(macros.size()))
             selectedUploadMacro = -1;
 
-        const char* preview = selectedUploadMacro >= 0 ? macros[selectedUploadMacro].c_str() : "Select a macro...";
+        auto emptyMacroPreview = trString("Select a macro...");
+        const char* preview = selectedUploadMacro >= 0 ? macros[selectedUploadMacro].c_str() : emptyMacroPreview.c_str();
 
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 20, 25, 200));
         ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(25, 25, 30, 240));
@@ -3098,7 +3258,7 @@ void MenuInterface::drawOnlineTab() {
         ImGui::Dummy(ImVec2(0, 4));
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
-        ImGui::Text("Comment (optional)");
+        imguiTextTr("Comment (optional)");
         ImGui::PopStyleColor();
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 20, 25, 200));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
@@ -3108,7 +3268,9 @@ void MenuInterface::drawOnlineTab() {
 
         ImGui::Dummy(ImVec2(0, 4));
 
-        bool canUpload = selectedUploadMacro >= 0 && online->uploadState != OnlineClient::PENDING;
+        bool canUpload = selectedUploadMacro >= 0 &&
+            online->uploadState != OnlineClient::PENDING &&
+            online->canUploadMacros();
         if (!canUpload) ImGui::BeginDisabled();
         if (Widgets::StyledButton("Upload to Discord", ImVec2(-1, 32), theme, anim)) {
             std::string comment(uploadCommentBuf);
@@ -3118,8 +3280,15 @@ void MenuInterface::drawOnlineTab() {
         if (!canUpload) ImGui::EndDisabled();
     }
 
+    if (!uploadRestriction.empty()) {
+        ImGui::Dummy(ImVec2(0, 4));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+        ImGui::TextWrapped("%s", uploadRestriction.c_str());
+        ImGui::PopStyleColor();
+    }
+
     
-    if (!online->uploadResultMsg.empty()) {
+    if (!online->uploadResultMsg.empty() && online->uploadResultMsg != uploadRestriction) {
         ImGui::Dummy(ImVec2(0, 4));
         ImVec4 color = (online->uploadState == OnlineClient::SUCCESS)
             ? ImVec4(0.2f, 0.8f, 0.4f, 1.0f)
@@ -3140,14 +3309,14 @@ void MenuInterface::drawOnlineTab() {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
 
     ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
-    ImGui::Text("Title");
+    imguiTextTr("Title");
     ImGui::PopStyleColor();
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##issue_title", issueTitleBuf, sizeof(issueTitleBuf));
 
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
-    ImGui::Text("Description");
+    imguiTextTr("Description");
     ImGui::PopStyleColor();
     ImGui::InputTextMultiline("##issue_desc", issueDescBuf, sizeof(issueDescBuf), ImVec2(-1, 100));
 
@@ -3156,9 +3325,14 @@ void MenuInterface::drawOnlineTab() {
 
     ImGui::Dummy(ImVec2(0, 4));
 
-    bool titleOk = std::strlen(issueTitleBuf) >= 10;
-    bool descOk = std::strlen(issueDescBuf) >= 10;
-    bool canSubmit = titleOk && descOk && online->issueState != OnlineClient::PENDING;
+    size_t titleLength = std::strlen(issueTitleBuf);
+    size_t descLength = std::strlen(issueDescBuf);
+    bool titleOk = titleLength >= 5 && titleLength <= 100;
+    bool descOk = descLength >= 10 && descLength <= 1500;
+    bool canSubmit = titleOk &&
+        descOk &&
+        online->issueState != OnlineClient::PENDING &&
+        online->canSubmitIssues();
 
     if (!canSubmit) ImGui::BeginDisabled();
     if (Widgets::StyledButton("Submit Issue", ImVec2(-1, 32), theme, anim)) {
@@ -3170,12 +3344,19 @@ void MenuInterface::drawOnlineTab() {
 
     if (!titleOk || !descOk) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::Text("Title and description must be at least 10 characters.");
+        imguiTextTr("Title must be 5-100 chars. Description must be 10-1500 chars.");
+        ImGui::PopStyleColor();
+    }
+
+    if (!issueRestriction.empty()) {
+        ImGui::Dummy(ImVec2(0, 4));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+        ImGui::TextWrapped("%s", issueRestriction.c_str());
         ImGui::PopStyleColor();
     }
 
     
-    if (!online->issueResultMsg.empty()) {
+    if (!online->issueResultMsg.empty() && online->issueResultMsg != issueRestriction) {
         ImGui::Dummy(ImVec2(0, 4));
         ImVec4 color = (online->issueState == OnlineClient::SUCCESS)
             ? ImVec4(0.2f, 0.8f, 0.4f, 1.0f)
@@ -3665,29 +3846,39 @@ void MenuInterface::drawInterface() {
 
 void MenuInterface::initialize() {
     ImGuiIO& io = ImGui::GetIO();
+    toasty::i18n::initialize();
 
-    auto regularPath = (Mod::get()->getResourcesDir() / "Inter-Regular.ttf").string();
-    auto boldPath = (Mod::get()->getResourcesDir() / "Inter-Bold.ttf").string();
-    auto fallbackPath = (Mod::get()->getResourcesDir() / "font.ttf").string();
+    auto regularPath = Mod::get()->getResourcesDir() / "Inter-Regular.ttf";
+    auto boldPath = Mod::get()->getResourcesDir() / "Inter-Bold.ttf";
+    auto fallbackPath = Mod::get()->getResourcesDir() / "font.ttf";
 
     bool hasRegular = std::filesystem::exists(regularPath);
     bool hasBold = std::filesystem::exists(boldPath);
     bool hasFallback = std::filesystem::exists(fallbackPath);
 
-    const char* bodyFont = hasRegular ? regularPath.c_str() : (hasFallback ? fallbackPath.c_str() : nullptr);
-    const char* headFont = hasBold ? boldPath.c_str() : bodyFont;
+    auto regularUtf8 = toasty::pathToUtf8(regularPath);
+    auto boldUtf8 = toasty::pathToUtf8(boldPath);
+    auto fallbackUtf8 = toasty::pathToUtf8(fallbackPath);
+
+    const char* bodyFont = hasRegular ? regularUtf8.c_str() : (hasFallback ? fallbackUtf8.c_str() : nullptr);
+    const char* headFont = hasBold ? boldUtf8.c_str() : bodyFont;
+    ImFontGlyphRangesBuilder glyphBuilder;
+    glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+    glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+    ImVector<ImWchar> glyphRanges;
+    glyphBuilder.BuildRanges(&glyphRanges);
 
     if (bodyFont) {
-        fontBody = io.Fonts->AddFontFromFileTTF(bodyFont, 17.0f);
-        fontSmall = io.Fonts->AddFontFromFileTTF(bodyFont, 14.0f);
+        fontBody = io.Fonts->AddFontFromFileTTF(bodyFont, 17.0f, nullptr, glyphRanges.Data);
+        fontSmall = io.Fonts->AddFontFromFileTTF(bodyFont, 14.0f, nullptr, glyphRanges.Data);
     } else {
         fontBody = io.Fonts->AddFontDefault();
         fontSmall = io.Fonts->AddFontDefault();
     }
 
     if (headFont) {
-        fontHeading = io.Fonts->AddFontFromFileTTF(headFont, 22.0f);
-        fontTitle = io.Fonts->AddFontFromFileTTF(headFont, 30.0f);
+        fontHeading = io.Fonts->AddFontFromFileTTF(headFont, 22.0f, nullptr, glyphRanges.Data);
+        fontTitle = io.Fonts->AddFontFromFileTTF(headFont, 30.0f, nullptr, glyphRanges.Data);
     } else {
         fontHeading = io.Fonts->AddFontDefault();
         fontTitle = io.Fonts->AddFontDefault();

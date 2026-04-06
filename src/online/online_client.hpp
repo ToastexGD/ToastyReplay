@@ -15,6 +15,13 @@ class OnlineClient {
 public:
     static constexpr const char* DEFAULT_API_BASE = "http://50.21.191.142:3000";
 
+    enum class BlacklistState {
+        None,
+        Macros,
+        Issues,
+        Full
+    };
+
     OnlineClient();
     ~OnlineClient();
 
@@ -22,6 +29,7 @@ public:
     std::string discordUsername;
     std::string discordId;
     std::string discordAvatar;
+    BlacklistState blacklistState = BlacklistState::None;
 
     bool authPolling = false;
     float authPollTimer = 0.0f;
@@ -45,6 +53,7 @@ public:
     void uploadMacro(const std::string& macroName, const std::string& comment = "");
     void startAuthFlow();
     void pollAuthStatus();
+    void refreshAuthStatus();
     void stopAuthPolling();
     void unlinkAccount();
     void update(float dt);
@@ -55,6 +64,11 @@ public:
     std::string getApiBase() const;
 
     bool isLinked() const { return !discordUsername.empty(); }
+    bool hasValidSession() const { return isLinked() && !sessionCode.empty(); }
+    bool canUploadMacros() const;
+    bool canSubmitIssues() const;
+    std::string getRestrictionMessage(bool forUpload) const;
+    std::string getBlacklistStatusText() const;
 
     std::string getAvatarUrl() const;
 
@@ -70,6 +84,14 @@ private:
     std::unique_ptr<OnlineClientImpl> m_impl;
     void generateSessionCode();
     void releaseAvatarTexture();
+    void clearAuthState(bool cancelTasks);
+    void setLinkedState(
+        std::string const& username,
+        std::string const& id,
+        std::string const& avatar,
+        BlacklistState blacklist
+    );
+    bool handleAuthStatusResponse(web::WebResponse const& res, bool clearOnUnlinked);
 };
 
 #endif

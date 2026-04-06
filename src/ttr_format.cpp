@@ -1,4 +1,5 @@
 #include "ttr_format.hpp"
+#include "utils.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -12,6 +13,12 @@
 static constexpr size_t kMaxTTRStringSize = 16 * 1024;
 static constexpr uint32_t kMaxTTRPayloadSize = 64 * 1024 * 1024;
 
+struct TTRReadContext {
+    std::vector<uint8_t> const& data;
+    size_t position = 0;
+    bool failed = false;
+};
+
 template <typename T>
 static void writeLE(std::vector<uint8_t>& buffer, T value) {
     static_assert(std::is_trivially_copyable_v<T>);
@@ -21,31 +28,38 @@ static void writeLE(std::vector<uint8_t>& buffer, T value) {
 }
 
 template <typename T>
-static T readLE(std::vector<uint8_t> const& data, size_t& position) {
+static T readLE(TTRReadContext& ctx) {
     static_assert(std::is_trivially_copyable_v<T>);
-    if (position + sizeof(T) > data.size()) {
-        throw std::runtime_error("TTR: unexpected end of data");
+    T value {};
+    if (ctx.failed || ctx.position + sizeof(T) > ctx.data.size()) {
+        ctx.failed = true;
+        return value;
     }
 
-    T value;
-    std::memcpy(&value, data.data() + position, sizeof(T));
-    position += sizeof(T);
+    std::memcpy(&value, ctx.data.data() + ctx.position, sizeof(T));
+    ctx.position += sizeof(T);
     return value;
 }
 
 static uint32_t readCount(
-    std::vector<uint8_t> const& data,
-    size_t& position,
+    TTRReadContext& ctx,
     size_t minBytesPerEntry,
     char const* label
 ) {
-    auto count = readLE<uint32_t>(data, position);
-    auto remaining = data.size() - position;
+    (void)label;
+
+    auto count = readLE<uint32_t>(ctx);
+    if (ctx.failed) {
+        return 0;
+    }
+
+    auto remaining = ctx.data.size() - ctx.position;
     if (minBytesPerEntry == 0) {
         minBytesPerEntry = 1;
     }
     if (count > remaining / minBytesPerEntry + 1) {
-        throw std::runtime_error(std::string("TTR: invalid ") + label + " count");
+        ctx.failed = true;
+        return 0;
     }
     return count;
 }
@@ -56,17 +70,23 @@ static void writeString(std::vector<uint8_t>& buffer, std::string const& value) 
     buffer.insert(buffer.end(), value.begin(), value.begin() + length);
 }
 
-static std::string readString(std::vector<uint8_t> const& data, size_t& position) {
-    uint16_t length = readLE<uint16_t>(data, position);
-    if (length > kMaxTTRStringSize) {
-        throw std::runtime_error("TTR: string is too large");
-    }
-    if (position + length > data.size()) {
-        throw std::runtime_error("TTR: unexpected end of string data");
+static std::string readString(TTRReadContext& ctx) {
+    uint16_t length = readLE<uint16_t>(ctx);
+    if (ctx.failed) {
+        return {};
     }
 
-    std::string value(data.begin() + position, data.begin() + position + length);
-    position += length;
+    if (length > kMaxTTRStringSize) {
+        ctx.failed = true;
+        return {};
+    }
+    if (ctx.position + length > ctx.data.size()) {
+        ctx.failed = true;
+        return {};
+    }
+
+    std::string value(ctx.data.begin() + ctx.position, ctx.data.begin() + ctx.position + length);
+    ctx.position += length;
     return value;
 }
 
@@ -78,11 +98,11 @@ static void writeVarint(std::vector<uint8_t>& buffer, uint32_t value) {
     buffer.push_back(static_cast<uint8_t>(value));
 }
 
-static uint32_t readVarint(std::vector<uint8_t> const& data, size_t& position) {
+static uint32_t readVarint(TTRReadContext& ctx) {
     uint32_t result = 0;
     int shift = 0;
-    while (position < data.size()) {
-        uint8_t byte = data[position++];
+    while (ctx.position < ctx.data.size()) {
+        uint8_t byte = ctx.data[ctx.position++];
         result |= static_cast<uint32_t>(byte & 0x7F) << shift;
         if ((byte & 0x80) == 0) {
             return result;
@@ -90,45 +110,50 @@ static uint32_t readVarint(std::vector<uint8_t> const& data, size_t& position) {
 
         shift += 7;
         if (shift >= 35) {
-            throw std::runtime_error("TTR: varint too large");
+            ctx.failed = true;
+            return 0;
         }
     }
 
-    throw std::runtime_error("TTR: unexpected end of varint");
+    ctx.failed = true;
+    return 0;
 }
 
-static std::vector<uint8_t> zlibCompress(std::vector<uint8_t> const& input) {
+static bool zlibCompress(std::vector<uint8_t> const& input, std::vector<uint8_t>& output) {
     uLongf bound = compressBound(static_cast<uLong>(input.size()));
-    std::vector<uint8_t> output(bound);
+    output.resize(bound);
     int result = compress2(output.data(), &bound, input.data(), static_cast<uLong>(input.size()), Z_DEFAULT_COMPRESSION);
     if (result != Z_OK) {
-        throw std::runtime_error("TTR: zlib compress failed");
+        output.clear();
+        return false;
     }
     output.resize(bound);
-    return output;
+    return true;
 }
 
-static std::vector<uint8_t> zlibDecompress(
+static bool zlibDecompress(
     std::vector<uint8_t> const& input,
     size_t offset,
     size_t length,
-    uint32_t uncompressedSize
+    uint32_t uncompressedSize,
+    std::vector<uint8_t>& output
 ) {
     if (offset > input.size() || length > input.size() - offset) {
-        throw std::runtime_error("TTR: invalid compressed payload range");
+        return false;
     }
     if (uncompressedSize == 0 || uncompressedSize > kMaxTTRPayloadSize) {
-        throw std::runtime_error("TTR: invalid payload size");
+        return false;
     }
 
-    std::vector<uint8_t> output(uncompressedSize);
+    output.resize(uncompressedSize);
     uLongf destinationLength = uncompressedSize;
     int result = uncompress(output.data(), &destinationLength, input.data() + offset, static_cast<uLong>(length));
     if (result != Z_OK) {
-        throw std::runtime_error("TTR: zlib decompress failed");
+        output.clear();
+        return false;
     }
     output.resize(destinationLength);
-    return output;
+    return true;
 }
 
 static uint8_t packHoldMask(std::array<bool, 4> const& holds) {
@@ -192,17 +217,17 @@ static void writeAnchorPlayerV3(std::vector<uint8_t>& payload, PlayerStateBundle
     writeLE<uint8_t>(payload, packHoldMask(state.flags.buttonHolds));
 }
 
-static PlayerStateBundle readAnchorPlayerV3(std::vector<uint8_t> const& payload, size_t& position) {
+static PlayerStateBundle readAnchorPlayerV3(TTRReadContext& ctx) {
     PlayerStateBundle state;
-    state.motion.position.x = readLE<float>(payload, position);
-    state.motion.position.y = readLE<float>(payload, position);
-    state.motion.verticalVelocity = readLE<double>(payload, position);
-    state.motion.preSlopeVerticalVelocity = readLE<double>(payload, position);
-    state.motion.horizontalVelocity = readLE<double>(payload, position);
-    state.motion.rotation = readLE<float>(payload, position);
-    state.environment.gravity = static_cast<double>(readLE<float>(payload, position));
+    state.motion.position.x = readLE<float>(ctx);
+    state.motion.position.y = readLE<float>(ctx);
+    state.motion.verticalVelocity = readLE<double>(ctx);
+    state.motion.preSlopeVerticalVelocity = readLE<double>(ctx);
+    state.motion.horizontalVelocity = readLE<double>(ctx);
+    state.motion.rotation = readLE<float>(ctx);
+    state.environment.gravity = static_cast<double>(readLE<float>(ctx));
 
-    uint8_t stateFlags = readLE<uint8_t>(payload, position);
+    uint8_t stateFlags = readLE<uint8_t>(ctx);
     state.flags.upsideDown = (stateFlags & (1 << 0)) != 0;
     state.flags.holdingLeft = (stateFlags & (1 << 1)) != 0;
     state.flags.holdingRight = (stateFlags & (1 << 2)) != 0;
@@ -210,7 +235,7 @@ static PlayerStateBundle readAnchorPlayerV3(std::vector<uint8_t> const& payload,
     state.flags.dead = (stateFlags & (1 << 4)) != 0;
     state.environment.dualContext = (stateFlags & (1 << 5)) != 0;
     state.environment.twoPlayerContext = (stateFlags & (1 << 6)) != 0;
-    state.flags.buttonHolds = unpackHoldMask(readLE<uint8_t>(payload, position));
+    state.flags.buttonHolds = unpackHoldMask(readLE<uint8_t>(ctx));
     return state;
 }
 
@@ -224,27 +249,27 @@ struct LegacyTTRPlayerSnapshot {
     uint8_t flags = 0;
 };
 
-static LegacyTTRPlayerSnapshot readPlayerSnapshotV1(std::vector<uint8_t> const& data, size_t& position) {
+static LegacyTTRPlayerSnapshot readPlayerSnapshotV1(TTRReadContext& ctx) {
     LegacyTTRPlayerSnapshot snapshot;
-    snapshot.x = readLE<double>(data, position);
-    snapshot.y = readLE<double>(data, position);
-    snapshot.yVelocity = readLE<double>(data, position);
-    snapshot.yVelocityBeforeSlope = readLE<double>(data, position);
-    snapshot.xVelocity = readLE<double>(data, position);
-    snapshot.rotation = readLE<float>(data, position);
-    snapshot.flags = readLE<uint8_t>(data, position);
+    snapshot.x = readLE<double>(ctx);
+    snapshot.y = readLE<double>(ctx);
+    snapshot.yVelocity = readLE<double>(ctx);
+    snapshot.yVelocityBeforeSlope = readLE<double>(ctx);
+    snapshot.xVelocity = readLE<double>(ctx);
+    snapshot.rotation = readLE<float>(ctx);
+    snapshot.flags = readLE<uint8_t>(ctx);
     return snapshot;
 }
 
-static LegacyTTRPlayerSnapshot readPlayerSnapshotV2(std::vector<uint8_t> const& data, size_t& position) {
+static LegacyTTRPlayerSnapshot readPlayerSnapshotV2(TTRReadContext& ctx) {
     LegacyTTRPlayerSnapshot snapshot;
-    snapshot.x = static_cast<double>(readLE<float>(data, position));
-    snapshot.y = static_cast<double>(readLE<float>(data, position));
-    snapshot.yVelocity = readLE<double>(data, position);
-    snapshot.yVelocityBeforeSlope = readLE<double>(data, position);
-    snapshot.xVelocity = readLE<double>(data, position);
-    snapshot.rotation = readLE<float>(data, position);
-    snapshot.flags = readLE<uint8_t>(data, position);
+    snapshot.x = static_cast<double>(readLE<float>(ctx));
+    snapshot.y = static_cast<double>(readLE<float>(ctx));
+    snapshot.yVelocity = readLE<double>(ctx);
+    snapshot.yVelocityBeforeSlope = readLE<double>(ctx);
+    snapshot.xVelocity = readLE<double>(ctx);
+    snapshot.rotation = readLE<float>(ctx);
+    snapshot.flags = readLE<uint8_t>(ctx);
     return snapshot;
 }
 
@@ -391,7 +416,11 @@ std::vector<uint8_t> TTRMacro::serialize() const {
         writeLE<int32_t>(payload, checkpoint.priorTick);
     }
 
-    auto compressedPayload = zlibCompress(payload);
+    std::vector<uint8_t> compressedPayload;
+    if (!zlibCompress(payload, compressedPayload)) {
+        log::warn("[TTR] Failed to compress macro payload");
+        return {};
+    }
     writeLE<uint32_t>(output, static_cast<uint32_t>(payload.size()));
     output.insert(output.end(), compressedPayload.begin(), compressedPayload.end());
     return output;
@@ -403,26 +432,27 @@ static bool readSharedMetadata(
     uint32_t headerSize,
     TTRMacro& macro
 ) {
-    try {
-        if (headerSize < position || headerSize > data.size()) {
-            return false;
-        }
-
-        macro.author = readString(data, position);
-        macro.name = readString(data, position);
-        macro.levelName = readString(data, position);
-        macro.levelId = readLE<int32_t>(data, position);
-        macro.framerate = readLE<double>(data, position);
-        macro.duration = readLE<double>(data, position);
-        macro.gameVersion = readLE<uint32_t>(data, position);
-        macro.startPosX = readLE<float>(data, position);
-        macro.startPosY = readLE<float>(data, position);
-        macro.rngSeed = readLE<uint32_t>(data, position);
-        macro.recordTimestamp = readLE<int64_t>(data, position);
-    } catch (...) {
+    if (headerSize < position || headerSize > data.size()) {
         return false;
     }
 
+    TTRReadContext ctx { data, position };
+    macro.author = readString(ctx);
+    macro.name = readString(ctx);
+    macro.levelName = readString(ctx);
+    macro.levelId = readLE<int32_t>(ctx);
+    macro.framerate = readLE<double>(ctx);
+    macro.duration = readLE<double>(ctx);
+    macro.gameVersion = readLE<uint32_t>(ctx);
+    macro.startPosX = readLE<float>(ctx);
+    macro.startPosY = readLE<float>(ctx);
+    macro.rngSeed = readLE<uint32_t>(ctx);
+    macro.recordTimestamp = readLE<int64_t>(ctx);
+    if (ctx.failed) {
+        return false;
+    }
+
+    position = ctx.position;
     if (headerSize > position) {
         position = headerSize;
     }
@@ -441,51 +471,58 @@ static TTRMacro* deserializeLegacyV1(
         return nullptr;
     }
 
-    try {
-        uint32_t inputCount = readCount(data, position, 10, "input");
-        macro->inputs.reserve(inputCount);
-        for (uint32_t index = 0; index < inputCount; ++index) {
-            TTRInput input;
-            input.tick = readLE<int32_t>(data, position);
-            input.actionType = readLE<uint8_t>(data, position);
-            input.flags = readLE<uint8_t>(data, position);
-            input.stepOffset = readLE<float>(data, position);
+    TTRReadContext ctx { data, position };
+    uint32_t inputCount = readCount(ctx, 10, "input");
+    macro->inputs.reserve(inputCount);
+    for (uint32_t index = 0; index < inputCount && !ctx.failed; ++index) {
+        TTRInput input;
+        input.tick = readLE<int32_t>(ctx);
+        input.actionType = readLE<uint8_t>(ctx);
+        input.flags = readLE<uint8_t>(ctx);
+        input.stepOffset = readLE<float>(ctx);
+        if (!ctx.failed) {
             macro->inputs.push_back(input);
         }
+    }
 
-        uint32_t anchorCount = readCount(data, position, 94, "anchor");
-        macro->anchors.reserve(anchorCount);
-        for (uint32_t index = 0; index < anchorCount; ++index) {
-            PlaybackAnchor anchor;
-            anchor.tick = readLE<int32_t>(data, position);
-            anchor.hasPlayer2 = true;
-            anchor.player1 = convertLegacySnapshot(
-                readPlayerSnapshotV1(data, position),
-                macro->platformerMode,
-                true,
-                macro->twoPlayerMode
-            );
-            anchor.player2 = convertLegacySnapshot(
-                readPlayerSnapshotV1(data, position),
-                macro->platformerMode,
-                true,
-                macro->twoPlayerMode
-            );
+    uint32_t anchorCount = readCount(ctx, 94, "anchor");
+    macro->anchors.reserve(anchorCount);
+    for (uint32_t index = 0; index < anchorCount && !ctx.failed; ++index) {
+        PlaybackAnchor anchor;
+        anchor.tick = readLE<int32_t>(ctx);
+        anchor.hasPlayer2 = true;
+        anchor.player1 = convertLegacySnapshot(
+            readPlayerSnapshotV1(ctx),
+            macro->platformerMode,
+            true,
+            macro->twoPlayerMode
+        );
+        anchor.player2 = convertLegacySnapshot(
+            readPlayerSnapshotV1(ctx),
+            macro->platformerMode,
+            true,
+            macro->twoPlayerMode
+        );
+        if (!ctx.failed) {
             macro->anchors.push_back(anchor);
         }
+    }
 
-        if (position < data.size()) {
-            uint32_t checkpointCount = readCount(data, position, 16, "checkpoint");
-            macro->checkpoints.reserve(checkpointCount);
-            for (uint32_t index = 0; index < checkpointCount; ++index) {
-                TTRCheckpoint checkpoint;
-                checkpoint.tick = readLE<int32_t>(data, position);
-                checkpoint.rngState = readLE<uint64_t>(data, position);
-                checkpoint.priorTick = readLE<int32_t>(data, position);
+    if (!ctx.failed && ctx.position < ctx.data.size()) {
+        uint32_t checkpointCount = readCount(ctx, 16, "checkpoint");
+        macro->checkpoints.reserve(checkpointCount);
+        for (uint32_t index = 0; index < checkpointCount && !ctx.failed; ++index) {
+            TTRCheckpoint checkpoint;
+            checkpoint.tick = readLE<int32_t>(ctx);
+            checkpoint.rngState = readLE<uint64_t>(ctx);
+            checkpoint.priorTick = readLE<int32_t>(ctx);
+            if (!ctx.failed) {
                 macro->checkpoints.push_back(checkpoint);
             }
         }
-    } catch (...) {
+    }
+
+    if (ctx.failed) {
         delete macro;
         return nullptr;
     }
@@ -506,84 +543,100 @@ static TTRMacro* deserializeCompressedPayload(
         return nullptr;
     }
 
-    try {
-        uint32_t uncompressedSize = readLE<uint32_t>(data, position);
-        auto payload = zlibDecompress(data, position, data.size() - position, uncompressedSize);
+    TTRReadContext headerCtx { data, position };
+    uint32_t uncompressedSize = readLE<uint32_t>(headerCtx);
+    if (headerCtx.failed) {
+        delete macro;
+        return nullptr;
+    }
 
-        size_t payloadPosition = 0;
-        bool hasTimedOffsets = (flags & (TTR_FLAG_ACCURACY_CBS | TTR_FLAG_ACCURACY_CBF)) != 0;
-        size_t minInputBytes = hasTimedOffsets ? 7 : 3;
-        size_t minAnchorBytes = version >= 3 ? 45 : 39;
+    std::vector<uint8_t> payload;
+    if (!zlibDecompress(data, headerCtx.position, data.size() - headerCtx.position, uncompressedSize, payload)) {
+        delete macro;
+        return nullptr;
+    }
 
-        uint32_t inputCount = readCount(payload, payloadPosition, minInputBytes, "input");
-        macro->inputs.reserve(inputCount);
-        int32_t previousInputTick = 0;
-        for (uint32_t index = 0; index < inputCount; ++index) {
-            TTRInput input;
-            previousInputTick += static_cast<int32_t>(readVarint(payload, payloadPosition));
-            input.tick = previousInputTick;
-            input.actionType = readLE<uint8_t>(payload, payloadPosition);
-            input.flags = readLE<uint8_t>(payload, payloadPosition);
-            input.stepOffset = hasTimedOffsets ? readLE<float>(payload, payloadPosition) : 0.0f;
+    TTRReadContext payloadCtx { payload, 0 };
+    bool hasTimedOffsets = (flags & (TTR_FLAG_ACCURACY_CBS | TTR_FLAG_ACCURACY_CBF)) != 0;
+    size_t minInputBytes = hasTimedOffsets ? 7 : 3;
+    size_t minAnchorBytes = version >= 3 ? 45 : 39;
+
+    uint32_t inputCount = readCount(payloadCtx, minInputBytes, "input");
+    macro->inputs.reserve(inputCount);
+    int32_t previousInputTick = 0;
+    for (uint32_t index = 0; index < inputCount && !payloadCtx.failed; ++index) {
+        TTRInput input;
+        previousInputTick += static_cast<int32_t>(readVarint(payloadCtx));
+        input.tick = previousInputTick;
+        input.actionType = readLE<uint8_t>(payloadCtx);
+        input.flags = readLE<uint8_t>(payloadCtx);
+        input.stepOffset = hasTimedOffsets ? readLE<float>(payloadCtx) : 0.0f;
+        if (!payloadCtx.failed) {
             macro->inputs.push_back(input);
         }
+    }
 
-        uint32_t anchorCount = readCount(payload, payloadPosition, minAnchorBytes, "anchor");
-        macro->anchors.reserve(anchorCount);
-        int32_t previousAnchorTick = 0;
-        for (uint32_t index = 0; index < anchorCount; ++index) {
-            PlaybackAnchor anchor;
-            previousAnchorTick += static_cast<int32_t>(readVarint(payload, payloadPosition));
-            anchor.tick = previousAnchorTick;
+    uint32_t anchorCount = readCount(payloadCtx, minAnchorBytes, "anchor");
+    macro->anchors.reserve(anchorCount);
+    int32_t previousAnchorTick = 0;
+    for (uint32_t index = 0; index < anchorCount && !payloadCtx.failed; ++index) {
+        PlaybackAnchor anchor;
+        previousAnchorTick += static_cast<int32_t>(readVarint(payloadCtx));
+        anchor.tick = previousAnchorTick;
 
-            if (version >= 3) {
-                uint8_t anchorFlags = readLE<uint8_t>(payload, payloadPosition);
-                anchor.hasPlayer2 = (anchorFlags & (1 << 0)) != 0;
-                anchor.player1 = readAnchorPlayerV3(payload, payloadPosition);
-                anchor.player1LatchMask = readLE<uint8_t>(payload, payloadPosition);
-                if (anchor.hasPlayer2) {
-                    anchor.player2 = readAnchorPlayerV3(payload, payloadPosition);
-                    anchor.player2LatchMask = readLE<uint8_t>(payload, payloadPosition);
-                }
-                if ((anchorFlags & (1 << 1)) != 0) {
-                    anchor.rng.fastRandState = static_cast<uintptr_t>(readLE<uint64_t>(payload, payloadPosition));
-                }
-                anchor.rng.locked = macro->rngLocked;
-                anchor.rng.seed = macro->rngSeed;
-            } else {
-                uint8_t anchorFlags = readLE<uint8_t>(payload, payloadPosition);
-                anchor.hasPlayer2 = (anchorFlags & 0x01) != 0;
-                anchor.player1 = convertLegacySnapshot(
-                    readPlayerSnapshotV2(payload, payloadPosition),
+        if (version >= 3) {
+            uint8_t anchorFlags = readLE<uint8_t>(payloadCtx);
+            anchor.hasPlayer2 = (anchorFlags & (1 << 0)) != 0;
+            anchor.player1 = readAnchorPlayerV3(payloadCtx);
+            anchor.player1LatchMask = readLE<uint8_t>(payloadCtx);
+            if (anchor.hasPlayer2) {
+                anchor.player2 = readAnchorPlayerV3(payloadCtx);
+                anchor.player2LatchMask = readLE<uint8_t>(payloadCtx);
+            }
+            if ((anchorFlags & (1 << 1)) != 0) {
+                anchor.rng.fastRandState = static_cast<uintptr_t>(readLE<uint64_t>(payloadCtx));
+            }
+            anchor.rng.locked = macro->rngLocked;
+            anchor.rng.seed = macro->rngSeed;
+        } else {
+            uint8_t anchorFlags = readLE<uint8_t>(payloadCtx);
+            anchor.hasPlayer2 = (anchorFlags & 0x01) != 0;
+            anchor.player1 = convertLegacySnapshot(
+                readPlayerSnapshotV2(payloadCtx),
+                macro->platformerMode,
+                anchor.hasPlayer2,
+                macro->twoPlayerMode
+            );
+            if (anchor.hasPlayer2) {
+                anchor.player2 = convertLegacySnapshot(
+                    readPlayerSnapshotV2(payloadCtx),
                     macro->platformerMode,
                     anchor.hasPlayer2,
                     macro->twoPlayerMode
                 );
-                if (anchor.hasPlayer2) {
-                    anchor.player2 = convertLegacySnapshot(
-                        readPlayerSnapshotV2(payload, payloadPosition),
-                        macro->platformerMode,
-                        anchor.hasPlayer2,
-                        macro->twoPlayerMode
-                    );
-                }
             }
-
-            macro->anchors.push_back(anchor);
         }
 
-        if (payloadPosition < payload.size()) {
-            uint32_t checkpointCount = readCount(payload, payloadPosition, 16, "checkpoint");
-            macro->checkpoints.reserve(checkpointCount);
-            for (uint32_t index = 0; index < checkpointCount; ++index) {
-                TTRCheckpoint checkpoint;
-                checkpoint.tick = readLE<int32_t>(payload, payloadPosition);
-                checkpoint.rngState = readLE<uint64_t>(payload, payloadPosition);
-                checkpoint.priorTick = readLE<int32_t>(payload, payloadPosition);
+        if (!payloadCtx.failed) {
+            macro->anchors.push_back(anchor);
+        }
+    }
+
+    if (!payloadCtx.failed && payloadCtx.position < payload.size()) {
+        uint32_t checkpointCount = readCount(payloadCtx, 16, "checkpoint");
+        macro->checkpoints.reserve(checkpointCount);
+        for (uint32_t index = 0; index < checkpointCount && !payloadCtx.failed; ++index) {
+            TTRCheckpoint checkpoint;
+            checkpoint.tick = readLE<int32_t>(payloadCtx);
+            checkpoint.rngState = readLE<uint64_t>(payloadCtx);
+            checkpoint.priorTick = readLE<int32_t>(payloadCtx);
+            if (!payloadCtx.failed) {
                 macro->checkpoints.push_back(checkpoint);
             }
         }
-    } catch (...) {
+    }
+
+    if (payloadCtx.failed) {
         delete macro;
         return nullptr;
     }
@@ -600,15 +653,21 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
         return nullptr;
     }
 
-    size_t position = 4;
-    uint16_t version = readLE<uint16_t>(data, position);
+    TTRReadContext ctx { data, 4 };
+    uint16_t version = readLE<uint16_t>(ctx);
+    if (ctx.failed) {
+        return nullptr;
+    }
     if (version > TTR_FORMAT_VERSION) {
         log::warn("[TTR] Format version {} is newer than supported ({})", version, TTR_FORMAT_VERSION);
         return nullptr;
     }
 
-    uint32_t flags = readLE<uint32_t>(data, position);
-    uint32_t headerSize = readLE<uint32_t>(data, position);
+    uint32_t flags = readLE<uint32_t>(ctx);
+    uint32_t headerSize = readLE<uint32_t>(ctx);
+    if (ctx.failed) {
+        return nullptr;
+    }
 
     auto* macro = new TTRMacro();
     if ((flags & TTR_FLAG_ACCURACY_CBF) != 0) {
@@ -624,10 +683,10 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
     macro->rngLocked = (flags & TTR_FLAG_RNG_LOCKED) != 0;
 
     if (version == 1) {
-        return deserializeLegacyV1(data, position, flags, headerSize, macro);
+        return deserializeLegacyV1(data, ctx.position, flags, headerSize, macro);
     }
 
-    return deserializeCompressedPayload(data, position, version, flags, headerSize, macro);
+    return deserializeCompressedPayload(data, ctx.position, version, flags, headerSize, macro);
 }
 
 void TTRMacro::persist() {
@@ -644,13 +703,17 @@ void TTRMacro::persist() {
     persistedName = name;
 
     auto bytes = serialize();
+    if (bytes.empty()) {
+        log::warn("[TTR] Failed to save macro {}", name);
+        return;
+    }
     std::ofstream output(directory / (name + ".ttr"), std::ios::binary);
     output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
     output.close();
 
     log::info(
         "[TTR] Saved macro to {} ({} bytes, {} inputs, {} anchors)",
-        (directory / (name + ".ttr")).string(),
+        toasty::pathToUtf8(directory / (name + ".ttr")),
         bytes.size(),
         inputs.size(),
         anchors.size()
@@ -678,12 +741,12 @@ TTRMacro* TTRMacro::loadFromDisk(std::string const& filename) {
 
     auto* result = deserialize(*bytes);
     if (result) {
-        auto stem = path.stem().string();
+        auto stem = toasty::pathToUtf8(path.stem());
         result->name = stem;
         result->persistedName = stem;
         log::info("[TTR] Loaded macro: {} ({} inputs, {} anchors)", stem, result->inputs.size(), result->anchors.size());
     } else {
-        log::warn("[TTR] Failed to load macro {}", path.string());
+        log::warn("[TTR] Failed to load macro {}", toasty::pathToUtf8(path));
     }
     return result;
 }

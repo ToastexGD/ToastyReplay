@@ -1,6 +1,8 @@
 #ifndef _replay_hpp
 #define _replay_hpp
 
+#include "utils.hpp"
+
 #include <Geode/Geode.hpp>
 #include <gdr/gdr.hpp>
 
@@ -85,7 +87,7 @@ namespace ReplayStorage {
                 continue;
             }
 
-            std::string currentStem = it->path().stem().string();
+            std::string currentStem = toasty::pathToUtf8(it->path().stem());
             if (currentStem == excludedStem) {
                 continue;
             }
@@ -130,24 +132,24 @@ namespace ReplayStorage {
 
         auto size = std::filesystem::file_size(path, ec);
         if (ec) {
-            log::warn("Failed to inspect replay file {}: {}", path.string(), ec.message());
+            log::warn("Failed to inspect replay file {}: {}", toasty::pathToUtf8(path), ec.message());
             return std::nullopt;
         }
         if (size > kMaxReplayFileSize) {
-            log::warn("Replay file is too large: {}", path.string());
+            log::warn("Replay file is too large: {}", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
         auto maxSize = static_cast<uintmax_t>(std::numeric_limits<size_t>::max());
         auto maxStreamSize = static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max());
         if (size > maxSize || size > maxStreamSize) {
-            log::warn("Replay file is too large: {}", path.string());
+            log::warn("Replay file is too large: {}", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
         std::ifstream input(path, std::ios::binary);
         if (!input.is_open()) {
-            log::warn("Failed to open replay file {}", path.string());
+            log::warn("Failed to open replay file {}", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
@@ -156,12 +158,112 @@ namespace ReplayStorage {
             auto streamSize = static_cast<std::streamsize>(size);
             input.read(reinterpret_cast<char*>(bytes.data()), streamSize);
             if (!input || input.gcount() != streamSize) {
-                log::warn("Failed to read replay file {}", path.string());
+                log::warn("Failed to read replay file {}", toasty::pathToUtf8(path));
                 return std::nullopt;
             }
         }
 
         return bytes;
+    }
+}
+
+namespace ReplayJson {
+    inline gdr::json const* find(gdr::json::object_t const& object, char const* key) {
+        auto it = object.find(key);
+        return it == object.end() ? nullptr : &it->second;
+    }
+
+    template <typename Int>
+    inline std::optional<Int> asInteger(gdr::json const& value) {
+        static_assert(std::is_integral_v<Int>, "asInteger requires an integral type");
+
+        if (auto const* signedValue = value.get_ptr<gdr::json::number_integer_t const*>()) {
+            if (*signedValue < static_cast<gdr::json::number_integer_t>(std::numeric_limits<Int>::min()) ||
+                *signedValue > static_cast<gdr::json::number_integer_t>(std::numeric_limits<Int>::max())) {
+                return std::nullopt;
+            }
+            return static_cast<Int>(*signedValue);
+        }
+
+        if (auto const* unsignedValue = value.get_ptr<gdr::json::number_unsigned_t const*>()) {
+            if (*unsignedValue > static_cast<gdr::json::number_unsigned_t>(std::numeric_limits<Int>::max())) {
+                return std::nullopt;
+            }
+            return static_cast<Int>(*unsignedValue);
+        }
+
+        return std::nullopt;
+    }
+
+    template <typename Float>
+    inline std::optional<Float> asFloat(gdr::json const& value) {
+        static_assert(std::is_floating_point_v<Float>, "asFloat requires a floating-point type");
+
+        if (auto const* floatValue = value.get_ptr<gdr::json::number_float_t const*>()) {
+            return static_cast<Float>(*floatValue);
+        }
+        if (auto const* signedValue = value.get_ptr<gdr::json::number_integer_t const*>()) {
+            return static_cast<Float>(*signedValue);
+        }
+        if (auto const* unsignedValue = value.get_ptr<gdr::json::number_unsigned_t const*>()) {
+            return static_cast<Float>(*unsignedValue);
+        }
+
+        return std::nullopt;
+    }
+
+    inline std::optional<bool> asBool(gdr::json const& value) {
+        if (auto const* boolValue = value.get_ptr<bool const*>()) {
+            return *boolValue;
+        }
+        return std::nullopt;
+    }
+
+    inline std::optional<std::string> asString(gdr::json const& value) {
+        if (auto const* stringValue = value.get_ptr<std::string const*>()) {
+            return *stringValue;
+        }
+        return std::nullopt;
+    }
+
+    inline gdr::json::object_t const* asObject(gdr::json const& value) {
+        return value.get_ptr<gdr::json::object_t const*>();
+    }
+
+    inline gdr::json::array_t const* asArray(gdr::json const& value) {
+        return value.get_ptr<gdr::json::array_t const*>();
+    }
+
+    template <typename Int>
+    inline std::optional<Int> getInteger(gdr::json::object_t const& object, char const* key) {
+        auto const* value = find(object, key);
+        return value ? asInteger<Int>(*value) : std::nullopt;
+    }
+
+    template <typename Float>
+    inline std::optional<Float> getFloat(gdr::json::object_t const& object, char const* key) {
+        auto const* value = find(object, key);
+        return value ? asFloat<Float>(*value) : std::nullopt;
+    }
+
+    inline std::optional<bool> getBool(gdr::json::object_t const& object, char const* key) {
+        auto const* value = find(object, key);
+        return value ? asBool(*value) : std::nullopt;
+    }
+
+    inline std::optional<std::string> getString(gdr::json::object_t const& object, char const* key) {
+        auto const* value = find(object, key);
+        return value ? asString(*value) : std::nullopt;
+    }
+
+    inline gdr::json::object_t const* getObject(gdr::json::object_t const& object, char const* key) {
+        auto const* value = find(object, key);
+        return value ? asObject(*value) : nullptr;
+    }
+
+    inline gdr::json::array_t const* getArray(gdr::json::object_t const& object, char const* key) {
+        auto const* value = find(object, key);
+        return value ? asArray(*value) : nullptr;
     }
 }
 
@@ -230,10 +332,10 @@ struct MacroAction : gdr::Input {
           stepOffset(offset) {}
 
     void parseExtension(gdr::json::object_t obj) override {
-        if (obj.count("accuracy_offset")) {
-            stepOffset = obj.at("accuracy_offset").get<float>();
-        } else if (obj.count("cbf_offset")) {
-            stepOffset = obj.at("cbf_offset").get<float>();
+        if (auto value = ReplayJson::getFloat<float>(obj, "accuracy_offset")) {
+            stepOffset = *value;
+        } else if (auto legacyValue = ReplayJson::getFloat<float>(obj, "cbf_offset")) {
+            stepOffset = *legacyValue;
         }
     }
 
@@ -261,34 +363,38 @@ public:
         : Replay("ToastyReplay", MOD_VERSION) {}
 
     void parseExtension(gdr::json::object_t obj) override {
-        if (obj.count("accuracy_mode")) {
-            accuracyMode = sanitizeAccuracyMode(obj.at("accuracy_mode").get<int>());
-        } else if (obj.count("cbf_enabled") && obj.at("cbf_enabled").get<bool>()) {
+        if (auto mode = ReplayJson::getInteger<int>(obj, "accuracy_mode")) {
+            accuracyMode = sanitizeAccuracyMode(*mode);
+        } else if (auto legacyMode = ReplayJson::getBool(obj, "cbf_enabled"); legacyMode && *legacyMode) {
             accuracyMode = AccuracyMode::CBS;
         }
-        if (obj.count("anchor_interval")) {
-            savedAnchorInterval = std::max(1, obj.at("anchor_interval").get<int>());
-        } else if (obj.count("correction_interval")) {
-            savedAnchorInterval = std::max(1, obj.at("correction_interval").get<int>());
+        if (auto anchorInterval = ReplayJson::getInteger<int>(obj, "anchor_interval")) {
+            savedAnchorInterval = std::max(1, *anchorInterval);
+        } else if (auto correctionInterval = ReplayJson::getInteger<int>(obj, "correction_interval")) {
+            savedAnchorInterval = std::max(1, *correctionInterval);
         }
-        if (obj.count("from_start_pos")) {
-            recordedFromStartPos = obj.at("from_start_pos").get<bool>();
+        if (auto fromStartPos = ReplayJson::getBool(obj, "from_start_pos")) {
+            recordedFromStartPos = *fromStartPos;
         }
-        if (obj.count("start_pos_x")) {
-            startPosX = obj.at("start_pos_x").get<float>();
+        if (auto x = ReplayJson::getFloat<float>(obj, "start_pos_x")) {
+            startPosX = *x;
         }
-        if (obj.count("start_pos_y")) {
-            startPosY = obj.at("start_pos_y").get<float>();
+        if (auto y = ReplayJson::getFloat<float>(obj, "start_pos_y")) {
+            startPosY = *y;
         }
 
         anchors.clear();
-        if (obj.count("anchors")) {
-            for (auto const& entry : obj.at("anchors")) {
-                anchors.push_back(importAnchor(entry));
+        if (auto const* anchorsJson = ReplayJson::getArray(obj, "anchors")) {
+            for (auto const& entry : *anchorsJson) {
+                if (auto anchor = importAnchor(entry)) {
+                    anchors.push_back(*anchor);
+                }
             }
-        } else if (obj.count("corrections")) {
-            for (auto const& entry : obj.at("corrections")) {
-                anchors.push_back(importLegacyCorrection(entry));
+        } else if (auto const* correctionsJson = ReplayJson::getArray(obj, "corrections")) {
+            for (auto const& entry : *correctionsJson) {
+                if (auto anchor = importLegacyCorrection(entry)) {
+                    anchors.push_back(*anchor);
+                }
             }
         }
     }
@@ -334,7 +440,7 @@ public:
         auto bytes = exportData(false);
         output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
         output.close();
-        log::info("Saved replay to {}", (dir / (name + ".gdr")).string());
+        log::info("Saved replay to {}", toasty::pathToUtf8(dir / (name + ".gdr")));
     }
 
     static MacroSequence* loadFromDisk(std::string const& filename) {
@@ -356,18 +462,16 @@ public:
             return nullptr;
         }
 
-        try {
+        if (auto imported = MacroSequence::tryImportData(*bytes)) {
             auto* result = new MacroSequence();
-            *result = MacroSequence::importData(*bytes);
-            auto stem = path.stem().string();
+            *result = std::move(*imported);
+            auto stem = toasty::pathToUtf8(path.stem());
             result->name = stem;
             result->persistedName = stem;
             return result;
-        } catch (std::exception const& e) {
-            log::warn("Failed to load GDR macro {}: {}", path.string(), e.what());
-        } catch (...) {
-            log::warn("Failed to load GDR macro {}", path.string());
         }
+
+        log::warn("Failed to load GDR macro {}", toasty::pathToUtf8(path));
 
         return nullptr;
     }
@@ -435,21 +539,26 @@ private:
 
     static PlayerStateBundle importPlayerState(gdr::json const& json) {
         PlayerStateBundle state;
-        if (json.contains("x")) state.motion.position.x = json.at("x").get<float>();
-        if (json.contains("y")) state.motion.position.y = json.at("y").get<float>();
-        if (json.contains("r")) state.motion.rotation = json.at("r").get<float>();
-        if (json.contains("vy")) state.motion.verticalVelocity = json.at("vy").get<double>();
-        if (json.contains("svy")) state.motion.preSlopeVerticalVelocity = json.at("svy").get<double>();
-        if (json.contains("hv")) state.motion.horizontalVelocity = json.at("hv").get<double>();
-        if (json.contains("g")) state.environment.gravity = json.at("g").get<double>();
-        if (json.contains("u")) state.flags.upsideDown = json.at("u").get<bool>();
-        if (json.contains("hl")) state.flags.holdingLeft = json.at("hl").get<bool>();
-        if (json.contains("hr")) state.flags.holdingRight = json.at("hr").get<bool>();
-        if (json.contains("pf")) state.flags.platformer = json.at("pf").get<bool>();
-        if (json.contains("dead")) state.flags.dead = json.at("dead").get<bool>();
-        if (json.contains("dual")) state.environment.dualContext = json.at("dual").get<bool>();
-        if (json.contains("tp")) state.environment.twoPlayerContext = json.at("tp").get<bool>();
-        if (json.contains("hold")) state.flags.buttonHolds = decodeHoldMask(json.at("hold").get<uint8_t>());
+        auto const* object = ReplayJson::asObject(json);
+        if (!object) {
+            return state;
+        }
+
+        if (auto value = ReplayJson::getFloat<float>(*object, "x")) state.motion.position.x = *value;
+        if (auto value = ReplayJson::getFloat<float>(*object, "y")) state.motion.position.y = *value;
+        if (auto value = ReplayJson::getFloat<float>(*object, "r")) state.motion.rotation = *value;
+        if (auto value = ReplayJson::getFloat<double>(*object, "vy")) state.motion.verticalVelocity = *value;
+        if (auto value = ReplayJson::getFloat<double>(*object, "svy")) state.motion.preSlopeVerticalVelocity = *value;
+        if (auto value = ReplayJson::getFloat<double>(*object, "hv")) state.motion.horizontalVelocity = *value;
+        if (auto value = ReplayJson::getFloat<double>(*object, "g")) state.environment.gravity = *value;
+        if (auto value = ReplayJson::getBool(*object, "u")) state.flags.upsideDown = *value;
+        if (auto value = ReplayJson::getBool(*object, "hl")) state.flags.holdingLeft = *value;
+        if (auto value = ReplayJson::getBool(*object, "hr")) state.flags.holdingRight = *value;
+        if (auto value = ReplayJson::getBool(*object, "pf")) state.flags.platformer = *value;
+        if (auto value = ReplayJson::getBool(*object, "dead")) state.flags.dead = *value;
+        if (auto value = ReplayJson::getBool(*object, "dual")) state.environment.dualContext = *value;
+        if (auto value = ReplayJson::getBool(*object, "tp")) state.environment.twoPlayerContext = *value;
+        if (auto value = ReplayJson::getInteger<uint8_t>(*object, "hold")) state.flags.buttonHolds = decodeHoldMask(*value);
         return state;
     }
 
@@ -477,44 +586,81 @@ private:
         return obj;
     }
 
-    static PlaybackAnchor importAnchor(gdr::json const& entry) {
+    static std::optional<PlaybackAnchor> importAnchor(gdr::json const& entry) {
+        auto const* object = ReplayJson::asObject(entry);
+        if (!object) {
+            return std::nullopt;
+        }
+
         PlaybackAnchor anchor;
-        if (entry.contains("t")) anchor.tick = entry.at("t").get<int>();
-        anchor.player1 = importPlayerState(entry.at("p1"));
-        anchor.hasPlayer2 = entry.contains("has_p2")
-            ? entry.at("has_p2").get<bool>()
-            : entry.contains("p2");
-        if (anchor.hasPlayer2 && entry.contains("p2")) {
-            anchor.player2 = importPlayerState(entry.at("p2"));
+        if (auto tick = ReplayJson::getInteger<int>(*object, "t")) {
+            anchor.tick = *tick;
         }
-        if (entry.contains("rng")) {
-            anchor.rng.fastRandState = static_cast<uintptr_t>(entry.at("rng").get<uint64_t>());
+
+        auto const* player1 = ReplayJson::getObject(*object, "p1");
+        if (!player1) {
+            return std::nullopt;
         }
-        if (entry.contains("rng_locked")) {
-            anchor.rng.locked = entry.at("rng_locked").get<bool>();
+        anchor.player1 = importPlayerState(gdr::json(*player1));
+
+        if (auto hasPlayer2 = ReplayJson::getBool(*object, "has_p2")) {
+            anchor.hasPlayer2 = *hasPlayer2;
+        } else {
+            anchor.hasPlayer2 = ReplayJson::getObject(*object, "p2") != nullptr;
         }
-        if (entry.contains("rng_seed")) {
-            anchor.rng.seed = entry.at("rng_seed").get<uint32_t>();
+
+        if (anchor.hasPlayer2) {
+            if (auto const* player2 = ReplayJson::getObject(*object, "p2")) {
+                anchor.player2 = importPlayerState(gdr::json(*player2));
+            } else {
+                anchor.hasPlayer2 = false;
+            }
         }
-        if (entry.contains("l1")) {
-            anchor.player1LatchMask = entry.at("l1").get<uint8_t>();
+
+        if (auto rngState = ReplayJson::getInteger<uint64_t>(*object, "rng")) {
+            anchor.rng.fastRandState = static_cast<uintptr_t>(*rngState);
         }
-        if (entry.contains("l2")) {
-            anchor.player2LatchMask = entry.at("l2").get<uint8_t>();
+        if (auto rngLocked = ReplayJson::getBool(*object, "rng_locked")) {
+            anchor.rng.locked = *rngLocked;
+        }
+        if (auto rngSeed = ReplayJson::getInteger<uint32_t>(*object, "rng_seed")) {
+            anchor.rng.seed = *rngSeed;
+        }
+        if (auto latch1 = ReplayJson::getInteger<uint8_t>(*object, "l1")) {
+            anchor.player1LatchMask = *latch1;
+        }
+        if (auto latch2 = ReplayJson::getInteger<uint8_t>(*object, "l2")) {
+            anchor.player2LatchMask = *latch2;
         }
         return anchor;
     }
 
-    static PlaybackAnchor importLegacyCorrection(gdr::json const& entry) {
+    static std::optional<PlaybackAnchor> importLegacyCorrection(gdr::json const& entry) {
+        auto const* object = ReplayJson::asObject(entry);
+        if (!object) {
+            return std::nullopt;
+        }
+
         PlaybackAnchor anchor;
-        anchor.tick = entry.at("t").get<int>();
+        auto tick = ReplayJson::getInteger<int>(*object, "t");
+        auto x1 = ReplayJson::getFloat<float>(*object, "x1");
+        auto y1 = ReplayJson::getFloat<float>(*object, "y1");
+        auto a1 = ReplayJson::getFloat<float>(*object, "a1");
+        auto x2 = ReplayJson::getFloat<float>(*object, "x2");
+        auto y2 = ReplayJson::getFloat<float>(*object, "y2");
+        auto a2 = ReplayJson::getFloat<float>(*object, "a2");
+        if (!tick || !x1 || !y1 || !a1 || !x2 || !y2 || !a2) {
+            return std::nullopt;
+        }
+
+        anchor.tick = *tick;
         anchor.hasPlayer2 = true;
-        anchor.player1.motion.position.x = entry.at("x1").get<float>();
-        anchor.player1.motion.position.y = entry.at("y1").get<float>();
-        anchor.player1.motion.rotation = entry.at("a1").get<float>();
-        anchor.player2.motion.position.x = entry.at("x2").get<float>();
-        anchor.player2.motion.position.y = entry.at("y2").get<float>();
-        anchor.player2.motion.rotation = entry.at("a2").get<float>();
+        anchor.player1.motion.position.x = *x1;
+        anchor.player1.motion.position.y = *y1;
+        anchor.player1.motion.rotation = *a1;
+        anchor.player2.motion.position.x = *x2;
+        anchor.player2.motion.position.y = *y2;
+        anchor.player2.motion.rotation = *a2;
         return anchor;
     }
 

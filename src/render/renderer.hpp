@@ -112,8 +112,8 @@ public:
     std::string extraArgs;
     std::string videoArgs;
     std::string extraAudioArgs;
-    std::string path;
-    std::string ffmpegPath;
+    std::filesystem::path path;
+    std::filesystem::path ffmpegPath;
     std::unordered_set<int> renderedFrames;
 
     FMODAudioEngine* fmod = nullptr;
