@@ -5,7 +5,6 @@
 #include "i18n/localization.hpp"
 #include "replay.hpp"
 #include "ttr_format.hpp"
-#include "core/cbf_integration.hpp"
 #include "hacks/trajectory.hpp"
 #include "render/renderer.hpp"
 
@@ -42,13 +41,6 @@ enum ValidationResult {
 class ReplayEngine {
 public:
     static constexpr double kBaseTickRate = 240.0;
-
-    struct QueuedMacroCommand {
-        int button = 0;
-        bool down = false;
-        bool player2 = false;
-        double timestamp = 0.0;
-    };
 
     MacroMode engineMode = MODE_DISABLED;
     ValidationResult validationStatus = RESULT_OK;
@@ -140,11 +132,6 @@ public:
     AccuracyMode selectedAccuracyMode = AccuracyMode::Vanilla;
     int tickStartStep = 0;
     int lastStepDelta = -1;
-    uint64_t tickStartMicros = 0;
-    uint64_t stepStartMicros = 0;
-    double stepDurationMicros = 0.0;
-    std::deque<uint64_t> pendingRawInputMicros;
-    std::deque<QueuedMacroCommand> queuedMacroCommands;
 
     int tickOffset = 0;
     bool startPosActive = false;
@@ -154,7 +141,6 @@ public:
     std::vector<std::string> storedMacros;
     std::unordered_set<std::string> incompatibleMacros;
     std::unordered_set<std::string> cbsMacros;
-    std::unordered_set<std::string> cbfMacros;
     std::unordered_set<std::string> ttrMacros;
 
     int hotkey_tickStep = 0x56;
@@ -193,7 +179,6 @@ public:
         storedMacros.clear();
         incompatibleMacros.clear();
         cbsMacros.clear();
-        cbfMacros.clear();
         ttrMacros.clear();
         auto directory = geode::prelude::Mod::get()->getSaveDir() / "replays";
         std::error_code ec;
@@ -229,7 +214,7 @@ public:
                     uint32_t flags = 0;
                     std::memcpy(&flags, header.data() + 6, sizeof(uint32_t));
                     if ((flags & TTR_FLAG_ACCURACY_CBF) != 0) {
-                        cbfMacros.insert(stem);
+                        incompatibleMacros.insert(stem);
                     } else if ((flags & TTR_FLAG_ACCURACY_CBS) != 0) {
                         cbsMacros.insert(stem);
                     }
@@ -253,7 +238,7 @@ public:
             if (auto temp = MacroSequence::tryImportData(*bytes)) {
                 storedMacros.push_back(stem);
                 if (temp->accuracyMode == AccuracyMode::CBF) {
-                    cbfMacros.insert(stem);
+                    incompatibleMacros.insert(stem);
                 } else if (temp->accuracyMode == AccuracyMode::CBS) {
                     cbsMacros.insert(stem);
                 }
@@ -272,7 +257,7 @@ public:
         engineMode = MODE_CAPTURE;
         anchorReconciliation = true;
         resetTimingTracking();
-        AccuracyRuntime::applyRuntimeAccuracyMode(selectedAccuracyMode);
+        applyRuntimeAccuracyMode(selectedAccuracyMode);
 
         if (ttrMode) {
             initializeTTRMacro(level);
@@ -341,13 +326,15 @@ public:
         }
 
         if (ttrMode && activeTTR) {
-            if (activeTTR->accuracyMode == AccuracyMode::CBF && !AccuracyRuntime::isSyzziCBFAvailable()) {
-                setStartPosWarningKey("CBF playback requires syzzi.click_between_frames.");
+            if (activeTTR->accuracyMode == AccuracyMode::CBF) {
+                startPosWarning = "CBF playback is no longer supported.";
+                startPosWarningIsKey = false;
                 return false;
             }
         } else if (activeMacro) {
-            if (activeMacro->accuracyMode == AccuracyMode::CBF && !AccuracyRuntime::isSyzziCBFAvailable()) {
-                setStartPosWarningKey("CBF playback requires syzzi.click_between_frames.");
+            if (activeMacro->accuracyMode == AccuracyMode::CBF) {
+                startPosWarning = "CBF playback is no longer supported.";
+                startPosWarningIsKey = false;
                 return false;
             }
         }
@@ -361,6 +348,7 @@ public:
             return false;
         }
 
+        enableCBSForLoadedMacroIfNeeded();
         pendingPlaybackStart = false;
         engineMode = MODE_EXECUTE;
         executeIndex = 0;
@@ -379,7 +367,7 @@ public:
                 : static_cast<int>(tickRate);
         }
 
-        AccuracyRuntime::applyRuntimeAccuracyMode(activeMacroAccuracyMode());
+        applyRuntimeAccuracyMode(activeMacroAccuracyMode());
         return true;
     }
 
@@ -406,6 +394,9 @@ public:
             pendingPlaybackStart = false;
             return false;
         }
+
+        enableCBSForLoadedMacroIfNeeded();
+        applyRuntimeAccuracyMode(selectedAccuracyMode);
 
         auto* playLayer = PlayLayer::get();
         if (!playLayer || fastPlayback) {
@@ -441,7 +432,7 @@ public:
     void haltExecution() {
         pendingPlaybackStart = false;
         resetTimingTracking();
-        AccuracyRuntime::applyRuntimeAccuracyMode(selectedAccuracyMode);
+        applyRuntimeAccuracyMode(selectedAccuracyMode);
         engineMode = MODE_DISABLED;
     }
 
@@ -474,6 +465,18 @@ public:
         return activeMacro ? activeMacro->accuracyMode : AccuracyMode::Vanilla;
     }
 
+    static void applyRuntimeAccuracyMode(AccuracyMode mode) {
+        if (auto* gameManager = GameManager::get()) {
+            gameManager->setGameVariable("0177", mode == AccuracyMode::CBS);
+        }
+    }
+
+    void enableCBSForLoadedMacroIfNeeded() {
+        if (activeMacroAccuracyMode() == AccuracyMode::CBS) {
+            selectedAccuracyMode = AccuracyMode::CBS;
+        }
+    }
+
     double runtimeTickRate() const {
         return std::max(1.0, tickRate);
     }
@@ -490,52 +493,6 @@ public:
         tickStartStep = 0;
         lastStepDelta = -1;
         respawnTickIndex = -1;
-        tickStartMicros = 0;
-        stepStartMicros = 0;
-        stepDurationMicros = 0.0;
-        pendingRawInputMicros.clear();
-        queuedMacroCommands.clear();
-    }
-
-    void beginStepTimingWindow(uint64_t stepStart, double stepDuration, bool newTick) {
-        stepStartMicros = stepStart;
-        stepDurationMicros = std::max(stepDuration, 1.0);
-        if (newTick || tickStartMicros == 0) {
-            tickStartMicros = stepStart;
-        }
-    }
-
-    void queueRawInputTimestamp(uint64_t micros) {
-        pendingRawInputMicros.push_back(micros);
-        while (pendingRawInputMicros.size() > 32) {
-            pendingRawInputMicros.pop_front();
-        }
-    }
-
-    float consumeRawInputPhase(float fallbackPhase) {
-        while (!pendingRawInputMicros.empty()) {
-            uint64_t micros = pendingRawInputMicros.front();
-            pendingRawInputMicros.pop_front();
-
-            if (tickStartMicros == 0 || stepDurationMicros <= 0.0 || micros < tickStartMicros) {
-                continue;
-            }
-
-            double elapsed = static_cast<double>(micros - tickStartMicros);
-            double phase = elapsed / stepDurationMicros;
-            return static_cast<float>(std::clamp(phase, 0.0, static_cast<double>(fallbackPhase) + 0.999));
-        }
-
-        return fallbackPhase;
-    }
-
-    void queueMacroCommand(int button, bool down, bool player2, double timestamp) {
-        queuedMacroCommands.push_back(QueuedMacroCommand {
-            button,
-            down,
-            player2,
-            timestamp,
-        });
     }
 
     std::vector<PlaybackAnchor>* activeAnchors() {

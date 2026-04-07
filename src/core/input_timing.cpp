@@ -19,12 +19,7 @@ uint64_t InputTiming::nowMicros() {
 }
 
 void InputTiming::queueTimestamp(uint64_t micros) {
-    auto* engine = ReplayEngine::get();
-    if (!engine || engine->selectedAccuracyMode != AccuracyMode::CBF || !PlayLayer::get()) {
-        return;
-    }
-
-    engine->queueRawInputTimestamp(micros);
+    static_cast<void>(micros);
 }
 
 void InputTiming::queueCurrentTimestamp() {
@@ -33,7 +28,6 @@ void InputTiming::queueCurrentTimestamp() {
 
 class $modify(TimedTouchDispatcher, CCTouchDispatcher) {
     void touches(cocos2d::CCSet* touches, cocos2d::CCEvent* event, unsigned int index) {
-        InputTiming::queueCurrentTimestamp();
         if (PlayLayer::get()) {
             Autoclicker::get()->trackUserInput(index == 0, false);
         }

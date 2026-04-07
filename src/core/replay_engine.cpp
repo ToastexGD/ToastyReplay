@@ -1,6 +1,5 @@
 #include "ToastyReplay.hpp"
 #include "core/checkpoint_handler.hpp"
-#include "core/input_timing.hpp"
 #include "hacks/autoclicker.hpp"
 #include "gui/gui.hpp"
 #include "gui/frame_editor.hpp"
@@ -11,8 +10,6 @@
 void refreshRngState(bool isRestart = false);
 
 namespace {
-    constexpr double kQueuedCommandMatchTolerance = 0.001;
-
     static int computeCurrentTick() {
         auto* playLayer = PlayLayer::get();
         if (!playLayer) return 0;
@@ -45,13 +42,6 @@ namespace {
     static bool isTrackedHoldButton(int button) {
         return button >= 1 && button <= 3;
     }
-
-    static bool matchesQueuedMacroCommand(PlayerButtonCommand const& command, ReplayEngine::QueuedMacroCommand const& queued) {
-        if (static_cast<int>(command.m_button) != queued.button) return false;
-        if (command.m_isPush != queued.down) return false;
-        if (command.m_isPlayer2 != queued.player2) return false;
-        return std::abs(command.m_timestamp - queued.timestamp) <= kQueuedCommandMatchTolerance;
-    }
 }
 
 class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
@@ -75,82 +65,6 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         engine->triggerAudio(player2, button, down);
     }
 
-    size_t queueCBFInputsBeforeStep(int tick, int effectiveTick, int stepDelta, float dt) {
-        auto* engine = ReplayEngine::get();
-        size_t queuedCount = 0;
-
-        auto queueTimedInput = [&](int button, bool down, bool player2, float phase) {
-            if (tick == engine->respawnTickIndex) {
-                return;
-            }
-
-            if (flipControls()) {
-                player2 = !player2;
-            }
-
-            float fractionalPhase = std::clamp(phase - static_cast<float>(stepDelta), 0.0f, 0.999f);
-            double timestamp = m_timestamp + static_cast<double>(dt) * static_cast<double>(fractionalPhase);
-            PlayerButtonCommand command = {};
-            command.m_button = static_cast<PlayerButton>(button);
-            command.m_isPush = down;
-            command.m_isPlayer2 = player2;
-            command.m_timestamp = timestamp;
-            m_queuedButtons.push_back(command);
-            engine->queueMacroCommand(button, down, player2, timestamp);
-            ++queuedCount;
-        };
-
-        if (engine->ttrMode && engine->activeTTR) {
-            auto& inputList = engine->activeTTR->inputs;
-            while (engine->executeIndex < inputList.size()) {
-                auto const& input = inputList[engine->executeIndex];
-                if (input.tick > effectiveTick) {
-                    break;
-                }
-
-                if (input.tick == effectiveTick && input.stepOffset >= static_cast<float>(stepDelta + 1)) {
-                    break;
-                }
-
-                bool player2 = input.isPlayer2();
-                if (input.tick < effectiveTick || input.stepOffset < static_cast<float>(stepDelta)) {
-                    dispatchImmediatePlaybackAction(tick, input.actionType, input.isPressed(), player2);
-                } else {
-                    queueTimedInput(input.actionType, input.isPressed(), player2, input.stepOffset);
-                }
-
-                ++engine->executeIndex;
-            }
-            return queuedCount;
-        }
-
-        if (!engine->activeMacro) {
-            return 0;
-        }
-
-        auto& inputList = engine->activeMacro->inputs;
-        while (engine->executeIndex < inputList.size()) {
-            auto const& input = inputList[engine->executeIndex];
-            int inputTick = static_cast<int>(input.frame);
-            if (inputTick > effectiveTick) {
-                break;
-            }
-
-            if (inputTick == effectiveTick && input.stepOffset >= static_cast<float>(stepDelta + 1)) {
-                break;
-            }
-
-            if (inputTick < effectiveTick || input.stepOffset < static_cast<float>(stepDelta)) {
-                dispatchImmediatePlaybackAction(tick, input.button, input.down, input.player2);
-            } else {
-                queueTimedInput(input.button, input.down, input.player2, input.stepOffset);
-            }
-
-            ++engine->executeIndex;
-        }
-        return queuedCount;
-    }
-
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         auto* engine = ReplayEngine::get();
         auto* playLayer = PlayLayer::get();
@@ -171,7 +85,6 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
 
         int stepDelta = std::max(0, m_currentStep - engine->tickStartStep);
-        engine->beginStepTimingWindow(InputTiming::nowMicros(), static_cast<double>(dt) * 1'000'000.0, newTick);
 
         if (engine->engineMode != MODE_DISABLED) {
             if (tick > 2 && engine->initialRun && engine->hasMacro()) {
@@ -189,10 +102,6 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
                 if (!timedPlayback || repeatedTimedSlice)
                     return GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
             }
-        }
-
-        if (engine->engineMode == MODE_EXECUTE && playbackAccuracy == AccuracyMode::CBF) {
-            queueCBFInputsBeforeStep(tick, tick + engine->tickOffset, stepDelta, dt);
         }
 
         GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
@@ -382,85 +291,20 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
         int effectiveTick = tick + engine->tickOffset;
 
-        if (engine->activeMacroAccuracyMode() != AccuracyMode::CBF) {
-            m_fields->macroInput = true;
-            if (engine->ttrMode && engine->activeTTR) {
-                dispatchTTRInputs(tick, effectiveTick, stepDelta);
-            } else if (engine->activeMacro) {
-                dispatchGDRInputs(tick, effectiveTick, stepDelta);
-            }
-            m_fields->macroInput = false;
+        m_fields->macroInput = true;
+        if (engine->ttrMode && engine->activeTTR) {
+            dispatchTTRInputs(tick, effectiveTick, stepDelta);
+        } else if (engine->activeMacro) {
+            dispatchGDRInputs(tick, effectiveTick, stepDelta);
         }
+        m_fields->macroInput = false;
 
         engine->respawnTickIndex = -1;
         reconcileAnchors(effectiveTick);
     }
 
     void processQueuedButtons(float dt, bool clearInputQueue) {
-        auto* engine = ReplayEngine::get();
-        bool executingCBF = engine->engineMode == MODE_EXECUTE &&
-            engine->activeMacroAccuracyMode() == AccuracyMode::CBF;
-        std::deque<ReplayEngine::QueuedMacroCommand> queuedSnapshot;
-
-        if (executingCBF && engine->userInputIgnored) {
-            gd::vector<PlayerButtonCommand> filteredCommands;
-            filteredCommands.reserve(m_queuedButtons.size());
-            auto pendingForFilter = engine->queuedMacroCommands;
-
-            for (auto const& command : m_queuedButtons) {
-                auto it = std::find_if(
-                    pendingForFilter.begin(),
-                    pendingForFilter.end(),
-                    [&](ReplayEngine::QueuedMacroCommand const& queued) {
-                        return matchesQueuedMacroCommand(command, queued);
-                    }
-                );
-                if (it != pendingForFilter.end()) {
-                    filteredCommands.push_back(command);
-                    pendingForFilter.erase(it);
-                }
-            }
-
-            m_queuedButtons.swap(filteredCommands);
-        }
-
-        if (executingCBF) {
-            queuedSnapshot = engine->queuedMacroCommands;
-        }
-
-        m_fields->macroInput = executingCBF && !queuedSnapshot.empty();
         GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
-        m_fields->macroInput = false;
-
-        if (!executingCBF) {
-            engine->queuedMacroCommands.clear();
-            return;
-        }
-
-        std::deque<ReplayEngine::QueuedMacroCommand> stillQueued;
-        auto unmatchedSnapshot = queuedSnapshot;
-
-        for (auto const& command : m_queuedButtons) {
-            auto it = std::find_if(
-                unmatchedSnapshot.begin(),
-                unmatchedSnapshot.end(),
-                [&](ReplayEngine::QueuedMacroCommand const& queued) {
-                    return matchesQueuedMacroCommand(command, queued);
-                }
-            );
-            if (it == unmatchedSnapshot.end()) {
-                continue;
-            }
-
-            stillQueued.push_back(*it);
-            unmatchedSnapshot.erase(it);
-        }
-
-        for (auto const& processed : unmatchedSnapshot) {
-            engine->triggerAudio(processed.player2, processed.button, processed.down);
-        }
-
-        engine->queuedMacroCommands.swap(stillQueued);
     }
 
     void handleButton(bool hold, int button, bool player2) {
@@ -541,8 +385,6 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
             if (accuracyMode == AccuracyMode::CBS) {
                 stepOffset = basePhase;
-            } else if (accuracyMode == AccuracyMode::CBF) {
-                stepOffset = engine->consumeRawInputPhase(basePhase);
             }
 
             if (engine->ttrMode && engine->activeTTR) {

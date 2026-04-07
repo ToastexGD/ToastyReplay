@@ -11,7 +11,6 @@ set(TOASTYREPLAY_SOURCES
     src/core/checkpoint_handler.cpp
     src/core/replay_engine.cpp
     src/core/checkpoint_system.cpp
-    src/core/cbf_integration.cpp
     src/core/input_timing.cpp
     src/core/keybinds.cpp
     src/gui/gui.cpp
@@ -48,6 +47,23 @@ function(toastyreplay_replace_once_or_verify content_var search replacement)
     set(${content_var} "${updated_content}" PARENT_SCOPE)
 endfunction()
 
+function(toastyreplay_replace_if_present content_var search replacement)
+    string(FIND "${${content_var}}" "${replacement}" replacement_index)
+    if (replacement_index GREATER -1)
+        set(${content_var} "${${content_var}}" PARENT_SCOPE)
+        return()
+    endif()
+
+    string(FIND "${${content_var}}" "${search}" search_index)
+    if (search_index EQUAL -1)
+        set(${content_var} "${${content_var}}" PARENT_SCOPE)
+        return()
+    endif()
+
+    string(REPLACE "${search}" "${replacement}" updated_content "${${content_var}}")
+    set(${content_var} "${updated_content}" PARENT_SCOPE)
+endfunction()
+
 function(patch_gd_imgui_cocos_backend backend_file)
     file(READ "${backend_file}" backend_content)
 
@@ -56,15 +72,21 @@ function(patch_gd_imgui_cocos_backend backend_file)
         "#include <Geode/Geode.hpp>"
         "#include <Geode/Geode.hpp>\n#include <Geode/utils/string.hpp>"
     )
-    toastyreplay_replace_once_or_verify(
+    set(toastyreplay_imgui_ini_line "static const auto iniPath = new std::string(geode::utils::string::pathToString(Mod::get()->getSaveDir() / \"imgui.ini\"));")
+    toastyreplay_replace_if_present(
         backend_content
         "static const auto iniPath = (Mod::get()->getSaveDir() / \"imgui.ini\").string();"
-        "static const auto iniPath = new std::string(geode::utils::string::pathToString(Mod::get()->getSaveDir() / \"imgui.ini\"));"
+        "${toastyreplay_imgui_ini_line}"
+    )
+    toastyreplay_replace_if_present(
+        backend_content
+        "static const auto iniPath = new std::string((Mod::get()->getSaveDir() / \"imgui.ini\").string());"
+        "${toastyreplay_imgui_ini_line}"
     )
     toastyreplay_replace_once_or_verify(
         backend_content
-        "static const auto iniPath = new std::string((Mod::get()->getSaveDir() / \"imgui.ini\").string());"
-        "static const auto iniPath = new std::string(geode::utils::string::pathToString(Mod::get()->getSaveDir() / \"imgui.ini\"));"
+        "${toastyreplay_imgui_ini_line}"
+        "${toastyreplay_imgui_ini_line}"
     )
     toastyreplay_replace_once_or_verify(
         backend_content

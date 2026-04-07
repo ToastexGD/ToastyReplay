@@ -67,8 +67,6 @@ static const char* getAccuracyTag(AccuracyMode mode) {
     switch (mode) {
         case AccuracyMode::CBS:
             return "CBS";
-        case AccuracyMode::CBF:
-            return "CBF";
         default:
             return nullptr;
     }
@@ -76,8 +74,6 @@ static const char* getAccuracyTag(AccuracyMode mode) {
 
 static ImVec4 getAccuracyTagColor(AccuracyMode mode) {
     switch (mode) {
-        case AccuracyMode::CBF:
-            return ImVec4(1.0f, 0.22f, 0.22f, 1.0f);
         case AccuracyMode::CBS:
             return ImVec4(1.0f, 0.22f, 0.22f, 1.0f);
         default:
@@ -1438,7 +1434,7 @@ void MenuInterface::drawReplayTab() {
                 delete engine->activeMacro;
                 engine->activeMacro = nullptr;
             }
-            AccuracyRuntime::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
+            ReplayEngine::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
             engine->resetTimingTracking();
             engine->engineMode = MODE_DISABLED;
         } else if (engine->engineMode == MODE_EXECUTE) {
@@ -1480,7 +1476,6 @@ void MenuInterface::drawReplayTab() {
         auto popupTitle = trString("Select Format");
         drawPopupChrome(*this, popupTitle.c_str(), kPopupRounding);
         float popupBtnW = 120.0f;
-        bool cbfRecording = engine->selectedAccuracyMode == AccuracyMode::CBF;
         if (Widgets::StyledButton("TTR", ImVec2(popupBtnW, 30), theme, anim, 6.0f)) {
             engine->ttrMode = true;
             if (PlayLayer::get())
@@ -1490,7 +1485,6 @@ void MenuInterface::drawReplayTab() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine(0, 10);
-        if (cbfRecording) ImGui::BeginDisabled();
         if (Widgets::StyledButton("GDR", ImVec2(popupBtnW, 30), theme, anim, 6.0f)) {
             engine->ttrMode = false;
             if (PlayLayer::get())
@@ -1498,13 +1492,6 @@ void MenuInterface::drawReplayTab() {
             else
                 engine->engineMode = MODE_CAPTURE;
             ImGui::CloseCurrentPopup();
-        }
-        if (cbfRecording) ImGui::EndDisabled();
-        if (cbfRecording) {
-            ImGui::Dummy(ImVec2(0, 6));
-            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            imguiTextWrappedTr("CBF recording is only available in TTR format.");
-            ImGui::PopStyleColor();
         }
         ImGui::EndPopup();
     }
@@ -1669,7 +1656,6 @@ void MenuInterface::drawReplayTab() {
         bool isSelected = (engine->hasMacro() && engine->engineMode != MODE_CAPTURE && engine->getMacroName() == macroName);
         bool isIncompatible = engine->incompatibleMacros.count(macroName) > 0;
         bool isCBS = engine->cbsMacros.count(macroName) > 0;
-        bool isCBF = engine->cbfMacros.count(macroName) > 0;
         bool isTTR = engine->ttrMacros.count(macroName) > 0;
         ImGui::PushID(macroName.c_str());
 
@@ -1680,9 +1666,7 @@ void MenuInterface::drawReplayTab() {
         
         std::string rowLabel = macroName;
         float accuracyLabelW = 0.0f;
-        if (!isIncompatible && isCBF) {
-            accuracyLabelW = ImGui::CalcTextSize("CBF").x + 16.0f;
-        } else if (!isIncompatible && isCBS) {
+        if (!isIncompatible && isCBS) {
             accuracyLabelW = ImGui::CalcTextSize("CBS").x + 16.0f;
         }
         auto incompatibleText = trString("Incompatible");
@@ -1707,8 +1691,8 @@ void MenuInterface::drawReplayTab() {
         bool rowActivated = ImGui::Selectable("##row", isSelected, ImGuiSelectableFlags_AllowOverlap, ImVec2(fullRowW, rowH));
         if (ImGui::IsItemHovered() && ImGui::IsMouseDown(1)) {
             std::string tooltip;
-            if (isCBS || isCBF) {
-                tooltip += trString("CBF or CBS macros do not work on other menus!");
+            if (isCBS) {
+                tooltip += trString("CBS macros do not work on other menus!");
             }
             if (isTTR) {
                 if (!tooltip.empty()) tooltip += "\n";
@@ -1738,6 +1722,8 @@ void MenuInterface::drawReplayTab() {
                     if (engine->activeMacro) { delete engine->activeMacro; engine->activeMacro = nullptr; }
                     engine->activeTTR = loaded;
                     engine->ttrMode = true;
+                    engine->enableCBSForLoadedMacroIfNeeded();
+                    ReplayEngine::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
                 }
             } else {
                 MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
@@ -1746,6 +1732,8 @@ void MenuInterface::drawReplayTab() {
                     if (engine->activeTTR) { delete engine->activeTTR; engine->activeTTR = nullptr; }
                     engine->activeMacro = loaded;
                     engine->ttrMode = false;
+                    engine->enableCBSForLoadedMacroIfNeeded();
+                    ReplayEngine::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
                 }
             }
         }
@@ -1768,14 +1756,13 @@ void MenuInterface::drawReplayTab() {
                 toU32(ImVec4(1.0f, 0.2f, 0.2f, 1.0f)), incompatibleText.c_str()
             );
         }
-        if (!isIncompatible && (isCBS || isCBF)) {
-            AccuracyMode listedMode = isCBF ? AccuracyMode::CBF : AccuracyMode::CBS;
-            const char* tag = getAccuracyTag(listedMode);
+        if (!isIncompatible && isCBS) {
+            const char* tag = getAccuracyTag(AccuracyMode::CBS);
             ImVec2 tagSize = ImGui::CalcTextSize(tag);
             tagX -= tagSize.x + 8.0f;
             ImGui::GetWindowDrawList()->AddText(
                 ImVec2(tagX, itemMinY + (itemH - tagSize.y) * 0.5f),
-                toU32(getAccuracyTagColor(listedMode)), tag
+                toU32(getAccuracyTagColor(AccuracyMode::CBS)), tag
             );
         }
         if (!isIncompatible && isTTR) {
@@ -1886,7 +1873,7 @@ void MenuInterface::drawReplayTab() {
                 ImGui::PopStyleVar();
                 ImVec2 tipPos = ImGui::GetItemRectMin();
                 tipPos.y += 34.0f;
-                auto tipText = trString("CBS/CBF macros cannot be edited");
+                auto tipText = trString("CBS macros cannot be edited");
                 ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), tipText.c_str());
             } else if (Widgets::StyledButton("Open Macro Editor##actionEdit", ImVec2(actionBtnW, 30.0f), theme, anim, 6.0f)) {
                 if (replayActionIsTTR) {
@@ -3024,9 +3011,7 @@ void MenuInterface::drawSettingsTab() {
     ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Input Accuracy", theme);
 
-    bool hasSyzziCBF = AccuracyRuntime::isSyzziCBFAvailable();
     bool cbsEnabled = eng->selectedAccuracyMode == AccuracyMode::CBS;
-    bool cbfEnabled = eng->selectedAccuracyMode == AccuracyMode::CBF;
     bool accuracyChanged = false;
 
     if (eng->engineMode != MODE_DISABLED) ImGui::BeginDisabled();
@@ -3034,27 +3019,16 @@ void MenuInterface::drawSettingsTab() {
         eng->selectedAccuracyMode = cbsEnabled ? AccuracyMode::CBS : AccuracyMode::Vanilla;
         accuracyChanged = true;
     }
-
-    if (!hasSyzziCBF) ImGui::BeginDisabled();
-    if (Widgets::ToggleSwitch("CBF", &cbfEnabled, theme, anim)) {
-        eng->selectedAccuracyMode = cbfEnabled ? AccuracyMode::CBF : AccuracyMode::Vanilla;
-        accuracyChanged = true;
-    }
-    if (!hasSyzziCBF) ImGui::EndDisabled();
     if (eng->engineMode != MODE_DISABLED) ImGui::EndDisabled();
 
-    if (!hasSyzziCBF) {
-        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        imguiTextWrappedTr("Install syzzi.click_between_frames to enable CBF mode.");
-        ImGui::PopStyleColor();
-    } else if (eng->engineMode != MODE_DISABLED) {
+    if (eng->engineMode != MODE_DISABLED) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
         imguiTextWrappedTr("Stop recording or playback before changing accuracy mode.");
         ImGui::PopStyleColor();
     }
 
     if (accuracyChanged) {
-        AccuracyRuntime::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
+        ReplayEngine::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
         saveSettings();
     }
 
@@ -3096,7 +3070,7 @@ void MenuInterface::drawSettingsTab() {
         anim.openDirection = ANIM_CENTER;
         eng->fastPlayback = false;
         eng->selectedAccuracyMode = AccuracyMode::Vanilla;
-        AccuracyRuntime::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
+        ReplayEngine::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
         ambientWavesEnabled = true;
         saveSettings();
     }
@@ -3627,10 +3601,10 @@ void MenuInterface::loadSettings() {
     eng->tickRate = mod->getSavedValue<float>("eng_tick_rate", 240.f);
     eng->gameSpeed = mod->getSavedValue<float>("eng_speed", 1.0f);
     eng->ttrMode = mod->getSavedValue<bool>("eng_ttr_mode", true);
-    if (eng->selectedAccuracyMode == AccuracyMode::CBF && !AccuracyRuntime::isSyzziCBFAvailable()) {
+    if (eng->selectedAccuracyMode == AccuracyMode::CBF) {
         eng->selectedAccuracyMode = AccuracyMode::Vanilla;
     }
-    AccuracyRuntime::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
+    ReplayEngine::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
 
     tempTickRate = (float)eng->tickRate;
     tempGameSpeed = (float)eng->gameSpeed;

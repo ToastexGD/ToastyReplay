@@ -3,7 +3,6 @@
 #include "i18n/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "ttr_format.hpp"
-#include "core/cbf_integration.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -376,7 +375,7 @@ void FrameEditor::applyToTTR() {
         engine->activeTTR->checkpoints.clear();
         engine->executeIndex = 0;
         engine->playbackAnchorIndex = 0;
-        AccuracyRuntime::applyRuntimeAccuracyMode(AccuracyMode::Vanilla);
+        ReplayEngine::applyRuntimeAccuracyMode(AccuracyMode::Vanilla);
     }
 
     originalInputs = inputs;
@@ -415,7 +414,7 @@ void FrameEditor::applyToGDR() {
         engine->activeMacro->anchors.clear();
         engine->executeIndex = 0;
         engine->playbackAnchorIndex = 0;
-        AccuracyRuntime::applyRuntimeAccuracyMode(AccuracyMode::Vanilla);
+        ReplayEngine::applyRuntimeAccuracyMode(AccuracyMode::Vanilla);
     }
 
     originalInputs = inputs;
