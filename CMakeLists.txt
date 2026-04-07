@@ -243,17 +243,17 @@ function(patch_gd_replay_format_header header_file)
 		}
 
 		if (!getNumber(*root, "gameVersion", replay.gameVersion)
-			!getString(*root, "description", replay.description)
-			!getNumber(*root, "version", replay.version)
-			!getNumber(*root, "duration", replay.duration)
-			!getString(*botObject, "name", replay.botInfo.name)
-			!getString(*botObject, "version", replay.botInfo.version)
-			!getNumber(*levelObject, "id", replay.levelInfo.id)
-			!getString(*levelObject, "name", replay.levelInfo.name)
-			!getString(*root, "author", replay.author)
-			!getNumber(*root, "seed", replay.seed)
-			!getNumber(*root, "coins", replay.coins)
-			!getBool(*root, "ldm", replay.ldm)) {
+			|| !getString(*root, "description", replay.description)
+			|| !getNumber(*root, "version", replay.version)
+			|| !getNumber(*root, "duration", replay.duration)
+			|| !getString(*botObject, "name", replay.botInfo.name)
+			|| !getString(*botObject, "version", replay.botInfo.version)
+			|| !getNumber(*levelObject, "id", replay.levelInfo.id)
+			|| !getString(*levelObject, "name", replay.levelInfo.name)
+			|| !getString(*root, "author", replay.author)
+			|| !getNumber(*root, "seed", replay.seed)
+			|| !getNumber(*root, "coins", replay.coins)
+			|| !getBool(*root, "ldm", replay.ldm)) {
 			return std::nullopt;
 		}
 
@@ -275,9 +275,9 @@ function(patch_gd_replay_format_header header_file)
 
 			InputType input;
 			if (!getNumber(*inputObject, "frame", input.frame)
-				!getNumber(*inputObject, "btn", input.button)
-				!getBool(*inputObject, "2p", input.player2)
-				!getBool(*inputObject, "down", input.down)) {
+				|| !getNumber(*inputObject, "btn", input.button)
+				|| !getBool(*inputObject, "2p", input.player2)
+				|| !getBool(*inputObject, "down", input.down)) {
 				return std::nullopt;
 			}
 			input.parseExtension(*inputObject);
