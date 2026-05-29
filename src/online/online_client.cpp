@@ -1034,25 +1034,25 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         if (sourceFormat.empty()) macroOrigin = "recorded_ttr2";
         delete macro;
     } else {
-        auto* macro = MacroSequence::loadFromDisk(macroName);
-        if (!macro) {
+        auto* gdrMacro = MacroSequence::loadFromDisk(macroName);
+        if (!gdrMacro) {
             uploadState = RSERROR;
             uploadResultMsg = trString("Failed to load macro file.");
             uploadResultTimer = 5.0f;
             return;
         }
-        levelName = macro->levelInfo.name;
-        levelId = macro->levelInfo.id;
-        tps = macro->framerate;
-        accuracyMode = accuracyModeToString(macro->accuracyMode);
-        actionCount = static_cast<int>(macro->inputs.size());
-        frameCount = macro->inputs.empty() ? 0 : macro->inputs.back().frame;
-        durationSeconds = macro->duration;
-        fileData = macro->exportData(false);
+        levelName = gdrMacro->levelInfo.name;
+        levelId = gdrMacro->levelInfo.id;
+        tps = gdrMacro->framerate;
+        accuracyMode = accuracyModeToString(gdrMacro->accuracyMode);
+        actionCount = static_cast<int>(gdrMacro->inputs.size());
+        frameCount = gdrMacro->inputs.empty() ? 0 : gdrMacro->inputs.back().frame;
+        durationSeconds = gdrMacro->duration;
+        fileData = gdrMacro->exportData(false);
         filename = macroName + ".gdr";
         macroFormat = "gdr";
         if (sourceFormat.empty()) macroOrigin = "legacy_gdr";
-        delete macro;
+        delete gdrMacro;
     }
 
     if (levelName.empty()) levelName = macroName;
