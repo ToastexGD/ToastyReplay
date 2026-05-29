@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-namespace toasty::i18n {
+namespace toasty::lang {
     enum class UiLanguage {
         Auto,
         English,

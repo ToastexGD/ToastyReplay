@@ -4,30 +4,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(ToastyReplay VERSION 1.3.1 LANGUAGES CXX)
+project(ToastyReplay VERSION 2.0.0 LANGUAGES CXX)
 
 set(TOASTYREPLAY_SOURCES
     src/ttr_format.cpp
+    src/conversion/macro_converter.cpp
     src/core/checkpoint_handler.cpp
     src/core/replay_engine.cpp
     src/core/checkpoint_system.cpp
     src/core/input_timing.cpp
+    src/core/frame_stepper.cpp
     src/core/keybinds.cpp
     src/gui/gui.cpp
     src/gui/frame_editor.cpp
     src/tools/layoutmode.cpp
     src/tools/nomirror.cpp
     src/tools/speedhackaudio.cpp
+    src/tools/disableshaders.cpp
     src/hacks/autoclicker.cpp
     src/hacks/physicsbypass.cpp
     src/hacks/safemode.cpp
     src/hacks/hitboxes.cpp
-    src/hacks/trajectory.cpp
+    src/trajectory/trajectory.cpp
+    src/trajectory/trajectory_physics.cpp
     src/render/renderer.cpp
     src/render/watermark.cpp
+    src/render/watermark_dll_loader.cpp
     src/audio/clicksounds.cpp
     src/audio/playsound.cpp
-    src/i18n/localization.cpp
+    src/lang/localization.cpp
     src/online/online_client.cpp
 )
 
@@ -349,10 +354,34 @@ if (TARGET zlibstatic)
     list(APPEND TOASTYREPLAY_LINK_LIBRARIES zlibstatic)
 endif()
 
+# --- Watermark DLL (runtime-loaded with integrity verification) ---
+# The watermark is no longer statically linked. The DLL is loaded at runtime
+# and its SHA-256 is verified against a hash embedded at build time.
+# CI sets TOASTYREPLAY_WATERMARK_DLL_SHA256 as an environment variable.
+
+set(TOASTYREPLAY_WATERMARK_DLL_SHA256 "" CACHE STRING "SHA-256 hex hash of toasty_watermark.dll for integrity verification")
+if (NOT TOASTYREPLAY_WATERMARK_DLL_SHA256 AND DEFINED ENV{TOASTYREPLAY_WATERMARK_DLL_SHA256})
+    set(TOASTYREPLAY_WATERMARK_DLL_SHA256 "$ENV{TOASTYREPLAY_WATERMARK_DLL_SHA256}" CACHE STRING "SHA-256 hex hash of toasty_watermark.dll" FORCE)
+endif()
+
+if (TOASTYREPLAY_WATERMARK_DLL_SHA256)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        "TOASTYREPLAY_WATERMARK_DLL_SHA256=\"${TOASTYREPLAY_WATERMARK_DLL_SHA256}\""
+    )
+    message(STATUS "Watermark DLL SHA-256 embedded: ${TOASTYREPLAY_WATERMARK_DLL_SHA256}")
+else()
+    message(STATUS "No watermark DLL SHA-256 provided. Debug builds will use stub; Release builds will refuse to render.")
+endif()
+
+# Debug builds get the fallback stub watermark renderer
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    "$<$<CONFIG:Debug>:TOASTYREPLAY_ALLOW_WATERMARK_STUB>"
+)
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")
 
 if (WIN32)
-    target_link_libraries(${PROJECT_NAME} ${TOASTYREPLAY_LINK_LIBRARIES})
+    target_link_libraries(${PROJECT_NAME} ${TOASTYREPLAY_LINK_LIBRARIES} Crypt32 Advapi32)
 elseif (APPLE)
     target_link_libraries(${PROJECT_NAME} ${TOASTYREPLAY_LINK_LIBRARIES} "-framework IOKit")
 endif()

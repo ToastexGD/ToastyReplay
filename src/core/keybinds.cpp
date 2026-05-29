@@ -2,10 +2,141 @@
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include "gui/gui.hpp"
 #include "ToastyReplay.hpp"
-#include "core/input_timing.hpp"
 #include "hacks/autoclicker.hpp"
+#include "audio/clicksounds.hpp"
 
 using namespace geode::prelude;
+
+namespace {
+
+enum class KeybindAction {
+    MenuToggle,
+    FrameAdvance,
+    ReplayToggle,
+    Noclip,
+    SafeMode,
+    Trajectory,
+    AudioPitch,
+    RngLock,
+    Hitboxes,
+    LayoutMode,
+    NoMirror,
+    Autoclicker,
+    DisableShaders,
+    ClickSounds,
+    FrameStep
+};
+
+struct KeybindEntry {
+    int KeybindSet::* slot;
+    KeybindAction action;
+    bool requiresPlayLayer;
+    bool fireOnRepeatToo;
+};
+
+static constexpr KeybindEntry dispatchTable[] = {
+    { &KeybindSet::menu,           KeybindAction::MenuToggle,     false, false },
+    { &KeybindSet::frameAdvance,   KeybindAction::FrameAdvance,   true,  false },
+    { &KeybindSet::replayToggle,   KeybindAction::ReplayToggle,   false, false },
+    { &KeybindSet::noclip,         KeybindAction::Noclip,         false, false },
+    { &KeybindSet::safeMode,       KeybindAction::SafeMode,       false, false },
+    { &KeybindSet::trajectory,     KeybindAction::Trajectory,     false, false },
+    { &KeybindSet::audioPitch,     KeybindAction::AudioPitch,     false, false },
+    { &KeybindSet::rngLock,        KeybindAction::RngLock,        false, false },
+    { &KeybindSet::hitboxes,       KeybindAction::Hitboxes,       false, false },
+    { &KeybindSet::layoutMode,     KeybindAction::LayoutMode,     false, false },
+    { &KeybindSet::noMirror,       KeybindAction::NoMirror,       false, false },
+    { &KeybindSet::autoclicker,    KeybindAction::Autoclicker,    false, false },
+    { &KeybindSet::disableShaders, KeybindAction::DisableShaders, false, false },
+    { &KeybindSet::clickSounds,    KeybindAction::ClickSounds,    false, false },
+    { &KeybindSet::frameStep,      KeybindAction::FrameStep,      true,  true  },
+};
+
+static bool runAction(KeybindAction action, ReplayEngine* engine, MenuInterface* ui, PlayLayer* pl) {
+    switch (action) {
+        case KeybindAction::MenuToggle:
+            if (ui->anim.closing) {
+                ui->anim.closing = false;
+                ui->anim.opening = true;
+                ui->shown = true;
+            } else if (ui->anim.opening) {
+                ui->anim.opening = false;
+                ui->anim.closing = true;
+            } else if (!ui->shown) {
+                ui->shown = true;
+                ui->anim.opening = true;
+                ui->anim.closing = false;
+                ui->anim.openProgress = 0.0f;
+            } else {
+                ui->anim.closing = true;
+                ui->anim.opening = false;
+            }
+            return true;
+
+        case KeybindAction::FrameAdvance:
+            engine->setFrameStepEnabled(!engine->tickStepping, pl);
+            return true;
+
+        case KeybindAction::ReplayToggle:
+            if (engine->engineMode == MODE_EXECUTE || engine->pendingPlaybackStart)
+                engine->haltExecution();
+            else if (engine->hasMacroInputs())
+                engine->requestExecutionStart();
+            return true;
+
+        case KeybindAction::Noclip:
+            engine->collisionBypass = !engine->collisionBypass;
+            return true;
+
+        case KeybindAction::SafeMode:
+            engine->protectedMode = !engine->protectedMode;
+            return true;
+
+        case KeybindAction::Trajectory:
+            engine->pathPreview = !engine->pathPreview;
+            return true;
+
+        case KeybindAction::AudioPitch:
+            engine->audioPitchEnabled = !engine->audioPitchEnabled;
+            return true;
+
+        case KeybindAction::RngLock:
+            engine->rngLocked = !engine->rngLocked;
+            return true;
+
+        case KeybindAction::Hitboxes:
+            engine->showHitboxes = !engine->showHitboxes;
+            return true;
+
+        case KeybindAction::LayoutMode:
+            engine->layoutMode = !engine->layoutMode;
+            return true;
+
+        case KeybindAction::NoMirror:
+            engine->noMirrorEffect = !engine->noMirrorEffect;
+            return true;
+
+        case KeybindAction::Autoclicker:
+            Autoclicker::get()->enabled = !Autoclicker::get()->enabled;
+            return true;
+
+        case KeybindAction::DisableShaders:
+            engine->disableShaders = !engine->disableShaders;
+            return true;
+
+        case KeybindAction::ClickSounds:
+            ClickSoundManager::get()->enabled = !ClickSoundManager::get()->enabled;
+            return true;
+
+        case KeybindAction::FrameStep:
+            if (engine->tickStepping && !engine->renderer.recording)
+                engine->singleTickStep = true;
+            return true;
+    }
+    return false;
+}
+
+}
 
 class $modify(MenuKeyHandler, CCKeyboardDispatcher) {
     bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat, double timestamp) {
@@ -28,99 +159,18 @@ class $modify(MenuKeyHandler, CCKeyboardDispatcher) {
         }
 
         bool handledByHotkey = false;
-        if (ui && down && !repeat) {
-            if (ui->keybinds.menu != 0 && k == ui->keybinds.menu) {
-                handledByHotkey = true;
-                if (ui->anim.closing) {
-                    ui->anim.closing = false;
-                    ui->anim.opening = true;
-                    ui->shown = true;
-                } else if (ui->anim.opening) {
-                    ui->anim.opening = false;
-                    ui->anim.closing = true;
-                } else if (!ui->shown) {
-                    ui->shown = true;
-                    ui->anim.opening = true;
-                    ui->anim.closing = false;
-                    ui->anim.openProgress = 0.0f;
-                } else {
-                    ui->anim.closing = true;
-                    ui->anim.opening = false;
-                }
+        PlayLayer* pl = PlayLayer::get();
+
+        if (ui && engine && down) {
+            for (const auto& entry : dispatchTable) {
+                int bound = ui->keybinds.*entry.slot;
+                if (bound == 0 || k != bound) continue;
+                if (repeat && !entry.fireOnRepeatToo) continue;
+                if (entry.requiresPlayLayer && !pl) continue;
+
+                if (runAction(entry.action, engine, ui, pl))
+                    handledByHotkey = true;
             }
-        }
-
-        if (engine && ui && down && !repeat) {
-            auto pl = PlayLayer::get();
-
-            if (ui->keybinds.frameAdvance != 0 && k == ui->keybinds.frameAdvance && pl) {
-                handledByHotkey = true;
-                engine->tickStepping = !engine->tickStepping;
-            }
-
-            if (ui->keybinds.replayToggle != 0 && k == ui->keybinds.replayToggle) {
-                handledByHotkey = true;
-                if (engine->engineMode == MODE_EXECUTE || engine->pendingPlaybackStart)
-                    engine->haltExecution();
-                else if (engine->hasMacroInputs())
-                    engine->requestExecutionStart();
-            }
-
-            if (ui->keybinds.noclip != 0 && k == ui->keybinds.noclip) {
-                handledByHotkey = true;
-                engine->collisionBypass = !engine->collisionBypass;
-            }
-
-            if (ui->keybinds.safeMode != 0 && k == ui->keybinds.safeMode) {
-                handledByHotkey = true;
-                engine->protectedMode = !engine->protectedMode;
-            }
-
-            if (ui->keybinds.trajectory != 0 && k == ui->keybinds.trajectory) {
-                handledByHotkey = true;
-                engine->pathPreview = !engine->pathPreview;
-            }
-
-            if (ui->keybinds.audioPitch != 0 && k == ui->keybinds.audioPitch) {
-                handledByHotkey = true;
-                engine->audioPitchEnabled = !engine->audioPitchEnabled;
-            }
-
-            if (ui->keybinds.rngLock != 0 && k == ui->keybinds.rngLock) {
-                handledByHotkey = true;
-                engine->rngLocked = !engine->rngLocked;
-            }
-
-            if (ui->keybinds.hitboxes != 0 && k == ui->keybinds.hitboxes) {
-                handledByHotkey = true;
-                engine->showHitboxes = !engine->showHitboxes;
-            }
-
-            if (ui->keybinds.layoutMode != 0 && k == ui->keybinds.layoutMode) {
-                handledByHotkey = true;
-                engine->layoutMode = !engine->layoutMode;
-            }
-
-            if (ui->keybinds.noMirror != 0 && k == ui->keybinds.noMirror) {
-                handledByHotkey = true;
-                engine->noMirrorEffect = !engine->noMirrorEffect;
-            }
-
-            if (ui->keybinds.autoclicker != 0 && k == ui->keybinds.autoclicker) {
-                handledByHotkey = true;
-                Autoclicker::get()->enabled = !Autoclicker::get()->enabled;
-            }
-        }
-
-        if (engine && ui && down) {
-            if (ui->keybinds.frameStep != 0 && k == ui->keybinds.frameStep && engine->tickStepping) {
-                handledByHotkey = true;
-                engine->singleTickStep = true;
-            }
-        }
-
-        if (!repeat && !handledByHotkey) {
-            InputTiming::queueCurrentTimestamp();
         }
 
         if (!repeat && !handledByHotkey && PlayLayer::get()) {

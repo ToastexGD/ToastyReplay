@@ -5,64 +5,91 @@
 
 using namespace geode::prelude;
 
-class $modify(ProtectedPlayLayer, PlayLayer) {
-    void showNewBest(bool p0, int p1, int p2, bool p3, bool p4, bool p5) {
-        if (!ReplayEngine::get()->protectedMode)
-            PlayLayer::showNewBest(p0, p1, p2, p3, p4, p5);
+namespace {
+
+static bool safeModeEnabled() {
+    return ReplayEngine::get()->protectedMode;
+}
+
+struct TestModeOverride {
+    PlayLayer* m_layer;
+    bool m_original;
+
+    TestModeOverride(PlayLayer* layer, bool activate)
+        : m_layer(layer), m_original(layer->m_isTestMode) {
+        if (activate) m_layer->m_isTestMode = true;
     }
 
-    void levelComplete() {
-        ReplayEngine* engine = ReplayEngine::get();
-        bool originalTestMode = m_isTestMode;
-
-        if (engine->protectedMode)
-            m_isTestMode = true;
-
-        PlayLayer::levelComplete();
-
-        m_isTestMode = originalTestMode;
-
-        
-        if (engine->engineMode == MODE_CAPTURE) {
-            if (engine->ttrMode && engine->activeTTR && !engine->activeTTR->inputs.empty()) {
-                engine->activeTTR->persist();
-                engine->reloadMacroList();
-            } else if (!engine->ttrMode && engine->activeMacro && !engine->activeMacro->inputs.empty()) {
-                engine->activeMacro->persist(engine->activeMacro->accuracyMode, static_cast<int>(engine->tickRate));
-                engine->reloadMacroList();
-            }
-        }
+    ~TestModeOverride() {
+        m_layer->m_isTestMode = m_original;
     }
 };
 
-class $modify(ProtectedEndLevelLayer, EndLevelLayer) {
+}
+
+class $modify(GuardedGJGameLevel, GJGameLevel) {
+    void savePercentage(int p0, bool p1, int p2, int p3, bool p4) {
+        if (!safeModeEnabled())
+            GJGameLevel::savePercentage(p0, p1, p2, p3, p4);
+    }
+};
+
+class $modify(GuardedEndLevelLayer, EndLevelLayer) {
     void customSetup() {
         EndLevelLayer::customSetup();
-        ReplayEngine* engine = ReplayEngine::get();
 
-        if (!engine->protectedMode) return;
+        if (!safeModeEnabled()) return;
 
-        CCLabelBMFont* indicator = CCLabelBMFont::create("Safe Mode Active", "goldFont.fnt");
-        indicator->setPosition({ 3.5, 10 });
-        indicator->setOpacity(155);
-        indicator->setID("protected-mode-indicator"_spr);
-        indicator->setScale(0.55f);
-        indicator->setAnchorPoint({ 0, 0.5 });
+        auto* container = CCNodeRGBA::create();
+        container->setID("safemode-badge"_spr);
+        container->setAnchorPoint({ 0.f, 0.f });
+        container->setScale(0.5f);
+        container->setCascadeOpacityEnabled(true);
+        container->setOpacity(180);
 
-        addChild(indicator);
+        auto* icon = CCSprite::createWithSpriteFrameName("GJ_lockIcon_001.png");
+        icon->setAnchorPoint({ 0.f, 0.5f });
+        icon->setPosition({ 0.f, 10.f });
+        container->addChild(icon);
+
+        auto* label = CCLabelBMFont::create("Safe Mode Active", "goldFont.fnt");
+        label->setAnchorPoint({ 0.f, 0.5f });
+        label->setPosition({ icon->getContentSize().width + 4.f, 10.f });
+        container->addChild(label);
+
+        container->setContentSize({
+            icon->getContentSize().width + 4.f + label->getContentSize().width,
+            20.f
+        });
+        container->setPosition({ 4.f, this->getContentSize().height - 18.f });
+
+        addChild(container);
     }
 
     void onHideLayer(CCObject* obj) {
         EndLevelLayer::onHideLayer(obj);
 
-        if (CCNode* indicator = getChildByID("protected-mode-indicator"_spr))
-            indicator->setVisible(!indicator->isVisible());
+        auto* node = getChildByID("safemode-badge"_spr);
+        if (node) node->setVisible(!node->isVisible());
     }
 };
 
-class $modify(ProtectedGJGameLevel, GJGameLevel) {
-    void savePercentage(int p0, bool p1, int p2, int p3, bool p4) {
-        if (!ReplayEngine::get()->protectedMode)
-            GJGameLevel::savePercentage(p0, p1, p2, p3, p4);
+class $modify(GuardedPlayLayer, PlayLayer) {
+    void showNewBest(bool p0, int p1, int p2, bool p3, bool p4, bool p5) {
+        if (!safeModeEnabled())
+            PlayLayer::showNewBest(p0, p1, p2, p3, p4, p5);
+    }
+
+    void levelComplete() {
+        auto* engine = ReplayEngine::get();
+        {
+            TestModeOverride guard(this, engine && engine->protectedMode);
+            PlayLayer::levelComplete();
+        }
+
+        
+        if (engine && engine->completionAutosave && engine->engineMode == MODE_CAPTURE) {
+            engine->saveActiveMacro();
+        }
     }
 };

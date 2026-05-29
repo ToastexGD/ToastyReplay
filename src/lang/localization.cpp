@@ -1,4 +1,4 @@
-#include "i18n/localization.hpp"
+#include "lang/localization.hpp"
 
 #include <Geode/loader/SettingV3.hpp>
 #include <Geode/utils/file.hpp>
@@ -10,7 +10,7 @@
 
 using namespace geode::prelude;
 
-namespace toasty::i18n {
+namespace toasty::lang {
     namespace {
         using Table = std::unordered_map<std::string, std::string>;
 

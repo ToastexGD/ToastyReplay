@@ -35,6 +35,17 @@ struct ClickPack {
     }
 };
 
+struct ClickPlayerState {
+    int lastHardIdx = -1;
+    int lastSoftIdx = -1;
+    int lastHardReleaseIdx = -1;
+    int lastSoftReleaseIdx = -1;
+    int lastReleaseIdx = -1;
+    bool lastPressWasHard = false;
+    float lastPressIntensity = 1.0f;
+    int activeChannelTokens = 0;
+};
+
 struct MacroAction;
 
 class ClickSoundManager {
@@ -44,6 +55,7 @@ public:
     bool enabled = false;
     bool playDuringPlayback = true;
     bool separateP2Clicks = false;
+    bool muteLeftRightClicks = false;
 
     float softness = 0.5f;
     float clickDelayMin = 0.0f;
@@ -94,18 +106,28 @@ private:
         std::chrono::steady_clock::time_point playAt;
     };
 
+    struct VoiceTicket {
+        FMOD::Channel* channel = nullptr;
+        std::chrono::steady_clock::time_point startedAt{};
+    };
+
     FMOD::ChannelGroup* channelGroup = nullptr;
     FMOD::Sound* bgNoiseSound = nullptr;
     std::unordered_map<std::string, FMOD::Sound*> soundCache;
     std::mt19937 rng{std::random_device{}()};
     std::vector<PendingClick> pendingClicks;
     std::mutex pendingClickMutex;
+    ClickPlayerState playerState[2];
+    std::vector<VoiceTicket> activeVoices;
+    std::mutex voiceMutex;
 
     void ensureChannelGroup();
     bool shouldUseP2Pack(bool requestedPlayer2, bool trueTwoPlayerMode) const;
     std::string pickRandomFile(const std::vector<std::string>& files);
-    void playFile(const std::string& path, float volume);
+    void playFile(const std::string& path, float volume, float pitchJitter, float panOffset);
     void playResolvedClick(bool pressed, bool isPlayer2);
+    void cullExpiredVoices();
+    void enforcePolyphonyLimit();
     FMOD::Sound* getCachedSound(const std::string& path);
     void clearSoundCache();
     std::vector<float> decodeClickToRaw(const std::string& filePath, int targetSampleRate);

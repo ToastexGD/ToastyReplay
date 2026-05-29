@@ -3,9 +3,12 @@
 
 #include <imgui-cocos.hpp>
 #include <filesystem>
+#include <future>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
+#include "conversion/macro_converter.hpp"
 #include "gui/frame_editor.hpp"
 
 struct ThemePreset {
@@ -51,6 +54,18 @@ enum AnimDirection {
     ANIM_FROM_BOTTOM
 };
 
+enum RenderWatermarkFont {
+    RENDER_WATERMARK_FONT_NORMAL_PUSAB = 0,
+    RENDER_WATERMARK_FONT_GOLD_PUSAB = 1
+};
+
+enum RenderWatermarkCorner {
+    RENDER_WATERMARK_CORNER_TOP_LEFT = 0,
+    RENDER_WATERMARK_CORNER_TOP_RIGHT = 1,
+    RENDER_WATERMARK_CORNER_BOTTOM_LEFT = 2,
+    RENDER_WATERMARK_CORNER_BOTTOM_RIGHT = 3
+};
+
 struct AnimationState {
     float openProgress = 0.0f;
     bool opening = false;
@@ -88,6 +103,8 @@ struct KeybindSet {
     int layoutMode = 0;
     int noMirror = 0;
     int autoclicker = 0;
+    int disableShaders = 0;
+    int clickSounds = 0;
 };
 
 class MenuInterface {
@@ -103,6 +120,7 @@ public:
     bool validated = false;
     bool validationFailed = false;
     bool setupComplete = false;
+    cocos2d::CCTexture2D* logoTexture = nullptr;
 
     int activeTab = 0;
     int previousTab = -1;
@@ -145,6 +163,10 @@ public:
     float renderMusicVol = 1.0f;
     bool renderHideEndscreen = false;
     bool renderHideLevelComplete = false;
+    bool renderWatermarkEnabled = false;
+    int renderWatermarkFont = RENDER_WATERMARK_FONT_NORMAL_PUSAB;
+    int renderWatermarkCorner = RENDER_WATERMARK_CORNER_BOTTOM_RIGHT;
+    float renderWatermarkScale = 1.0f;
     bool renderBufsInit = false;
     bool advancedWarningAccepted = false;
     bool showAdvancedWarning = false;
@@ -180,6 +202,25 @@ private:
     bool replayActionPopupRequested = false;
     std::string replayActionMacroName;
     bool replayActionIsTTR = false;
+    bool replayActionIsLegacyCBS = false;
+    bool replayActionCanEdit = true;
+    bool replayLoadPending = false;
+    std::string replayLoadPendingMacroName;
+    bool replayLoadPendingIsTTR = false;
+    double replayLoadReadyTime = 0.0;
+    std::string replayConvertSelectedPath;
+    char replayConvertNameBuffer[256] = {0};
+    bool replayConvertTargetTTR = true;
+    bool replayConvertRunning = false;
+    bool replayConvertStatusOk = false;
+    std::string replayConvertStatus;
+    std::vector<std::string> replayConvertWarnings;
+    std::future<toasty::conversion::ConversionResult> replayConvertFuture;
+    bool replayConvertMarkSourceOnComplete = false;
+    bool replayConvertSelectOutputOnComplete = false;
+    bool replayConvertShowStandaloneStatus = false;
+    std::string replayConvertSourceKeyOnComplete;
+    bool replayConversionsExpanded = false;
 
     void drawBackdrop();
     void drawAmbientWaves(ImDrawList* dl, ImVec2 panelMin, ImVec2 panelMax);
@@ -231,7 +272,5 @@ namespace Widgets {
     bool PillButton(const char* label, bool active, float width, ThemeEngine& theme, AnimationState& anim);
     void KeybindButton(const char* label, int* keyCode, ThemeEngine& theme, AnimationState& anim);
 }
-
-void displayOverlayBranding();
 
 #endif

@@ -6,27 +6,59 @@
 
 #include <array>
 #include <cmath>
-#include <deque>
 #include <vector>
 
 using namespace cocos2d;
 
 namespace {
-    constexpr ccColor4F kSolidColor       = { 0.00f, 0.25f, 1.00f, 1.00f };
-    constexpr ccColor4F kDangerColor      = { 1.00f, 0.00f, 0.00f, 1.00f };
-    constexpr ccColor4F kPassableColor    = { 0.00f, 1.00f, 1.00f, 1.00f };
-    constexpr ccColor4F kInteractColor    = { 0.00f, 1.00f, 0.00f, 1.00f };
-    constexpr ccColor4F kPlayerColor      = { 1.00f, 0.00f, 0.00f, 1.00f };
-    constexpr ccColor4F kPlayerInnerColor = { 0.00f, 0.25f, 1.00f, 1.00f };
-    constexpr ccColor4F kPlayerAreaColor  = { 0.55f, 0.00f, 0.00f, 1.00f };
-    constexpr ccColor4F kCoinColor        = { 0.00f, 1.00f, 0.00f, 1.00f };
-    constexpr ccColor4F kSlopeColor       = { 0.00f, 0.25f, 1.00f, 1.00f };
+    constexpr ccColor4F kSolidColor       = { 0.05f, 0.20f, 0.95f, 1.00f };
+    constexpr ccColor4F kDangerColor      = { 0.95f, 0.10f, 0.10f, 1.00f };
+    constexpr ccColor4F kPassableColor    = { 0.10f, 0.85f, 0.95f, 1.00f };
+    constexpr ccColor4F kInteractColor    = { 0.20f, 0.85f, 0.30f, 1.00f };
+    constexpr ccColor4F kPlayerColor      = { 0.95f, 0.10f, 0.10f, 1.00f };
+    constexpr ccColor4F kPlayerInnerColor = { 0.05f, 0.20f, 0.95f, 1.00f };
+    constexpr ccColor4F kPlayerAreaColor  = { 0.50f, 0.05f, 0.05f, 1.00f };
+    constexpr ccColor4F kCoinColor        = { 0.20f, 0.85f, 0.30f, 1.00f };
+    constexpr ccColor4F kSlopeColor       = { 0.05f, 0.20f, 0.95f, 1.00f };
     constexpr float kBorderWidth = 0.25f;
     constexpr unsigned int kCircleSegments = 28;
+
+    constexpr uint16_t kFlagSubtick = 1 << 0;
 
     ccColor4F transparentFill() {
         return { 0.0f, 0.0f, 0.0f, 0.0f };
     }
+
+    struct HazardRectGuard {
+        GameObject* obj;
+        bool savedDirty;
+        bool savedBoxOffset;
+
+        explicit HazardRectGuard(GameObject* o)
+            : obj(o), savedDirty(o->m_isObjectRectDirty), savedBoxOffset(o->m_boxOffsetCalculated) {}
+
+        ~HazardRectGuard() {
+            obj->m_isObjectRectDirty = savedDirty;
+            obj->m_boxOffsetCalculated = savedBoxOffset;
+        }
+    };
+
+    struct SlopeVertexMapping {
+        int swap0;
+        int swap1;
+        int swap2;
+    };
+
+    static constexpr SlopeVertexMapping kSlopeLookup[8] = {
+        /* 0 */ { -1, 1, -1 },
+        /* 1 */ { 0, -1, -1 },
+        /* 2 */ { -1, -1, -1 },
+        /* 3 */ { -1, -1, 2 },
+        /* 4 */ { -1, -1, -1 },
+        /* 5 */ { 0, -1, -1 },
+        /* 6 */ { -1, -1, 2 },
+        /* 7 */ { -1, 1, -1 },
+    };
 
     struct ShapeDescriptor {
         enum class Kind {
@@ -49,7 +81,13 @@ namespace {
     struct PlayerHitboxSample {
         CCRect outer {};
         CCRect inner {};
-        bool subtick = false;
+        uint16_t flags = 0;
+
+        bool isSubtick() const { return (flags & kFlagSubtick) != 0; }
+        void setSubtick(bool v) {
+            if (v) flags |= kFlagSubtick;
+            else flags &= ~kFlagSubtick;
+        }
     };
 
     ShapeDescriptor makeRectangle(CCRect rect, ccColor4F border) {
@@ -97,7 +135,7 @@ namespace {
     public:
         explicit OverlayPainter(CCDrawNode* drawNode) : m_drawNode(drawNode) {}
 
-        void clear() {
+        void clearAndReset() {
             if (m_drawNode) {
                 m_drawNode->clear();
             }
@@ -204,11 +242,15 @@ namespace {
         std::vector<GameObject*> m_objects;
     };
 
+    static constexpr size_t kMaxTrailBuffer = 1024;
+
     class TrailHistory {
     public:
         void clear() {
-            m_entries[0].clear();
-            m_entries[1].clear();
+            m_count[0] = 0;
+            m_count[1] = 0;
+            m_head[0] = 0;
+            m_head[1] = 0;
         }
 
         void capture(GJBaseGameLayer* layer, bool subtick, size_t limit) {
@@ -223,23 +265,27 @@ namespace {
         }
 
         void appendShapes(std::vector<ShapeDescriptor>& out) const {
-            appendPlayerShapes(m_entries[0], out);
-            appendPlayerShapes(m_entries[1], out);
+            appendPlayerShapes(0, out);
+            appendPlayerShapes(1, out);
         }
 
     private:
-        static void trim(std::deque<PlayerHitboxSample>& entries, size_t limit) {
-            while (entries.size() > limit) {
-                entries.pop_front();
-            }
-        }
+        void appendPlayerShapes(size_t slot, std::vector<ShapeDescriptor>& out) const {
+            size_t count = m_count[slot];
+            if (count == 0) return;
 
-        static void appendPlayerShapes(std::deque<PlayerHitboxSample> const& entries, std::vector<ShapeDescriptor>& out) {
-            for (auto const& sample : entries) {
+            size_t start = (count >= kMaxTrailBuffer)
+                ? m_head[slot]
+                : 0;
+
+            for (size_t i = 0; i < count; ++i) {
+                size_t idx = (start + i) % kMaxTrailBuffer;
+                auto const& sample = m_entries[slot][idx];
+
                 auto outer = makeRectangle(sample.outer, kPlayerColor);
                 auto inner = makeRectangle(sample.inner, kPlayerInnerColor);
 
-                if (sample.subtick) {
+                if (sample.isSubtick()) {
                     outer.border.a *= 0.5f;
                     inner.border.a *= 0.5f;
                 }
@@ -254,15 +300,26 @@ namespace {
                 return;
             }
 
-            m_entries[slot].push_back({
-                player->getObjectRect(),
-                player->getObjectRect(0.25f, 0.25f),
-                subtick
-            });
-            trim(m_entries[slot], limit);
+            size_t cap = (limit < kMaxTrailBuffer) ? limit : kMaxTrailBuffer;
+
+            PlayerHitboxSample sample;
+            sample.outer = player->getObjectRect();
+            sample.inner = player->getObjectRect(0.25f, 0.25f);
+            sample.setSubtick(subtick);
+
+            m_entries[slot][m_head[slot]] = sample;
+            m_head[slot] = (m_head[slot] + 1) % kMaxTrailBuffer;
+
+            if (m_count[slot] < cap) {
+                m_count[slot]++;
+            } else {
+                m_count[slot] = cap;
+            }
         }
 
-        std::deque<PlayerHitboxSample> m_entries[2];
+        std::array<PlayerHitboxSample, kMaxTrailBuffer> m_entries[2] {};
+        size_t m_head[2] = { 0, 0 };
+        size_t m_count[2] = { 0, 0 };
     };
 
     class ShapeExtractor {
@@ -336,22 +393,18 @@ namespace {
                         CCPoint(rect.getMaxX(), rect.getMinY())
                     };
                     CCPoint topRight(rect.getMaxX(), rect.getMaxY());
-                    switch (object->m_slopeDirection) {
-                        case 0:
-                        case 7:
-                            triangle[1] = topRight;
-                            break;
-                        case 1:
-                        case 5:
-                            triangle[0] = topRight;
-                            break;
-                        case 3:
-                        case 6:
-                            triangle[2] = topRight;
-                            break;
-                        default:
-                            break;
+
+                    int dir = object->m_slopeDirection;
+                    if (dir >= 0 && dir < 8) {
+                        auto const& mapping = kSlopeLookup[dir];
+                        int slots[3] = { mapping.swap0, mapping.swap1, mapping.swap2 };
+                        for (int i = 0; i < 3; ++i) {
+                            if (slots[i] >= 0) {
+                                triangle[slots[i]] = topRight;
+                            }
+                        }
                     }
+
                     out.push_back(makeTriangle(triangle, object->m_isPassable ? kPassableColor : kSlopeColor));
                     return;
                 }
@@ -373,11 +426,10 @@ namespace {
                         return;
                     }
 
-                    auto dirtyRect = object->m_isObjectRectDirty;
-                    auto boxOffsetCalculated = object->m_boxOffsetCalculated;
-                    out.push_back(makeRectangle(object->getObjectRect(), kDangerColor));
-                    object->m_isObjectRectDirty = dirtyRect;
-                    object->m_boxOffsetCalculated = boxOffsetCalculated;
+                    {
+                        HazardRectGuard guard(object);
+                        out.push_back(makeRectangle(object->getObjectRect(), kDangerColor));
+                    }
                     return;
                 }
 
@@ -433,7 +485,7 @@ namespace {
             auto* node = CCDrawNode::create();
             node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
             node->m_bUseArea = false;
-            parent->addChild(node, 1402);
+            parent->addChild(node, layer->m_debugDrawNode->getZOrder() + 1);
             m_overlayNode = node;
         }
 
@@ -470,7 +522,7 @@ namespace {
 
         void render(GJBaseGameLayer* layer) {
             OverlayPainter painter(m_overlayNode);
-            painter.clear();
+            painter.clearAndReset();
 
             auto* engine = ReplayEngine::get();
             if (!engine || !layer || !m_overlayNode) {

@@ -29,7 +29,7 @@ void InputTiming::queueCurrentTimestamp() {
 class $modify(TimedTouchDispatcher, CCTouchDispatcher) {
     void touches(cocos2d::CCSet* touches, cocos2d::CCEvent* event, unsigned int index) {
         if (PlayLayer::get()) {
-            Autoclicker::get()->trackUserInput(index == 0, false);
+            Autoclicker::get()->trackUserInput(index == CCTOUCHBEGAN, false);
         }
         CCTouchDispatcher::touches(touches, event, index);
     }

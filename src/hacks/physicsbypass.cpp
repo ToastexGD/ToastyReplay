@@ -10,7 +10,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #ifdef GEODE_IS_WINDOWS
@@ -20,15 +23,15 @@
 using namespace geode::prelude;
 
 namespace {
-    struct RenderResolutionScope {
+    struct ScopedRenderResolutionToggle {
         Renderer& renderer;
 
-        explicit RenderResolutionScope(Renderer& activeRenderer)
+        explicit ScopedRenderResolutionToggle(Renderer& activeRenderer)
             : renderer(activeRenderer) {
             renderer.changeRes(false);
         }
 
-        ~RenderResolutionScope() {
+        ~ScopedRenderResolutionToggle() {
             renderer.changeRes(true);
         }
     };
@@ -54,57 +57,78 @@ namespace {
         return static_cast<size_t>(nt->OptionalHeader.SizeOfImage);
     }
 
-    template <size_t N>
-    static uintptr_t findPattern(uint8_t* base, size_t size, std::array<int, N> const& pattern) {
-        if (!base || size < N) {
-            return 0;
+    static std::optional<size_t> findHexPattern(uint8_t* base, size_t size, std::string_view textPattern) {
+        std::vector<uint8_t> bytes;
+        std::vector<bool> mask;
+
+        for (size_t pos = 0; pos < textPattern.size();) {
+            while (pos < textPattern.size() && textPattern[pos] == ' ') ++pos;
+            if (pos >= textPattern.size()) break;
+
+            if (textPattern[pos] == '?') {
+                bytes.push_back(0);
+                mask.push_back(false);
+                while (pos < textPattern.size() && textPattern[pos] == '?') ++pos;
+            } else {
+                auto hi = textPattern[pos++];
+                auto lo = textPattern[pos++];
+                auto hexVal = [](char c) -> uint8_t {
+                    if (c >= '0' && c <= '9') return c - '0';
+                    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+                    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+                    return 0;
+                };
+                bytes.push_back(static_cast<uint8_t>((hexVal(hi) << 4) | hexVal(lo)));
+                mask.push_back(true);
+            }
         }
 
-        for (size_t i = 0; i + N <= size; ++i) {
-            bool matched = true;
-            for (size_t j = 0; j < N; ++j) {
-                if (pattern[j] != -1 && base[i + j] != static_cast<uint8_t>(pattern[j])) {
-                    matched = false;
+        size_t patLen = bytes.size();
+        if (!base || size < patLen) return std::nullopt;
+
+        for (size_t i = 0; i + patLen <= size; ++i) {
+            bool hit = true;
+            for (size_t j = 0; j < patLen; ++j) {
+                if (mask[j] && base[i + j] != bytes[j]) {
+                    hit = false;
                     break;
                 }
             }
-
-            if (matched) {
-                return reinterpret_cast<uintptr_t>(base + i);
-            }
+            if (hit) return i;
         }
 
-        return 0;
+        return std::nullopt;
     }
 
+#pragma pack(push, 1)
+    struct PatchPayload {
+        uint8_t movRaxOpcode[2];
+        uint64_t pointer;
+        uint8_t movR11dOpcode[3];
+        uint8_t jmpOpcode;
+        int32_t jmpOffset;
+        uint8_t nopPad[4];
+    };
+#pragma pack(pop)
+
     static std::vector<uint8_t> buildExpectedTicksPatch(uintptr_t patchAddress) {
-        std::vector<uint8_t> bytes;
-        bytes.reserve(22);
+        PatchPayload payload;
+        payload.movRaxOpcode[0] = 0x48;
+        payload.movRaxOpcode[1] = 0xB8;
+        payload.pointer = reinterpret_cast<uint64_t>(&g_expectedTicks);
+        payload.movR11dOpcode[0] = 0x44;
+        payload.movR11dOpcode[1] = 0x8B;
+        payload.movR11dOpcode[2] = 0x18;
+        payload.jmpOpcode = 0xE9;
+        payload.jmpOffset = static_cast<int32_t>((patchAddress + 0x43) - (patchAddress + 18));
+        payload.nopPad[0] = 0x90;
+        payload.nopPad[1] = 0x90;
+        payload.nopPad[2] = 0x90;
+        payload.nopPad[3] = 0x90;
 
-        bytes.push_back(0x48);
-        bytes.push_back(0xB8);
-
-        uint64_t pointerBits = reinterpret_cast<uint64_t>(&g_expectedTicks);
-        for (size_t i = 0; i < sizeof(pointerBits); ++i) {
-            bytes.push_back(static_cast<uint8_t>((pointerBits >> (i * 8)) & 0xFF));
-        }
-
-        bytes.push_back(0x44);
-        bytes.push_back(0x8B);
-        bytes.push_back(0x18);
-
-        bytes.push_back(0xE9);
-        int32_t jumpOffset = static_cast<int32_t>((patchAddress + 0x43) - (patchAddress + 18));
-        for (size_t i = 0; i < sizeof(jumpOffset); ++i) {
-            bytes.push_back(static_cast<uint8_t>((jumpOffset >> (i * 8)) & 0xFF));
-        }
-
-        bytes.push_back(0x90);
-        bytes.push_back(0x90);
-        bytes.push_back(0x90);
-        bytes.push_back(0x90);
-
-        return bytes;
+        std::vector<uint8_t> result(sizeof(payload));
+        std::memcpy(result.data(), &payload, sizeof(payload));
+        return result;
     }
 
     static bool ensureExpectedTicksPatch() {
@@ -121,20 +145,16 @@ namespace {
             return false;
         }
 
-        constexpr std::array<int, 27> kPattern = {
-            0xFF, 0x90, -1,   -1,   -1,   -1,
-            0xF3, 0x0F, 0x10, -1,   -1,   -1,   -1,   -1,
-            0xF3, 0x44, 0x0F, 0x10, -1,   -1,   -1,   -1,
-            0x00, 0xF3, 0x41, 0x0F, 0x5D
-        };
+        static constexpr std::string_view kExpectedTicksSig =
+            "FF 90 ?? ?? ?? ?? F3 0F 10 ?? ?? ?? ?? ?? F3 44 0F 10 ?? ?? ?? ?? 00 F3 41 0F 5D";
 
-        uintptr_t match = findPattern(base, size, kPattern);
+        auto match = findHexPattern(base, size, kExpectedTicksSig);
         if (!match) {
             log::error("TPS bypass: failed to find expected-ticks pattern");
             return false;
         }
 
-        uintptr_t patchAddress = match + 6;
+        uintptr_t patchAddress = reinterpret_cast<uintptr_t>(base) + *match + 6;
         auto patchBytes = buildExpectedTicksPatch(patchAddress);
         auto result = Mod::get()->patch(reinterpret_cast<void*>(patchAddress), patchBytes);
         if (!result) {
@@ -207,6 +227,23 @@ namespace {
             || Autoclicker::get()->enabled;
     }
 
+    struct TickStepPlanner {
+        double accumulated = 0.0;
+
+        void absorb(double dt) {
+            accumulated += dt;
+        }
+
+        int planSteps(double timestep) const {
+            if (timestep <= 0.0) return 0;
+            return static_cast<int>(std::llround(accumulated / timestep));
+        }
+
+        double residual() const {
+            return accumulated;
+        }
+    };
+
     struct SimulationTimingController {
         float schedulerCarry = 0.0f;
 
@@ -237,11 +274,16 @@ namespace {
             }
 
             engine.singleTickStep = false;
+
+            if (auto* pl = PlayLayer::get()) {
+                engine.bridgeUserHoldsToPlayer(pl);
+            }
+
             scheduler->CCScheduler::update(fixedDelta(engine));
         }
 
         void advanceRecordedScheduler(CCScheduler* scheduler, ReplayEngine& engine, Renderer& renderer, float rawDt) {
-            RenderResolutionScope resolution(renderer);
+            ScopedRenderResolutionToggle resolution(renderer);
 
             float step = fixedDelta(engine);
             schedulerCarry += rawDt;
@@ -277,39 +319,10 @@ namespace {
             }
         }
 
-        void tickAutoclickerSteps(GJBaseGameLayer* layer, ReplayEngine& engine, int64_t steps) {
-            auto* ac = Autoclicker::get();
-            if (!ac->enabled || engine.engineMode == MODE_EXECUTE || steps <= 0) {
-                return;
-            }
-
-            auto* playLayer = PlayLayer::get();
-            if (!playLayer || playLayer->m_player1->m_isDead) {
-                return;
-            }
-
-            ac->isAutoclickerInput = true;
-            for (int64_t i = 0; i < steps; ++i) {
-                auto actions = ac->processTick();
-                if (actions.p1Fire) {
-                    layer->handleButton(actions.p1Press, 1, false);
-                }
-                if (actions.p2Fire) {
-                    layer->handleButton(actions.p2Press, 1, true);
-                }
-            }
-            ac->isAutoclickerInput = false;
-        }
-
         void consumeSingleTick(GJBaseGameLayer* layer, ReplayEngine& engine) {
             resetSimulation(engine);
             setExpectedTicks(1);
 
-            if (engine.collisionBypass) {
-                engine.totalTickCount++;
-            }
-
-            tickAutoclickerSteps(layer, engine, 1);
             layer->GJBaseGameLayer::update(fixedDelta(engine));
         }
     };
@@ -317,6 +330,27 @@ namespace {
     static SimulationTimingController& timingController() {
         static SimulationTimingController controller;
         return controller;
+    }
+
+    static void applyCustomTickPlan(GJBaseGameLayer* layer, double* extraDelta, float dt, ReplayEngine* engine) {
+        auto& controller = timingController();
+
+        *extraDelta += dt;
+        engine->recentlyInitialized = false;
+
+        double timeWarp = std::clamp(static_cast<double>(layer->m_gameState.m_timeWarp), 0.0, 1.0);
+        double timestep = timeWarp * static_cast<double>(controller.fixedDelta(*engine));
+
+        TickStepPlanner planner;
+        planner.accumulated = *extraDelta;
+        int64_t steps = static_cast<int64_t>(planner.planSteps(timestep));
+        double totalDelta = static_cast<double>(steps) * timestep;
+        *extraDelta -= totalDelta;
+
+        setExpectedTicks(steps);
+        engine->tickAccumulator = static_cast<float>(std::max(0.0, *extraDelta));
+
+        layer->GJBaseGameLayer::update(static_cast<float>(totalDelta));
     }
 }
 
@@ -327,6 +361,7 @@ void resetSimulationTimingState() {
 
     if (auto* engine = ReplayEngine::get()) {
         controller.resetSimulation(*engine);
+        engine->clearQueuedSubstepState();
     }
 }
 
@@ -358,13 +393,13 @@ class $modify(SpeedControlScheduler, CCScheduler) {
 
         setExpectedTicksPatchEnabled(true);
 
-        if (engine->tickStepping) {
-            controller.advanceSingleStep(this, *engine);
+        if (engine->renderer.recording) {
+            controller.advanceRecordedScheduler(this, *engine, engine->renderer, dt);
             return;
         }
 
-        if (engine->renderer.recording) {
-            controller.advanceRecordedScheduler(this, *engine, engine->renderer, dt);
+        if (engine->tickStepping) {
+            controller.advanceSingleStep(this, *engine);
             return;
         }
 
@@ -386,7 +421,8 @@ class $modify(PhysicsControlLayer, GJBaseGameLayer) {
             dt = 0.0f;
         }
 
-        double totalDelta = static_cast<double>(dt) + fields->extraDelta;
+        TickStepPlanner planner;
+        planner.accumulated = static_cast<double>(dt) + fields->extraDelta;
         double timestep = std::clamp(static_cast<double>(m_gameState.m_timeWarp), 0.0, 1.0) * secondsPerTick;
         if (timestep <= 0.0) {
             if (applyExtraDelta) {
@@ -395,10 +431,10 @@ class $modify(PhysicsControlLayer, GJBaseGameLayer) {
             return 0.0;
         }
 
-        double steps = std::round(totalDelta / timestep);
+        double steps = std::round(planner.accumulated / timestep);
         double newDelta = steps * timestep;
         if (applyExtraDelta) {
-            fields->extraDelta = totalDelta - newDelta;
+            fields->extraDelta = planner.accumulated - newDelta;
         }
 
         return newDelta;
@@ -416,7 +452,8 @@ class $modify(PhysicsControlLayer, GJBaseGameLayer) {
         if (!shouldUseCustomTiming(*engine)) {
             controller.resetVanillaState(*engine, &m_fields->extraDelta);
             setExpectedTicksPatchEnabled(false);
-            return GJBaseGameLayer::update(dt);
+            GJBaseGameLayer::update(dt);
+            return;
         }
 
         setExpectedTicksPatchEnabled(true);
@@ -424,41 +461,10 @@ class $modify(PhysicsControlLayer, GJBaseGameLayer) {
         if (engine->tickStepping) {
             m_fields->extraDelta = 0.0;
             controller.consumeSingleTick(this, *engine);
+            engine->requestFrameStepMusicSync(PlayLayer::get());
+            engine->syncFrameStepAudio(FMODAudioEngine::sharedEngine());
         } else {
-            auto* fields = m_fields.self();
-            fields->extraDelta += dt;
-            engine->recentlyInitialized = false;
-
-            double timeWarp = std::clamp(static_cast<double>(m_gameState.m_timeWarp), 0.0, 1.0);
-            double timestep = timeWarp * static_cast<double>(controller.fixedDelta(*engine));
-            int64_t steps = 0;
-            double totalDelta = 0.0;
-
-            if (timestep > 0.0) {
-                steps = static_cast<int64_t>(std::llround(fields->extraDelta / timestep));
-                totalDelta = static_cast<double>(steps) * timestep;
-                fields->extraDelta -= totalDelta;
-            }
-
-            setExpectedTicks(steps);
-            engine->tickAccumulator = static_cast<float>(std::max(0.0, fields->extraDelta));
-
-            if (engine->collisionBypass && steps > 0) {
-                int64_t total = static_cast<int64_t>(engine->totalTickCount) + steps;
-                engine->totalTickCount = static_cast<int>(std::min<int64_t>(total, std::numeric_limits<int>::max()));
-            }
-
-            auto* ac = Autoclicker::get();
-            if (ac->enabled && engine->engineMode != MODE_EXECUTE && steps > 1) {
-                for (int64_t i = 0; i < steps; ++i) {
-                    setExpectedTicks(1);
-                    controller.tickAutoclickerSteps(this, *engine, 1);
-                    GJBaseGameLayer::update(static_cast<float>(timestep));
-                }
-            } else {
-                controller.tickAutoclickerSteps(this, *engine, steps);
-                GJBaseGameLayer::update(static_cast<float>(totalDelta));
-            }
+            applyCustomTickPlan(this, &m_fields->extraDelta, dt, engine);
         }
 
         if (renderer.recording) {

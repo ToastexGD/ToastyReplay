@@ -13,6 +13,8 @@ class $modify(PitchControlAudio, FMODAudioEngine) {
         ClickSoundManager::get()->updatePendingClicks();
 
         auto* engine = ReplayEngine::get();
+        engine->syncFrameStepAudio(this);
+
         float desiredPitch = (!engine->renderer.recording && engine->audioPitchEnabled)
             ? static_cast<float>(engine->gameSpeed)
             : 1.f;

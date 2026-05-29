@@ -27,14 +27,13 @@ enum class AccuracyMode : uint8_t {
     Vanilla = 0,
     CBS = 1,
     CBF = 2,
+    Substep = 3,
 };
 
 inline AccuracyMode sanitizeAccuracyMode(int rawMode) {
     switch (rawMode) {
         case static_cast<int>(AccuracyMode::CBS):
             return AccuracyMode::CBS;
-        case static_cast<int>(AccuracyMode::CBF):
-            return AccuracyMode::CBF;
         default:
             return AccuracyMode::Vanilla;
     }
@@ -42,6 +41,19 @@ inline AccuracyMode sanitizeAccuracyMode(int rawMode) {
 
 inline bool usesTimedAccuracy(AccuracyMode mode) {
     return mode != AccuracyMode::Vanilla;
+}
+
+inline bool usesStepBasedAccuracy(AccuracyMode mode) {
+    return mode == AccuracyMode::CBS;
+}
+
+inline bool usesFractionalSubstepAccuracy(AccuracyMode mode) {
+    static_cast<void>(mode);
+    return false;
+}
+
+inline AccuracyMode writableAccuracyMode(AccuracyMode mode) {
+    return mode == AccuracyMode::CBS ? AccuracyMode::CBS : AccuracyMode::Vanilla;
 }
 
 namespace ReplayStorage {
@@ -273,6 +285,16 @@ struct PlayerKinematicState {
     double verticalVelocity = 0.0;
     double preSlopeVerticalVelocity = 0.0;
     double horizontalVelocity = 0.0;
+    double dashX = 0.0;
+    double dashY = 0.0;
+    double dashAngle = 0.0;
+    double dashStartTime = 0.0;
+    double slopeStartTime = 0.0;
+    float fallSpeed = 0.0f;
+    float slopeVelocity = 0.0f;
+    cocos2d::CCPoint shipRotation = { 0.f, 0.f };
+    cocos2d::CCPoint lastPortalPosition = { 0.f, 0.f };
+    cocos2d::CCPoint stateForceVector = { 0.f, 0.f };
 };
 
 struct PlayerFlagState {
@@ -281,13 +303,41 @@ struct PlayerFlagState {
     bool holdingRight = false;
     bool platformer = false;
     bool dead = false;
+    bool ship = false;
+    bool bird = false;
+    bool ball = false;
+    bool wave = false;
+    bool robot = false;
+    bool spider = false;
+    bool swing = false;
+    bool sideways = false;
+    bool dashing = false;
+    bool onSlope = false;
+    bool wasOnSlope = false;
+    bool onGround = false;
+    bool goingLeft = false;
+    bool platformerMovingRight = false;
+    bool slidingRight = false;
+    bool accelerating = false;
+    bool affectedByForces = false;
+    bool jumpBuffered = false;
     std::array<bool, 4> buttonHolds = { false, false, false, false };
 };
 
 struct PlayerEnvironmentState {
     double gravity = 0.0;
+    float gravityMod = 0.0f;
+    float playerSpeed = 0.0f;
+    float playerSpeedAC = 0.0f;
+    double speedMultiplier = 0.0;
+    float vehicleSize = 0.0f;
+    int reverseRelated = 0;
+    int stateDartSlide = 0;
+    int stateFlipGravity = 0;
+    int stateForce = 0;
     bool dualContext = false;
     bool twoPlayerContext = false;
+    bool extendedState = false;
 };
 
 struct PlayerStateBundle {
@@ -320,6 +370,13 @@ struct CheckpointStateBundle {
     AnchorRngState rng;
     uint8_t player1LatchMask = 0;
     uint8_t player2LatchMask = 0;
+    struct TimedAutoclickerPlayerState {
+        bool holding = false;
+        bool userHolding = false;
+        double timeUntilNextEdge = 0.0;
+    };
+    bool timedAutoclickerActive = false;
+    TimedAutoclickerPlayerState timedAutoclicker[2];
 };
 
 struct MacroAction : gdr::Input {
@@ -358,6 +415,8 @@ public:
     float startPosX = 0.f;
     float startPosY = 0.f;
     bool recordedFromStartPos = false;
+    bool platformerMode = false;
+    bool hasPlatformerModeMetadata = false;
 
     MacroSequence()
         : Replay("ToastyReplay", MOD_VERSION) {}
@@ -382,6 +441,10 @@ public:
         if (auto y = ReplayJson::getFloat<float>(obj, "start_pos_y")) {
             startPosY = *y;
         }
+        if (auto platformer = ReplayJson::getBool(obj, "platformer_mode")) {
+            platformerMode = *platformer;
+            hasPlatformerModeMetadata = true;
+        }
 
         anchors.clear();
         if (auto const* anchorsJson = ReplayJson::getArray(obj, "anchors")) {
@@ -401,10 +464,12 @@ public:
 
     gdr::json::object_t saveExtension() const override {
         gdr::json::object_t ext;
-        if (accuracyMode != AccuracyMode::Vanilla) {
-            ext["accuracy_mode"] = static_cast<int>(accuracyMode);
+        AccuracyMode storedAccuracyMode = writableAccuracyMode(accuracyMode);
+        if (storedAccuracyMode != AccuracyMode::Vanilla) {
+            ext["accuracy_mode"] = static_cast<int>(storedAccuracyMode);
         }
         ext["anchor_interval"] = getPersistedAnchorStride();
+        ext["platformer_mode"] = platformerMode;
 
         if (recordedFromStartPos) {
             ext["from_start_pos"] = true;
@@ -425,8 +490,14 @@ public:
     void persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240) {
         author = GJAccountManager::get()->m_username;
         duration = inputs.empty() ? 0.0 : static_cast<double>(inputs.back().frame) / framerate;
-        accuracyMode = mode;
+        accuracyMode = writableAccuracyMode(mode);
+        hasPlatformerModeMetadata = true;
         savedAnchorInterval = std::max(1, anchorInterval);
+        if (!usesTimedAccuracy(accuracyMode)) {
+            for (auto& input : inputs) {
+                input.stepOffset = 0.0f;
+            }
+        }
 
         auto dir = ReplayStorage::getReplayDirectoryPath();
         if (!std::filesystem::exists(dir)) {
@@ -465,6 +536,7 @@ public:
         if (auto imported = MacroSequence::tryImportData(*bytes)) {
             auto* result = new MacroSequence();
             *result = std::move(*imported);
+            result->inferMissingPlatformerMode();
             auto stem = toasty::pathToUtf8(path.stem());
             result->name = stem;
             result->persistedName = stem;
@@ -488,6 +560,16 @@ public:
 
     void recordAction(int tick, int actionType, bool secondPlayer, bool pressed, float offset = 0.0f) {
         inputs.emplace_back(tick, actionType, secondPlayer, pressed, offset);
+    }
+
+    void inferMissingPlatformerMode() {
+        if (hasPlatformerModeMetadata || platformerMode) {
+            return;
+        }
+
+        platformerMode = std::any_of(inputs.begin(), inputs.end(), [](MacroAction const& action) {
+            return action.button == 2 || action.button == 3;
+        });
     }
 
     void recordAnchor(PlaybackAnchor anchor) {
@@ -534,6 +616,52 @@ private:
         player["dual"] = state.environment.dualContext;
         player["tp"] = state.environment.twoPlayerContext;
         player["hold"] = encodeHoldMask(state.flags.buttonHolds);
+        if (state.environment.extendedState) {
+            player["ext"] = true;
+            player["dx"] = state.motion.dashX;
+            player["dy"] = state.motion.dashY;
+            player["da"] = state.motion.dashAngle;
+            player["dst"] = state.motion.dashStartTime;
+            player["sst"] = state.motion.slopeStartTime;
+            player["fs"] = state.motion.fallSpeed;
+            player["sv"] = state.motion.slopeVelocity;
+            player["srx"] = state.motion.shipRotation.x;
+            player["sry"] = state.motion.shipRotation.y;
+            player["lpx"] = state.motion.lastPortalPosition.x;
+            player["lpy"] = state.motion.lastPortalPosition.y;
+            player["fvx"] = state.motion.stateForceVector.x;
+            player["fvy"] = state.motion.stateForceVector.y;
+            player["gm"] = state.environment.gravityMod;
+            player["ps"] = state.environment.playerSpeed;
+            player["psac"] = state.environment.playerSpeedAC;
+            player["sm"] = state.environment.speedMultiplier;
+            player["vs"] = state.environment.vehicleSize;
+            player["rev"] = state.environment.reverseRelated;
+            player["dart"] = state.environment.stateDartSlide;
+            player["flip"] = state.environment.stateFlipGravity;
+            player["force"] = state.environment.stateForce;
+
+            uint32_t flags = 0;
+            if (state.flags.ship) flags |= 1 << 0;
+            if (state.flags.bird) flags |= 1 << 1;
+            if (state.flags.ball) flags |= 1 << 2;
+            if (state.flags.wave) flags |= 1 << 3;
+            if (state.flags.robot) flags |= 1 << 4;
+            if (state.flags.spider) flags |= 1 << 5;
+            if (state.flags.swing) flags |= 1 << 6;
+            if (state.flags.sideways) flags |= 1 << 7;
+            if (state.flags.dashing) flags |= 1 << 8;
+            if (state.flags.onSlope) flags |= 1 << 9;
+            if (state.flags.wasOnSlope) flags |= 1 << 10;
+            if (state.flags.onGround) flags |= 1 << 11;
+            if (state.flags.goingLeft) flags |= 1 << 12;
+            if (state.flags.platformerMovingRight) flags |= 1 << 13;
+            if (state.flags.slidingRight) flags |= 1 << 14;
+            if (state.flags.accelerating) flags |= 1 << 15;
+            if (state.flags.affectedByForces) flags |= 1 << 16;
+            if (state.flags.jumpBuffered) flags |= 1 << 17;
+            player["ef"] = flags;
+        }
         return player;
     }
 
@@ -559,6 +687,52 @@ private:
         if (auto value = ReplayJson::getBool(*object, "dual")) state.environment.dualContext = *value;
         if (auto value = ReplayJson::getBool(*object, "tp")) state.environment.twoPlayerContext = *value;
         if (auto value = ReplayJson::getInteger<uint8_t>(*object, "hold")) state.flags.buttonHolds = decodeHoldMask(*value);
+        if (auto value = ReplayJson::getBool(*object, "ext")) state.environment.extendedState = *value;
+        if (state.environment.extendedState) {
+            if (auto value = ReplayJson::getFloat<double>(*object, "dx")) state.motion.dashX = *value;
+            if (auto value = ReplayJson::getFloat<double>(*object, "dy")) state.motion.dashY = *value;
+            if (auto value = ReplayJson::getFloat<double>(*object, "da")) state.motion.dashAngle = *value;
+            if (auto value = ReplayJson::getFloat<double>(*object, "dst")) state.motion.dashStartTime = *value;
+            if (auto value = ReplayJson::getFloat<double>(*object, "sst")) state.motion.slopeStartTime = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "fs")) state.motion.fallSpeed = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "sv")) state.motion.slopeVelocity = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "srx")) state.motion.shipRotation.x = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "sry")) state.motion.shipRotation.y = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "lpx")) state.motion.lastPortalPosition.x = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "lpy")) state.motion.lastPortalPosition.y = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "fvx")) state.motion.stateForceVector.x = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "fvy")) state.motion.stateForceVector.y = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "gm")) state.environment.gravityMod = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "ps")) state.environment.playerSpeed = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "psac")) state.environment.playerSpeedAC = *value;
+            if (auto value = ReplayJson::getFloat<double>(*object, "sm")) state.environment.speedMultiplier = *value;
+            if (auto value = ReplayJson::getFloat<float>(*object, "vs")) state.environment.vehicleSize = *value;
+            if (auto value = ReplayJson::getInteger<int>(*object, "rev")) state.environment.reverseRelated = *value;
+            if (auto value = ReplayJson::getInteger<int>(*object, "dart")) state.environment.stateDartSlide = *value;
+            if (auto value = ReplayJson::getInteger<int>(*object, "flip")) state.environment.stateFlipGravity = *value;
+            if (auto value = ReplayJson::getInteger<int>(*object, "force")) state.environment.stateForce = *value;
+            if (auto value = ReplayJson::getInteger<uint32_t>(*object, "ef")) {
+                uint32_t flags = *value;
+                state.flags.ship = (flags & (1 << 0)) != 0;
+                state.flags.bird = (flags & (1 << 1)) != 0;
+                state.flags.ball = (flags & (1 << 2)) != 0;
+                state.flags.wave = (flags & (1 << 3)) != 0;
+                state.flags.robot = (flags & (1 << 4)) != 0;
+                state.flags.spider = (flags & (1 << 5)) != 0;
+                state.flags.swing = (flags & (1 << 6)) != 0;
+                state.flags.sideways = (flags & (1 << 7)) != 0;
+                state.flags.dashing = (flags & (1 << 8)) != 0;
+                state.flags.onSlope = (flags & (1 << 9)) != 0;
+                state.flags.wasOnSlope = (flags & (1 << 10)) != 0;
+                state.flags.onGround = (flags & (1 << 11)) != 0;
+                state.flags.goingLeft = (flags & (1 << 12)) != 0;
+                state.flags.platformerMovingRight = (flags & (1 << 13)) != 0;
+                state.flags.slidingRight = (flags & (1 << 14)) != 0;
+                state.flags.accelerating = (flags & (1 << 15)) != 0;
+                state.flags.affectedByForces = (flags & (1 << 16)) != 0;
+                state.flags.jumpBuffered = (flags & (1 << 17)) != 0;
+            }
+        }
         return state;
     }
 

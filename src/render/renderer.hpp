@@ -9,7 +9,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <string>
-#include <unordered_set>
+#include <thread>
 #include <vector>
 
 using namespace geode::prelude;
@@ -114,7 +114,7 @@ public:
     std::string extraAudioArgs;
     std::filesystem::path path;
     std::filesystem::path ffmpegPath;
-    std::unordered_set<int> renderedFrames;
+    std::vector<bool> m_capturedFrameSet;
 
     FMODAudioEngine* fmod = nullptr;
     cocos2d::CCSize ogRes = { 0, 0 };
@@ -136,4 +136,11 @@ public:
 
     int getCurrentFrame() const;
     float getTPS() const;
+
+private:
+    std::thread m_encodeThread;
+    bool resolveEncoder();
+    void restoreAudioVolumes();
+    bool isLevelComplete();
+    void runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
 };

@@ -8,6 +8,8 @@
 
 using namespace geode::prelude;
 
+class HardStreak;
+
 struct TrajectoryMotionState {
     CCPoint position;
     CCPoint previousPosition;
@@ -39,6 +41,16 @@ struct TrajectoryFormState {
     int reverseRelated;
     double reverseSpeed;
     double reverseAcceleration;
+    bool isDead;
+    bool isSecondPlayer;
+    bool isBeingSpawnedByDualPortal;
+    bool isPlatformer;
+    bool isLocked;
+    bool controlsDisabled;
+    bool inputsLocked;
+    bool hasEverJumped;
+    bool hasEverHitRing;
+    bool isOutOfBounds;
 };
 
 struct TrajectoryInteractionState {
@@ -78,6 +90,7 @@ struct TrajectorySlopeState {
 
 struct TrajectoryCollisionState {
     GameObject* lastGroundObject;
+    GameObject* maybeLastGroundObject;
     GameObject* preLastGroundObject;
     GameObject* collidedObject;
     GameObject* collidingWithLeft;
@@ -98,6 +111,13 @@ struct TrajectoryCollisionState {
     double collidedRightMinX;
     double yVelocityRelated;
     double scaleXRelated2;
+    double scaleXRelated3;
+    double scaleXRelated4;
+    double scaleXRelated5;
+    bool wasTeleported;
+    bool collisionPrimed;
+    int previousCollisionBottom;
+    int previousCollisionTop;
 };
 
 struct TrajectoryDynamicsState {
@@ -109,15 +129,19 @@ struct TrajectoryDynamicsState {
     double physDeltaRelated;
     double blackOrbRelated;
     double platformerXVelocity;
+    float platformerVelocityRelated;
     double lastLandTime;
     double gameModeChangedTime;
     double lastJumpTime;
     double lastFlipTime;
     double lastSpiderFlipTime;
+    DashRingObject* dashRing;
     double dashX;
     double dashY;
     double dashAngle;
     double dashStartTime;
+    int dashFireFrame;
+    int groundObjectMaterial;
     float rotationSpeed;
     float xVelocityRelated;
     float xVelocityRelated2;
@@ -131,7 +155,14 @@ struct TrajectoryDynamicsState {
     bool stateRingJump;
     bool stateRingJump2;
     bool touchedGravityPortal;
+    bool maybeTouchedBreakableBlock;
     bool isAccelerating;
+    bool maybeIsBoosted;
+    bool decreaseBoostSlide;
+    bool maybeHasStopped;
+    bool isMoving;
+    bool platformerMovingLeft;
+    bool platformerMovingRight;
     bool isOnIce;
     bool affectedByForces;
     int stateOnGround;
@@ -147,6 +178,33 @@ struct TrajectoryDynamicsState {
     int stateFlipGravity;
     unsigned char stateNoStickX;
     unsigned char stateNoStickY;
+    double scaleXRelated;
+    double scaleXRelatedTime;
+    int maybeSlidingTime;
+    double maybeSlidingStartTime;
+    double changedDirectionsTime;
+    double maybeChangedDirectionAngle;
+    float somethingPlayerSpeedTime;
+    float playerSpeedAC;
+    float yVelocityRelated3;
+    float fallStartY;
+    int followRelated;
+    gd::vector<float> playerFollowFloats;
+    float followAccumulator;
+    bool fixRobotJump;
+    bool unknownA29;
+    bool disablePlayerSqueeze;
+    bool ignoreDamage;
+    bool enable22Changes;
+};
+
+struct TrajectoryInputState {
+    bool holdingJump;
+    bool holdingLeftButton;
+    bool holdingRightButton;
+    bool holdingLeft;
+    bool holdingRight;
+    bool leftPressedFirst;
 };
 
 struct PlayerStateCapsule {
@@ -156,6 +214,7 @@ struct PlayerStateCapsule {
     TrajectorySlopeState slope;
     TrajectoryCollisionState collision;
     TrajectoryDynamicsState dynamics;
+    TrajectoryInputState input;
 };
 
 struct PredictionWatchKey {
@@ -176,7 +235,20 @@ struct PredictionWatchKey {
     bool inSwingMode;
     bool isGoingLeft;
     bool isSideways;
+    bool jumpBuffered;
+    bool platformer;
+    bool dualMode;
+    bool twoPlayerMode;
     int reverseRelated;
+    int stateForce;
+    int stateDartSlide;
+    int stateFlipGravity;
+    float gravityMod;
+    float timeWarp;
+    int pathLength;
+    double tickRate;
+    CCPoint lastPortalPos;
+    GameObject* lastActivatedPortal;
 };
 
 struct PredictionContext {
@@ -184,16 +256,12 @@ struct PredictionContext {
     bool activeSimulation = false;
     bool traceCancelled = false;
     bool holdingTrace = false;
-    bool processingOrbTouch = false;
     bool dirty = true;
     float stepDelta = 1.0f / 240.0f;
     float collisionRotation = 0.0f;
-    std::array<CCPoint, 480> holdPathP1 {};
-    std::array<CCPoint, 480> holdPathP2 {};
+    std::vector<CCPoint> holdPathP1;
+    std::vector<CCPoint> holdPathP2;
     PredictionWatchKey watchKeys[2] {};
-    std::unordered_set<GameObject*> processedOrbs;
-    std::unordered_set<GameObject*> touchingPads;
-    std::unordered_set<GameObject*> frameTouchingPads;
 };
 
 class TrajectoryPredictionService {
@@ -201,7 +269,7 @@ public:
     static TrajectoryPredictionService& get();
 
     bool isActiveSimulation() const;
-    bool isProcessingOrbTouch() const;
+    bool isTraceCancelled() const;
     void markDirty();
     void clearOverlay();
     void attach(PlayLayer* playLayer);
@@ -210,6 +278,8 @@ public:
     void captureFrameDelta(float dt);
     void noteSimulatedDeath(PlayerObject* player);
     bool ownsPreviewPlayer(PlayerObject* player) const;
+    bool ownsPreviewStreak(HardStreak* streak) const;
+    void resetPreviewStreak(PlayerObject* player);
 
     void simulateCollisionBatch(
         GJBaseGameLayer* layer,
@@ -230,8 +300,6 @@ private:
     cocos2d::ccColor4F m_overlapColor = ccc4f(1.0f, 1.0f, 0.0f, 1.0f);
     cocos2d::ccColor4F m_overlapColorP2 = ccc4f(0.6f, 0.75f, 1.0f, 1.0f);
 
-    static bool isSimulatedPad(GameObjectType type);
-    static bool isSimulatedOrb(GameObjectType type);
     static bool watchChanged(PredictionWatchKey const& lhs, PredictionWatchKey const& rhs);
 
     static PredictionWatchKey buildWatchKey(PlayerObject* player);
@@ -239,10 +307,9 @@ private:
     static void applyPlayerState(PlayerObject* player, PlayerStateCapsule const& state);
 
     void rebuildPreview(PlayLayer* playLayer);
-    void traceInputPath(PlayLayer* playLayer, PlayerObject* previewPlayer, PlayerObject* sourcePlayer, bool holdingInput);
+    void traceInputPath(PlayLayer* playLayer, PlayerObject* previewPlayer, PlayerObject* sourcePlayer, bool holdingInput, bool linkedDual);
     void drawPredictionBounds(PlayerObject* player);
     void recalculateOverlapColors();
-    void applyPortalHint(PlayerObject* player, int portalId);
     cocos2d::CCDrawNode* ensureDrawNode();
 
     static std::vector<CCPoint> buildPlayerBounds(PlayerObject* player, CCRect bounds, float angle);

@@ -16,6 +16,11 @@ namespace {
         auto* audio = FMODAudioEngine::sharedEngine();
         return audio ? audio->m_system : nullptr;
     }
+
+    bool isLeftRightClick(int button) {
+        return button == static_cast<int>(PlayerButton::Left) ||
+            button == static_cast<int>(PlayerButton::Right);
+    }
 }
 
 ClickSoundManager* ClickSoundManager::get() {
@@ -79,6 +84,11 @@ static bool isSupportedAudio(const std::filesystem::path& p) {
 struct ResolvedClickSound {
     std::string file;
     float volume = 0.0f;
+    float pitchJitter = 0.0f;
+    float panOffset = 0.0f;
+    bool wasHardChoice = false;
+    int pickedIndex = -1;
+    int pickedCategory = 0;
 };
 
 static std::vector<float> resampleInterleavedAudio(std::vector<float> const& input, int channels, int sourceRate, int targetRate) {
@@ -112,6 +122,18 @@ static std::vector<float> resampleInterleavedAudio(std::vector<float> const& inp
 }
 
 template <class Rng>
+static int pickRandomIndexAvoiding(int size, int avoid, Rng& rng) {
+    if (size <= 0) return -1;
+    if (size == 1) return 0;
+    std::uniform_int_distribution<int> dist(0, size - 1);
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        int idx = dist(rng);
+        if (idx != avoid) return idx;
+    }
+    return dist(rng);
+}
+
+template <class Rng>
 static std::string pickRandomFileWithRng(const std::vector<std::string>& files, Rng& rng) {
     if (files.empty()) return "";
     std::uniform_int_distribution<size_t> dist(0, files.size() - 1);
@@ -119,32 +141,126 @@ static std::string pickRandomFileWithRng(const std::vector<std::string>& files, 
 }
 
 template <class Rng>
-static ResolvedClickSound resolveClickSound(const ClickPack& pack, bool pressed, float softness, Rng& rng) {
-    std::uniform_real_distribution<float> softDist(0.0f, 1.0f);
+static float skewedLowFloat(float lo, float hi, Rng& rng) {
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    float u = uni(rng);
+    float curved = u * u * (1.0f + 0.4f * uni(rng));
+    return lo + (hi - lo) * std::clamp(curved, 0.0f, 1.0f);
+}
+
+template <class Rng>
+static float symmetricJitter(float magnitude, Rng& rng) {
+    if (magnitude <= 0.0f) return 0.0f;
+    std::uniform_real_distribution<float> uni(-magnitude, magnitude);
+    return uni(rng);
+}
+
+template <class Rng>
+static ResolvedClickSound resolveClickSound(
+    const ClickPack& pack,
+    bool pressed,
+    float softness,
+    Rng& rng,
+    ClickPlayerState& state
+) {
+    ResolvedClickSound result;
+
+    constexpr float kVolumeJitter = 0.12f;
+    constexpr float kPitchJitter = 0.025f;
+    constexpr float kPanJitter = 0.10f;
+
+    auto applyCommonJitter = [&](float baseVolume, float intensityScale) {
+        float volJitter = 1.0f + symmetricJitter(kVolumeJitter, rng);
+        result.volume = std::clamp(baseVolume * intensityScale * volJitter, 0.0f, 2.0f);
+        result.pitchJitter = symmetricJitter(kPitchJitter, rng);
+        result.panOffset = symmetricJitter(kPanJitter, rng);
+    };
 
     if (pressed) {
+        std::uniform_real_distribution<float> softDist(0.0f, 1.0f);
         bool useSoft = !pack.softClicks.empty() && (pack.hardClicks.empty() || softDist(rng) < softness);
+
         if (useSoft) {
-            return { pickRandomFileWithRng(pack.softClicks, rng), pack.softVolume };
+            int idx = pickRandomIndexAvoiding(static_cast<int>(pack.softClicks.size()), state.lastSoftIdx, rng);
+            if (idx < 0) return result;
+            result.file = pack.softClicks[idx];
+            result.wasHardChoice = false;
+            result.pickedIndex = idx;
+            result.pickedCategory = 1;
+            state.lastSoftIdx = idx;
+            state.lastPressWasHard = false;
+            float intensity = 0.92f + symmetricJitter(0.08f, rng);
+            state.lastPressIntensity = intensity;
+            applyCommonJitter(pack.softVolume, intensity);
+            return result;
         }
+
         if (!pack.hardClicks.empty()) {
-            return { pickRandomFileWithRng(pack.hardClicks, rng), pack.hardVolume };
+            int idx = pickRandomIndexAvoiding(static_cast<int>(pack.hardClicks.size()), state.lastHardIdx, rng);
+            if (idx < 0) return result;
+            result.file = pack.hardClicks[idx];
+            result.wasHardChoice = true;
+            result.pickedIndex = idx;
+            result.pickedCategory = 0;
+            state.lastHardIdx = idx;
+            state.lastPressWasHard = true;
+            float intensity = 1.0f + symmetricJitter(0.10f, rng);
+            state.lastPressIntensity = intensity;
+            applyCommonJitter(pack.hardVolume, intensity);
+            return result;
         }
-        return {};
+
+        return result;
     }
 
-    bool useSoftRelease = !pack.softReleases.empty() && (pack.hardReleases.empty() || softDist(rng) < softness);
-    if (useSoftRelease) {
-        return { pickRandomFileWithRng(pack.softReleases, rng), pack.releaseVolume };
+    bool pairedHard = state.lastPressWasHard;
+    float releaseIntensity = std::clamp(state.lastPressIntensity * 0.95f, 0.6f, 1.2f);
+
+    if (pairedHard && !pack.hardReleases.empty()) {
+        int idx = pickRandomIndexAvoiding(static_cast<int>(pack.hardReleases.size()), state.lastHardReleaseIdx, rng);
+        if (idx < 0) return result;
+        result.file = pack.hardReleases[idx];
+        result.pickedIndex = idx;
+        result.pickedCategory = 2;
+        state.lastHardReleaseIdx = idx;
+        applyCommonJitter(pack.releaseVolume, releaseIntensity);
+        return result;
     }
-    if (!pack.hardReleases.empty()) {
-        return { pickRandomFileWithRng(pack.hardReleases, rng), pack.releaseVolume };
+
+    if (!pairedHard && !pack.softReleases.empty()) {
+        int idx = pickRandomIndexAvoiding(static_cast<int>(pack.softReleases.size()), state.lastSoftReleaseIdx, rng);
+        if (idx < 0) return result;
+        result.file = pack.softReleases[idx];
+        result.pickedIndex = idx;
+        result.pickedCategory = 3;
+        state.lastSoftReleaseIdx = idx;
+        applyCommonJitter(pack.releaseVolume, releaseIntensity * 0.92f);
+        return result;
     }
+
     if (!pack.releases.empty()) {
-        return { pickRandomFileWithRng(pack.releases, rng), pack.releaseVolume };
+        int idx = pickRandomIndexAvoiding(static_cast<int>(pack.releases.size()), state.lastReleaseIdx, rng);
+        if (idx < 0) return result;
+        result.file = pack.releases[idx];
+        result.pickedIndex = idx;
+        result.pickedCategory = 4;
+        state.lastReleaseIdx = idx;
+        applyCommonJitter(pack.releaseVolume, releaseIntensity);
+        return result;
     }
 
-    return {};
+    if (!pack.hardReleases.empty()) {
+        int idx = pickRandomIndexAvoiding(static_cast<int>(pack.hardReleases.size()), state.lastHardReleaseIdx, rng);
+        if (idx < 0) return result;
+        result.file = pack.hardReleases[idx];
+        result.pickedIndex = idx;
+        result.pickedCategory = 2;
+        state.lastHardReleaseIdx = idx;
+        applyCommonJitter(pack.releaseVolume, releaseIntensity);
+        return result;
+    }
+
+    return result;
 }
 
 static void scanSubfolder(const std::filesystem::path& dir, const std::vector<std::string>& possibleNames, std::vector<std::string>& out) {
@@ -238,7 +354,38 @@ void ClickSoundManager::clearSoundCache() {
     soundCache.clear();
 }
 
-void ClickSoundManager::playFile(const std::string& path, float volume) {
+void ClickSoundManager::cullExpiredVoices() {
+    std::lock_guard<std::mutex> lock(voiceMutex);
+    activeVoices.erase(
+        std::remove_if(activeVoices.begin(), activeVoices.end(),
+            [](VoiceTicket const& ticket) {
+                if (!ticket.channel) return true;
+                bool isPlaying = false;
+                if (ticket.channel->isPlaying(&isPlaying) != FMOD_OK) return true;
+                return !isPlaying;
+            }),
+        activeVoices.end()
+    );
+}
+
+void ClickSoundManager::enforcePolyphonyLimit() {
+    constexpr size_t kMaxConcurrentVoices = 12;
+    cullExpiredVoices();
+    std::lock_guard<std::mutex> lock(voiceMutex);
+    while (activeVoices.size() >= kMaxConcurrentVoices) {
+        auto oldest = std::min_element(activeVoices.begin(), activeVoices.end(),
+            [](VoiceTicket const& a, VoiceTicket const& b) {
+                return a.startedAt < b.startedAt;
+            });
+        if (oldest == activeVoices.end()) break;
+        if (oldest->channel) {
+            oldest->channel->stop();
+        }
+        activeVoices.erase(oldest);
+    }
+}
+
+void ClickSoundManager::playFile(const std::string& path, float volume, float pitchJitter, float panOffset) {
     if (path.empty() || volume <= 0.0f) return;
 
     ensureChannelGroup();
@@ -250,11 +397,30 @@ void ClickSoundManager::playFile(const std::string& path, float volume) {
     auto* sound = getCachedSound(path);
     if (!sound) return;
 
+    enforcePolyphonyLimit();
+
     FMOD::Channel* channel = nullptr;
-    system->playSound(sound, channelGroup, true, &channel);
-    if (channel) {
-        channel->setVolume(volume);
-        channel->setPaused(false);
+    if (system->playSound(sound, channelGroup, true, &channel) != FMOD_OK || !channel) return;
+
+    channel->setVolume(volume);
+
+    if (std::abs(pitchJitter) > 0.0001f) {
+        float baseFreq = 0.0f;
+        sound->getDefaults(&baseFreq, nullptr);
+        if (baseFreq > 0.0f) {
+            channel->setFrequency(baseFreq * (1.0f + pitchJitter));
+        }
+    }
+
+    if (std::abs(panOffset) > 0.0001f) {
+        channel->setPan(std::clamp(panOffset, -0.5f, 0.5f));
+    }
+
+    channel->setPaused(false);
+
+    {
+        std::lock_guard<std::mutex> lock(voiceMutex);
+        activeVoices.push_back({channel, std::chrono::steady_clock::now()});
     }
 }
 
@@ -267,12 +433,14 @@ void ClickSoundManager::playResolvedClick(bool pressed, bool isPlayer2) {
         trueTwoPlayerMode = playLayer->m_levelSettings->m_twoPlayerMode;
     }
 
-    ClickPack& pack = shouldUseP2Pack(isPlayer2, trueTwoPlayerMode) ? p2Pack : p1Pack;
+    bool useP2Pack = shouldUseP2Pack(isPlayer2, trueTwoPlayerMode);
+    ClickPack& pack = useP2Pack ? p2Pack : p1Pack;
     if (pack.empty()) return;
 
-    auto resolved = resolveClickSound(pack, pressed, softness, rng);
+    int stateSlot = useP2Pack ? 1 : 0;
+    auto resolved = resolveClickSound(pack, pressed, softness, rng, playerState[stateSlot]);
     if (!resolved.file.empty() && resolved.volume > 0.0f) {
-        playFile(resolved.file, resolved.volume);
+        playFile(resolved.file, resolved.volume, resolved.pitchJitter, resolved.panOffset);
     }
 }
 
@@ -283,8 +451,7 @@ void ClickSoundManager::playClick(bool pressed, bool isPlayer2) {
     if (clickDelayMax > 0.0f) {
         float lo = std::min(clickDelayMin, clickDelayMax);
         float hi = std::max(clickDelayMin, clickDelayMax);
-        std::uniform_real_distribution<float> delayDist(lo, hi);
-        delayMs = delayDist(rng);
+        delayMs = skewedLowFloat(lo, hi, rng);
     }
 
     if (delayMs > 0.1f) {
@@ -349,7 +516,8 @@ void ClickSoundManager::startBackgroundNoise() {
     ensureChannelGroup();
     if (!channelGroup) return;
 
-    std::string path = pack.noiseFiles[0];
+    std::uniform_int_distribution<size_t> noisePick(0, pack.noiseFiles.size() - 1);
+    std::string path = pack.noiseFiles[noisePick(rng)];
     if (bgNoiseSound) { bgNoiseSound->release(); bgNoiseSound = nullptr; }
 
     if (system->createSound(path.c_str(), FMOD_CREATESAMPLE | FMOD_LOOP_NORMAL, nullptr, &bgNoiseSound) != FMOD_OK || !bgNoiseSound)
@@ -482,13 +650,20 @@ std::vector<float> ClickSoundManager::generateClickAudio(
     if (tickRate <= 0.0f || sampleRate <= 0) return output;
 
     std::mt19937 renderRng{42};
+    ClickPlayerState renderState[2];
     int clicksPlaced = 0;
     double firstClickTime = -1.0, lastClickTime = -1.0;
 
     for (auto& action : actions) {
-        ClickPack& pack = shouldUseP2Pack(action.player2, trueTwoPlayerMode) ? p2Pack : p1Pack;
+        if (muteLeftRightClicks && isLeftRightClick(action.button)) {
+            continue;
+        }
 
-        auto resolved = resolveClickSound(pack, action.down, softness, renderRng);
+        bool useP2Pack = shouldUseP2Pack(action.player2, trueTwoPlayerMode);
+        ClickPack& pack = useP2Pack ? p2Pack : p1Pack;
+        int stateSlot = useP2Pack ? 1 : 0;
+
+        auto resolved = resolveClickSound(pack, action.down, softness, renderRng, renderState[stateSlot]);
         std::string file = resolved.file;
         float volume = resolved.volume;
 
@@ -499,8 +674,7 @@ std::vector<float> ClickSoundManager::generateClickAudio(
         if (applyDelay && clickDelayMax > 0.0f) {
             float lo = std::min(clickDelayMin, clickDelayMax);
             float hi = std::max(clickDelayMin, clickDelayMax);
-            std::uniform_real_distribution<float> delayDist(lo, hi);
-            timeSec += static_cast<double>(delayDist(renderRng)) / 1000.0;
+            timeSec += static_cast<double>(skewedLowFloat(lo, hi, renderRng)) / 1000.0;
         }
         size_t sampleOffset = static_cast<size_t>(timeSec * sampleRate) * 2;
 
@@ -509,8 +683,13 @@ std::vector<float> ClickSoundManager::generateClickAudio(
             ? cacheIt->second : decodeClickToRaw(file, sampleRate);
         if (clickSamples.empty()) continue;
 
-        for (size_t i = 0; i < clickSamples.size() && (sampleOffset + i) < totalSamples; i++) {
-            output[sampleOffset + i] += clickSamples[i] * volume;
+        float pan = std::clamp(resolved.panOffset, -0.5f, 0.5f);
+        float leftGain = volume * (1.0f - std::max(0.0f, pan));
+        float rightGain = volume * (1.0f - std::max(0.0f, -pan));
+
+        for (size_t i = 0; i + 1 < clickSamples.size() && (sampleOffset + i + 1) < totalSamples; i += 2) {
+            output[sampleOffset + i] += clickSamples[i] * leftGain;
+            output[sampleOffset + i + 1] += clickSamples[i + 1] * rightGain;
         }
 
         clicksPlaced++;
@@ -522,9 +701,11 @@ std::vector<float> ClickSoundManager::generateClickAudio(
         clicksPlaced, firstClickTime, lastClickTime, duration);
 
     if (backgroundNoiseEnabled && backgroundNoiseVolume > 0.0f && !p1Pack.noiseFiles.empty()) {
-        auto cacheIt = decodedClickCache.find(p1Pack.noiseFiles[0]);
+        std::uniform_int_distribution<size_t> noisePick(0, p1Pack.noiseFiles.size() - 1);
+        std::string const& noiseFile = p1Pack.noiseFiles[noisePick(renderRng)];
+        auto cacheIt = decodedClickCache.find(noiseFile);
         auto noiseSamples = (cacheIt != decodedClickCache.end())
-            ? cacheIt->second : decodeClickToRaw(p1Pack.noiseFiles[0], sampleRate);
+            ? cacheIt->second : decodeClickToRaw(noiseFile, sampleRate);
         if (!noiseSamples.empty()) {
             for (size_t i = 0; i < totalSamples; i++) {
                 output[i] += noiseSamples[i % noiseSamples.size()] * backgroundNoiseVolume;

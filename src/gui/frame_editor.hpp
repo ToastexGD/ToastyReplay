@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <limits>
 
 #include "ttr_format.hpp"
 #include "replay.hpp"
@@ -75,12 +76,24 @@ public:
 
     char goToFrameBuf[16] = {0};
     char selectedFrameBuf[16] = {0};
+    char selectedEndFrameBuf[16] = {0};
+    char selectedDurationBuf[16] = {0};
+    char filterFrameBuf[16] = {0};
+    char addFrameBuf[16] = {0};
+    char addDurationBuf[16] = {0};
 
     float openAnimation = 0.0f;
     bool confirmingDiscard = false;
 
     bool twoPlayerMode = false;
     ImVec4 p2Color = ImVec4(0.3f, 0.7f, 1.0f, 1.0f);
+
+    int filterPlayer = 0;
+    int filterAction = -1;
+    bool showPressRows = true;
+    bool showHoldRows = true;
+    int addActionType = 1;
+    int addPlayer = 0;
 
     TTRMacro* cachedTTR = nullptr;
     MacroSequence* cachedGDR = nullptr;
@@ -94,6 +107,12 @@ public:
 
 private:
     void rebuildSegments();
+    void recomputeMaxFrame();
+    bool hasPlayer2Inputs() const;
+    void syncSelectionBuffers();
+    void selectSegment(int segmentIndex);
+    void clearSelection();
+    void markEdited(size_t preferredPressIndex = std::numeric_limits<size_t>::max());
     void pushUndo();
     void undo();
     void redo();
@@ -102,6 +121,10 @@ private:
     void applyToGDR();
 
     void drawToolbar(MenuInterface& ui, ImVec2 origin, float width);
+    void drawFilterBar(MenuInterface& ui, ImVec2 origin, float width, float height);
+    void drawSegmentList(MenuInterface& ui, ImVec2 origin, float width, float height);
+    void drawInspector(MenuInterface& ui, ImVec2 origin, float width, float height);
+    void drawAddPanel(MenuInterface& ui, ImVec2 origin, float width, float height);
     void drawOverviewBar(MenuInterface& ui, ImVec2 origin, float width, float height);
     void drawRuler(MenuInterface& ui, ImVec2 origin, float width, float height);
     void drawLanes(MenuInterface& ui, ImVec2 origin, float width, float height);
@@ -115,6 +138,22 @@ private:
     float pixelAtFrame(int32_t frame, float canvasOriginX) const;
     int32_t visibleFrameStart() const;
     int32_t visibleFrameEnd(float canvasWidth) const;
+
+    void handleEditorShortcuts();
+    void deleteSelectedSegment();
+    void duplicateSelectedSegment();
+    void nudgeSelected(int32_t delta);
+    void setSelectedStartFrame(int32_t frame);
+    void setSelectedEndFrame(int32_t frame);
+    void setSelectedActionType(int actionType);
+    void setSelectedPlayer(bool player2);
+    void createReleaseForSelected();
+    void addSegmentFromControls(bool includeRelease);
+    void selectNearestFrame(int32_t frame);
+    bool commitSelectedStartFrameText();
+    bool commitSelectedEndFrameText();
+    bool commitSelectedDurationText();
+    bool commitPendingSelectionEdits();
 
     void computeP2Color(const ImVec4& accent);
     int hitTestSegment(ImVec2 mousePos, ImVec2 lanesOrigin, float lanesWidth, float lanesHeight, int& edgeOut) const;

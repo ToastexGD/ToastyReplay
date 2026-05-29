@@ -1,15 +1,18 @@
 #include "gui/frame_editor.hpp"
+#include "gui/frame_editor_commit_model.hpp"
 #include "gui/gui.hpp"
-#include "i18n/localization.hpp"
+#include "lang/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "ttr_format.hpp"
 
 #include <Geode/Geode.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <fmt/format.h>
 
 static ImVec4 feWithAlpha(ImVec4 c, float a) {
@@ -48,12 +51,68 @@ static void feDrawSolidRect(ImDrawList* dl, ImVec2 min, ImVec2 max, float roundi
 }
 
 static std::string feTr(std::string_view key) {
-    return std::string(toasty::i18n::tr(key));
+    return std::string(toasty::lang::tr(key));
 }
 
 template <class... Args>
 static std::string feTrf(std::string_view key, Args&&... args) {
-    return toasty::i18n::trf(key, std::forward<Args>(args)...);
+    return toasty::lang::trf(key, std::forward<Args>(args)...);
+}
+
+static bool feParseInt(char const* text, int& out) {
+    if (!text) return false;
+    while (*text == ' ' || *text == '\t') ++text;
+    if (*text == '\0') return false;
+
+    errno = 0;
+    char* end = nullptr;
+    long value = std::strtol(text, &end, 10);
+    if (text == end || errno == ERANGE) return false;
+    while (end && (*end == ' ' || *end == '\t')) ++end;
+    if (end && *end != '\0') return false;
+
+    out = static_cast<int>(std::clamp<long>(value, 0, std::numeric_limits<int>::max()));
+    return true;
+}
+
+static std::string feActionLabel(int actionType) {
+    if (actionType == static_cast<int>(PlayerButton::Jump)) return feTr("Jump");
+    if (actionType == static_cast<int>(PlayerButton::Left)) return feTr("Left");
+    if (actionType == static_cast<int>(PlayerButton::Right)) return feTr("Right");
+    return feTrf("Button {id}", fmt::arg("id", actionType));
+}
+
+static ImVec4 feActionColor(int actionType, ImVec4 base) {
+    if (actionType == static_cast<int>(PlayerButton::Left)) return feBrighten(base, -0.06f);
+    if (actionType == static_cast<int>(PlayerButton::Right)) return feBrighten(base, 0.08f);
+    if (actionType == 0) return feBrighten(base, -0.14f);
+    return base;
+}
+
+static std::string feSegmentKind(const HoldSegment& seg) {
+    if (!seg.hasRelease) return feTr("Press");
+    if (seg.endFrame - seg.startFrame <= 1) return feTr("Tap");
+    return feTr("Hold");
+}
+
+static std::string feFrameTimeLabel(int32_t frame, double framerate) {
+    if (framerate <= 0.0) return "0.000s";
+    return fmt::format("{:.3f}s", static_cast<double>(frame) / framerate);
+}
+
+static int feInputActionFromComboIndex(int index) {
+    switch (index) {
+        case 0: return static_cast<int>(PlayerButton::Jump);
+        case 1: return static_cast<int>(PlayerButton::Left);
+        case 2: return static_cast<int>(PlayerButton::Right);
+        case 3: return 0;
+        default: return static_cast<int>(PlayerButton::Jump);
+    }
+}
+
+static std::string feActionComboLabel(int actionType) {
+    if (actionType == 0) return feTr("Button 0");
+    return feActionLabel(actionType);
 }
 
 void FrameEditor::computeP2Color(const ImVec4& accent) {
@@ -119,11 +178,7 @@ void FrameEditor::openTTR(const std::string& name, TTRMacro* macro) {
     }
 
     originalInputs = inputs;
-    maxFrame = 0;
-    for (auto& inp : inputs) {
-        if (inp.frame > maxFrame) maxFrame = inp.frame;
-    }
-    maxFrame = std::max(maxFrame + 120, (int32_t)240);
+    recomputeMaxFrame();
 
     rebuildSegments();
 
@@ -141,6 +196,17 @@ void FrameEditor::openTTR(const std::string& name, TTRMacro* macro) {
 
     goToFrameBuf[0] = '\0';
     selectedFrameBuf[0] = '\0';
+    selectedEndFrameBuf[0] = '\0';
+    selectedDurationBuf[0] = '\0';
+    filterFrameBuf[0] = '\0';
+    std::snprintf(addFrameBuf, sizeof(addFrameBuf), "0");
+    std::snprintf(addDurationBuf, sizeof(addDurationBuf), "1");
+    filterPlayer = 0;
+    filterAction = -1;
+    showPressRows = true;
+    showHoldRows = true;
+    addActionType = static_cast<int>(PlayerButton::Jump);
+    addPlayer = 0;
 }
 
 void FrameEditor::openGDR(const std::string& name, MacroSequence* macro) {
@@ -150,7 +216,9 @@ void FrameEditor::openGDR(const std::string& name, MacroSequence* macro) {
     macroName = name;
     format = EditorFormat::GDR;
     framerate = macro->framerate;
-    twoPlayerMode = false;
+    twoPlayerMode = std::any_of(macro->inputs.begin(), macro->inputs.end(), [](auto const& input) {
+        return input.player2;
+    });
     confirmingDiscard = false;
 
     if (cachedTTR) { delete cachedTTR; cachedTTR = nullptr; }
@@ -172,11 +240,7 @@ void FrameEditor::openGDR(const std::string& name, MacroSequence* macro) {
     }
 
     originalInputs = inputs;
-    maxFrame = 0;
-    for (auto& inp : inputs) {
-        if (inp.frame > maxFrame) maxFrame = inp.frame;
-    }
-    maxFrame = std::max(maxFrame + 120, (int32_t)240);
+    recomputeMaxFrame();
 
     rebuildSegments();
 
@@ -194,6 +258,17 @@ void FrameEditor::openGDR(const std::string& name, MacroSequence* macro) {
 
     goToFrameBuf[0] = '\0';
     selectedFrameBuf[0] = '\0';
+    selectedEndFrameBuf[0] = '\0';
+    selectedDurationBuf[0] = '\0';
+    filterFrameBuf[0] = '\0';
+    std::snprintf(addFrameBuf, sizeof(addFrameBuf), "0");
+    std::snprintf(addDurationBuf, sizeof(addDurationBuf), "1");
+    filterPlayer = 0;
+    filterAction = -1;
+    showPressRows = true;
+    showHoldRows = true;
+    addActionType = static_cast<int>(PlayerButton::Jump);
+    addPlayer = 0;
 }
 
 void FrameEditor::close() {
@@ -207,6 +282,9 @@ void FrameEditor::close() {
     selectedSegment = -1;
     hoveredSegment = -1;
     confirmingDiscard = false;
+    selectedFrameBuf[0] = '\0';
+    selectedEndFrameBuf[0] = '\0';
+    selectedDurationBuf[0] = '\0';
     if (cachedTTR) { delete cachedTTR; cachedTTR = nullptr; }
     if (cachedGDR) { delete cachedGDR; cachedGDR = nullptr; }
 }
@@ -222,18 +300,92 @@ int FrameEditor::findSegmentByPressIndex(size_t pressIdx) const {
     return -1;
 }
 
+bool FrameEditor::hasPlayer2Inputs() const {
+    return std::any_of(inputs.begin(), inputs.end(), [](EditorInput const& input) {
+        return input.player2;
+    });
+}
+
+void FrameEditor::recomputeMaxFrame() {
+    maxFrame = 0;
+    for (auto const& input : inputs) {
+        maxFrame = std::max(maxFrame, input.frame);
+    }
+    maxFrame = std::max(maxFrame + 120, static_cast<int32_t>(240));
+}
+
+void FrameEditor::syncSelectionBuffers() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) {
+        selectedFrameBuf[0] = '\0';
+        selectedEndFrameBuf[0] = '\0';
+        selectedDurationBuf[0] = '\0';
+        return;
+    }
+
+    auto const& seg = segments[selectedSegment];
+    std::snprintf(selectedFrameBuf, sizeof(selectedFrameBuf), "%d", seg.startFrame);
+    if (seg.hasRelease) {
+        std::snprintf(selectedEndFrameBuf, sizeof(selectedEndFrameBuf), "%d", seg.endFrame);
+        std::snprintf(selectedDurationBuf, sizeof(selectedDurationBuf), "%d", std::max<int32_t>(0, seg.endFrame - seg.startFrame));
+    } else {
+        selectedEndFrameBuf[0] = '\0';
+        selectedDurationBuf[0] = '\0';
+    }
+}
+
+void FrameEditor::selectSegment(int segmentIndex) {
+    if (segmentIndex < 0 || segmentIndex >= static_cast<int>(segments.size())) {
+        clearSelection();
+        return;
+    }
+    selectedSegment = segmentIndex;
+    syncSelectionBuffers();
+}
+
+void FrameEditor::clearSelection() {
+    selectedSegment = -1;
+    syncSelectionBuffers();
+}
+
+void FrameEditor::markEdited(size_t preferredPressIndex) {
+    recomputeMaxFrame();
+    rebuildSegments();
+    dirty = true;
+    if (preferredPressIndex != std::numeric_limits<size_t>::max()) {
+        selectedSegment = findSegmentByPressIndex(preferredPressIndex);
+    }
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) {
+        selectedSegment = -1;
+    }
+    syncSelectionBuffers();
+}
+
 void FrameEditor::rebuildSegments() {
     segments.clear();
 
     std::vector<size_t> sorted(inputs.size());
     for (size_t i = 0; i < inputs.size(); i++) sorted[i] = i;
     std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) {
-        return inputs[a].frame < inputs[b].frame;
+        if (inputs[a].frame != inputs[b].frame) return inputs[a].frame < inputs[b].frame;
+        return a < b;
     });
 
-    int maxPlayer = twoPlayerMode ? 1 : 0;
+    std::vector<int> actionTypes;
+    actionTypes.reserve(inputs.size() + 4);
+    for (int act = 0; act <= 3; act++) {
+        actionTypes.push_back(act);
+    }
+    for (auto const& input : inputs) {
+        if (std::find(actionTypes.begin(), actionTypes.end(), input.actionType) == actionTypes.end()) {
+            actionTypes.push_back(input.actionType);
+        }
+    }
+    std::sort(actionTypes.begin(), actionTypes.end());
+
+    bool hasP2 = twoPlayerMode || hasPlayer2Inputs();
+    int maxPlayer = hasP2 ? 1 : 0;
     for (int player = 0; player <= maxPlayer; player++) {
-        for (int act = 0; act <= 3; act++) {
+        for (int act : actionTypes) {
             bool isP2 = (player == 1);
             int openPress = -1;
             int32_t openFrame = 0;
@@ -241,7 +393,7 @@ void FrameEditor::rebuildSegments() {
             for (size_t si = 0; si < sorted.size(); si++) {
                 size_t idx = sorted[si];
                 auto& inp = inputs[idx];
-                bool inputIsP2 = twoPlayerMode ? inp.player2 : false;
+                bool inputIsP2 = hasP2 ? inp.player2 : false;
                 if (inputIsP2 != isP2 || inp.actionType != act) continue;
 
                 if (inp.pressed) {
@@ -290,8 +442,9 @@ void FrameEditor::rebuildSegments() {
         }
     }
 
-    std::sort(segments.begin(), segments.end(), [](const HoldSegment& a, const HoldSegment& b) {
-        return a.startFrame < b.startFrame;
+    std::stable_sort(segments.begin(), segments.end(), [](const HoldSegment& a, const HoldSegment& b) {
+        if (a.startFrame != b.startFrame) return a.startFrame < b.startFrame;
+        return a.pressIndex < b.pressIndex;
     });
 }
 
@@ -319,18 +472,20 @@ void FrameEditor::undo() {
     }
     inputs = undoStack[undoIndex].inputs;
     undoIndex--;
+    recomputeMaxFrame();
     rebuildSegments();
     dirty = true;
-    selectedSegment = -1;
+    clearSelection();
 }
 
 void FrameEditor::redo() {
     if (undoIndex + 2 >= (int)undoStack.size()) return;
     undoIndex++;
     inputs = undoStack[undoIndex + 1].inputs;
+    recomputeMaxFrame();
     rebuildSegments();
     dirty = true;
-    selectedSegment = -1;
+    clearSelection();
 }
 
 void FrameEditor::applyToTTR() {
@@ -360,8 +515,12 @@ void FrameEditor::applyToTTR() {
         cachedTTR->inputs.push_back(ti);
     }
 
+    if (std::any_of(inputs.begin(), inputs.end(), [](EditorInput const& input) { return input.player2; })) {
+        cachedTTR->twoPlayerMode = true;
+    }
     cachedTTR->anchors.clear();
     cachedTTR->checkpoints.clear();
+    cachedTTR->exactCbsTiming = false;
     cachedTTR->persist();
     macroName = cachedTTR->name;
 
@@ -435,6 +594,280 @@ int32_t FrameEditor::visibleFrameStart() const {
 
 int32_t FrameEditor::visibleFrameEnd(float canvasWidth) const {
     return static_cast<int32_t>(std::ceil(scrollX + canvasWidth / pixelsPerFrame));
+}
+
+void FrameEditor::deleteSelectedSegment() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+
+    pushUndo();
+    auto seg = segments[selectedSegment];
+    std::vector<size_t> toRemove;
+    toRemove.push_back(seg.pressIndex);
+    if (seg.hasRelease && seg.releaseIndex != seg.pressIndex) {
+        toRemove.push_back(seg.releaseIndex);
+    }
+    std::sort(toRemove.rbegin(), toRemove.rend());
+    for (size_t index : toRemove) {
+        if (index < inputs.size()) {
+            inputs.erase(inputs.begin() + index);
+        }
+    }
+    clearSelection();
+    markEdited();
+}
+
+void FrameEditor::duplicateSelectedSegment() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+
+    auto seg = segments[selectedSegment];
+    if (seg.pressIndex >= inputs.size()) return;
+
+    pushUndo();
+    EditorInput press = inputs[seg.pressIndex];
+    press.frame = std::max<int32_t>(0, press.frame + 1);
+    press.originalIndex = inputs.size();
+    size_t newPressIndex = inputs.size();
+    inputs.push_back(press);
+
+    if (seg.hasRelease && seg.releaseIndex != seg.pressIndex && seg.releaseIndex < inputs.size()) {
+        EditorInput release = inputs[seg.releaseIndex];
+        release.frame = std::max<int32_t>(press.frame + 1, release.frame + 1);
+        release.originalIndex = inputs.size();
+        inputs.push_back(release);
+    }
+
+    if (press.player2) twoPlayerMode = true;
+    markEdited(newPressIndex);
+}
+
+void FrameEditor::nudgeSelected(int32_t delta) {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size()) || delta == 0) return;
+    auto seg = segments[selectedSegment];
+    if (seg.pressIndex >= inputs.size()) return;
+
+    pushUndo();
+    int32_t appliedDelta = delta;
+    if (inputs[seg.pressIndex].frame + appliedDelta < 0) {
+        appliedDelta = -inputs[seg.pressIndex].frame;
+    }
+
+    inputs[seg.pressIndex].frame += appliedDelta;
+    if (seg.hasRelease && seg.releaseIndex != seg.pressIndex && seg.releaseIndex < inputs.size()) {
+        inputs[seg.releaseIndex].frame = std::max<int32_t>(0, inputs[seg.releaseIndex].frame + appliedDelta);
+        if (inputs[seg.releaseIndex].frame <= inputs[seg.pressIndex].frame) {
+            inputs[seg.releaseIndex].frame = inputs[seg.pressIndex].frame + 1;
+        }
+    }
+
+    markEdited(seg.pressIndex);
+}
+
+void FrameEditor::setSelectedStartFrame(int32_t frame) {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+    auto seg = segments[selectedSegment];
+    if (seg.pressIndex >= inputs.size()) return;
+
+    frame = std::max<int32_t>(0, frame);
+    if (inputs[seg.pressIndex].frame == frame) return;
+    pushUndo();
+    if (toasty::frame_editor::commitSelectedStartFrame(inputs, seg, frame)) {
+        markEdited(seg.pressIndex);
+    }
+}
+
+void FrameEditor::setSelectedEndFrame(int32_t frame) {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+    auto seg = segments[selectedSegment];
+    if (!seg.hasRelease || seg.releaseIndex == seg.pressIndex || seg.releaseIndex >= inputs.size() || seg.pressIndex >= inputs.size()) return;
+
+    frame = std::max<int32_t>(inputs[seg.pressIndex].frame + 1, frame);
+    if (inputs[seg.releaseIndex].frame == frame) return;
+    pushUndo();
+    if (toasty::frame_editor::commitSelectedEndFrame(inputs, seg, frame)) {
+        markEdited(seg.pressIndex);
+    }
+}
+
+bool FrameEditor::commitSelectedStartFrameText() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return false;
+    auto seg = segments[selectedSegment];
+    if (seg.pressIndex >= inputs.size()) return false;
+
+    int32_t frame = 0;
+    if (!toasty::frame_editor::parseNonNegativeFrameText(selectedFrameBuf, frame)) return false;
+    frame = std::max<int32_t>(0, frame);
+    if (inputs[seg.pressIndex].frame == frame) return false;
+    pushUndo();
+    if (!toasty::frame_editor::commitSelectedStartFrame(inputs, seg, frame)) return false;
+    markEdited(seg.pressIndex);
+    return true;
+}
+
+bool FrameEditor::commitSelectedEndFrameText() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return false;
+    auto seg = segments[selectedSegment];
+    if (!seg.hasRelease || seg.releaseIndex == seg.pressIndex || seg.releaseIndex >= inputs.size() || seg.pressIndex >= inputs.size()) return false;
+
+    int32_t frame = 0;
+    if (!toasty::frame_editor::parseNonNegativeFrameText(selectedEndFrameBuf, frame)) return false;
+    frame = std::max<int32_t>(inputs[seg.pressIndex].frame + 1, frame);
+    if (inputs[seg.releaseIndex].frame == frame) return false;
+    pushUndo();
+    if (!toasty::frame_editor::commitSelectedEndFrame(inputs, seg, frame)) return false;
+    markEdited(seg.pressIndex);
+    return true;
+}
+
+bool FrameEditor::commitSelectedDurationText() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return false;
+    auto seg = segments[selectedSegment];
+    if (!seg.hasRelease || seg.releaseIndex == seg.pressIndex || seg.releaseIndex >= inputs.size() || seg.pressIndex >= inputs.size()) return false;
+
+    int32_t duration = 0;
+    if (!toasty::frame_editor::parseNonNegativeFrameText(selectedDurationBuf, duration)) return false;
+    int32_t targetFrame = inputs[seg.pressIndex].frame + std::max<int32_t>(1, duration);
+    if (inputs[seg.releaseIndex].frame == targetFrame) return false;
+    pushUndo();
+    if (!toasty::frame_editor::commitSelectedDuration(inputs, seg, duration)) return false;
+    markEdited(seg.pressIndex);
+    return true;
+}
+
+bool FrameEditor::commitPendingSelectionEdits() {
+    bool changed = false;
+    changed = commitSelectedStartFrameText() || changed;
+    changed = commitSelectedEndFrameText() || changed;
+    changed = commitSelectedDurationText() || changed;
+    return changed;
+}
+
+void FrameEditor::setSelectedActionType(int actionType) {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+    auto seg = segments[selectedSegment];
+    if (seg.pressIndex >= inputs.size()) return;
+
+    pushUndo();
+    inputs[seg.pressIndex].actionType = actionType;
+    if (seg.hasRelease && seg.releaseIndex != seg.pressIndex && seg.releaseIndex < inputs.size()) {
+        inputs[seg.releaseIndex].actionType = actionType;
+    }
+    markEdited(seg.pressIndex);
+}
+
+void FrameEditor::setSelectedPlayer(bool player2) {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+    auto seg = segments[selectedSegment];
+    if (seg.pressIndex >= inputs.size()) return;
+
+    pushUndo();
+    inputs[seg.pressIndex].player2 = player2;
+    if (seg.hasRelease && seg.releaseIndex != seg.pressIndex && seg.releaseIndex < inputs.size()) {
+        inputs[seg.releaseIndex].player2 = player2;
+    }
+    if (player2) twoPlayerMode = true;
+    markEdited(seg.pressIndex);
+}
+
+void FrameEditor::createReleaseForSelected() {
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) return;
+    auto seg = segments[selectedSegment];
+    if (seg.hasRelease || seg.pressIndex >= inputs.size()) return;
+
+    pushUndo();
+    EditorInput release = inputs[seg.pressIndex];
+    release.frame = release.frame + 1;
+    release.pressed = false;
+    release.originalIndex = inputs.size();
+    inputs.push_back(release);
+    markEdited(seg.pressIndex);
+}
+
+void FrameEditor::addSegmentFromControls(bool includeRelease) {
+    int frame = 0;
+    int duration = 1;
+    if (!feParseInt(addFrameBuf, frame)) return;
+    if (!feParseInt(addDurationBuf, duration)) duration = 1;
+
+    frame = std::max(0, frame);
+    duration = std::max(1, duration);
+
+    pushUndo();
+    EditorInput press;
+    press.frame = frame;
+    press.actionType = addActionType;
+    press.player2 = addPlayer == 1;
+    press.pressed = true;
+    press.stepOffset = 0.0f;
+    press.originalIndex = inputs.size();
+    size_t pressIndex = inputs.size();
+    inputs.push_back(press);
+
+    if (includeRelease) {
+        EditorInput release = press;
+        release.frame = frame + duration;
+        release.pressed = false;
+        release.originalIndex = inputs.size();
+        inputs.push_back(release);
+    }
+
+    if (press.player2) twoPlayerMode = true;
+    markEdited(pressIndex);
+}
+
+void FrameEditor::selectNearestFrame(int32_t frame) {
+    if (segments.empty()) return;
+
+    int bestIndex = -1;
+    int32_t bestDistance = std::numeric_limits<int32_t>::max();
+    for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
+        auto const& seg = segments[i];
+        int32_t distance = 0;
+        if (frame < seg.startFrame) distance = seg.startFrame - frame;
+        else if (frame > seg.endFrame) distance = frame - seg.endFrame;
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = i;
+            if (distance == 0) break;
+        }
+    }
+    selectSegment(bestIndex);
+}
+
+void FrameEditor::handleEditorShortcuts() {
+    if (confirmingDiscard) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput) return;
+
+    bool ctrlHeld = io.KeyCtrl;
+    bool shiftHeld = io.KeyShift;
+
+    if (ctrlHeld && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+        if (shiftHeld) redo();
+        else undo();
+    }
+    if (ctrlHeld && ImGui::IsKeyPressed(ImGuiKey_Y)) {
+        redo();
+    }
+    if (ctrlHeld && ImGui::IsKeyPressed(ImGuiKey_D)) {
+        duplicateSelectedSegment();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+        deleteSelectedSegment();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+        nudgeSelected(shiftHeld ? -10 : -1);
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+        nudgeSelected(shiftHeld ? 10 : 1);
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (dirty) {
+            confirmingDiscard = true;
+        } else {
+            close();
+        }
+    }
 }
 
 void FrameEditor::handleZoom(float mouseX, float canvasOriginX, float canvasWidth) {
@@ -568,183 +1001,34 @@ void FrameEditor::draw(MenuInterface& ui) {
     float contentWidth = ImGui::GetContentRegionAvail().x - 10.0f;
     float contentHeight = ImGui::GetContentRegionAvail().y;
 
-    if (inputs.empty()) {
-        ImVec2 center(contentOrigin.x + contentWidth * 0.5f, contentOrigin.y + contentHeight * 0.4f);
-        auto msg = feTr("No inputs to edit");
-        ImVec2 textSize = ImGui::CalcTextSize(msg.c_str());
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(center.x - textSize.x * 0.5f, center.y - textSize.y * 0.5f),
-            ui.theme.getTextSecondaryU32(),
-            msg.c_str()
-        );
-
-        ImGui::SetCursorScreenPos(ImVec2(contentOrigin.x + contentWidth * 0.5f - 50.0f, center.y + 30.0f));
-        if (Widgets::StyledButton("Back##editorEmpty", ImVec2(100.0f, 28.0f), ui.theme, ui.anim, 6.0f)) {
-            close();
-        }
-        ImGui::PopStyleVar();
-        return;
-    }
-
     constexpr float toolbarH = 38.0f;
-    constexpr float overviewH = 22.0f;
-    constexpr float rulerH = 18.0f;
-    constexpr float scrollbarH = 12.0f;
-    constexpr float detailH = 30.0f;
-    constexpr float spacing = 2.0f;
+    constexpr float filterH = 38.0f;
+    constexpr float editorH = 132.0f;
+    constexpr float spacing = 6.0f;
 
-    float fixedH = toolbarH + overviewH + rulerH + scrollbarH + detailH + spacing * 5;
-    float lanesH = std::max(contentHeight - fixedH, 80.0f);
+    float fixedH = toolbarH + filterH + editorH + spacing * 3;
+    float listH = std::max(contentHeight - fixedH, 120.0f);
 
     float yPos = contentOrigin.y;
     drawToolbar(ui, ImVec2(contentOrigin.x, yPos), contentWidth);
     yPos += toolbarH + spacing;
 
-    drawOverviewBar(ui, ImVec2(contentOrigin.x, yPos), contentWidth, overviewH);
-    yPos += overviewH + spacing;
+    drawFilterBar(ui, ImVec2(contentOrigin.x, yPos), contentWidth, filterH);
+    yPos += filterH + spacing;
 
-    ImVec2 rulerOrigin(contentOrigin.x, yPos);
-    drawRuler(ui, rulerOrigin, contentWidth, rulerH);
+    drawSegmentList(ui, ImVec2(contentOrigin.x, yPos), contentWidth, listH);
+    yPos += listH + spacing;
 
-    yPos += rulerH;
-
-    ImVec2 lanesOrigin(contentOrigin.x, yPos);
-    drawLanes(ui, lanesOrigin, contentWidth, lanesH);
-
-    ImVec2 mousePos = ImGui::GetIO().MousePos;
-
-    if (!confirmingDiscard) {
-        ImGui::SetCursorScreenPos(lanesOrigin);
-        ImGui::InvisibleButton("##lanesInput", ImVec2(contentWidth, lanesH));
-        bool lanesHovered = ImGui::IsItemHovered();
-        bool lanesClicked = ImGui::IsItemClicked(0);
-
-        if (lanesHovered && dragMode == DragMode::None) {
-            handleZoom(mousePos.x, lanesOrigin.x, contentWidth);
-        }
-
-        if (dragMode != DragMode::None) {
-            handleDrag(mousePos.x, lanesOrigin.x);
-        }
-
-        if (lanesClicked && dragMode == DragMode::None) {
-            int edge = 0;
-            int hit = hitTestSegment(mousePos, lanesOrigin, contentWidth, lanesH, edge);
-            if (hit >= 0) {
-                selectedSegment = hit;
-                auto& seg = segments[selectedSegment];
-                std::snprintf(selectedFrameBuf, sizeof(selectedFrameBuf), "%d", seg.startFrame);
-
-                dragPressIdx = seg.pressIndex;
-                dragReleaseIdx = seg.releaseIndex;
-
-                if (edge == -1) {
-                    pushUndo();
-                    dragMode = DragMode::MoveEdgeLeft;
-                    dragStartMouseX = mousePos.x;
-                } else if (edge == 1 && seg.hasRelease) {
-                    pushUndo();
-                    dragMode = DragMode::MoveEdgeRight;
-                    dragStartMouseX = mousePos.x;
-                } else {
-                    pushUndo();
-                    dragMode = DragMode::MoveSegment;
-                    dragStartMouseX = mousePos.x;
-                    dragStartFrame = frameAtPixel(mousePos.x, lanesOrigin.x);
-                    dragOriginalFrame = inputs[seg.pressIndex].frame;
-                    dragReleaseOrigFrame = (seg.hasRelease && seg.releaseIndex != seg.pressIndex)
-                        ? inputs[seg.releaseIndex].frame : inputs[seg.pressIndex].frame;
-                }
-            } else {
-                selectedSegment = -1;
-                selectedFrameBuf[0] = '\0';
-                dragMode = DragMode::PanBackground;
-                dragStartMouseX = mousePos.x;
-                dragStartScrollX = scrollX;
-            }
-        }
-
+    float addW = std::clamp(contentWidth * 0.34f, 210.0f, 300.0f);
+    float inspectorW = contentWidth - addW - spacing;
+    if (inspectorW < 260.0f) {
+        inspectorW = std::max(160.0f, contentWidth * 0.58f);
+        addW = std::max(120.0f, contentWidth - inspectorW - spacing);
     }
+    drawInspector(ui, ImVec2(contentOrigin.x, yPos), inspectorW, editorH);
+    drawAddPanel(ui, ImVec2(contentOrigin.x + inspectorW + spacing, yPos), addW, editorH);
 
-    yPos += lanesH + spacing;
-    drawScrollbar(ui, ImVec2(contentOrigin.x, yPos), contentWidth, scrollbarH);
-    yPos += scrollbarH + spacing;
-
-    drawDetailBar(ui, ImVec2(contentOrigin.x, yPos), contentWidth, detailH);
-
-    if (!confirmingDiscard) {
-        ImGuiIO& io = ImGui::GetIO();
-        bool ctrlHeld = io.KeyCtrl;
-        bool shiftHeld = io.KeyShift;
-
-        if (ctrlHeld && ImGui::IsKeyPressed(ImGuiKey_Z)) {
-            if (shiftHeld) redo();
-            else undo();
-        }
-        if (ctrlHeld && ImGui::IsKeyPressed(ImGuiKey_Y)) {
-            redo();
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete) && selectedSegment >= 0 && selectedSegment < (int)segments.size()) {
-            pushUndo();
-            auto& seg = segments[selectedSegment];
-            std::vector<size_t> toRemove;
-            toRemove.push_back(seg.pressIndex);
-            if (seg.hasRelease && seg.releaseIndex != seg.pressIndex) {
-                toRemove.push_back(seg.releaseIndex);
-            }
-            std::sort(toRemove.rbegin(), toRemove.rend());
-            for (size_t ri : toRemove) {
-                if (ri < inputs.size()) {
-                    inputs.erase(inputs.begin() + ri);
-                }
-            }
-            selectedSegment = -1;
-            dirty = true;
-            rebuildSegments();
-        }
-
-        if (selectedSegment >= 0 && selectedSegment < (int)segments.size() && dragMode == DragMode::None) {
-            auto& seg = segments[selectedSegment];
-            size_t pIdx = seg.pressIndex;
-            size_t rIdx = seg.releaseIndex;
-            bool hasRel = seg.hasRelease && rIdx != pIdx;
-
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-                if (inputs[pIdx].frame > 0) {
-                    pushUndo();
-                    inputs[pIdx].frame--;
-                    if (hasRel && inputs[rIdx].frame > 0) {
-                        inputs[rIdx].frame--;
-                    }
-                    dirty = true;
-                    rebuildSegments();
-                    selectedSegment = findSegmentByPressIndex(pIdx);
-                    if (selectedSegment >= 0)
-                        std::snprintf(selectedFrameBuf, sizeof(selectedFrameBuf), "%d", inputs[pIdx].frame);
-                }
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-                pushUndo();
-                inputs[pIdx].frame++;
-                if (hasRel) {
-                    inputs[rIdx].frame++;
-                }
-                dirty = true;
-                rebuildSegments();
-                selectedSegment = findSegmentByPressIndex(pIdx);
-                if (selectedSegment >= 0)
-                    std::snprintf(selectedFrameBuf, sizeof(selectedFrameBuf), "%d", inputs[pIdx].frame);
-            }
-        }
-
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            if (dirty) {
-                confirmingDiscard = true;
-            } else {
-                close();
-            }
-        }
-    }
+    handleEditorShortcuts();
 
     if (confirmingDiscard) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -798,6 +1082,7 @@ void FrameEditor::drawToolbar(MenuInterface& ui, ImVec2 origin, float width) {
 
     ImGui::SetCursorScreenPos(ImVec2(x, btnY));
     if (Widgets::StyledButton("Save##edSave", ImVec2(50.0f, btnH), ui.theme, ui.anim, 4.0f)) {
+        commitPendingSelectionEdits();
         if (dirty) {
             if (format == EditorFormat::TTR) applyToTTR();
             else applyToGDR();
@@ -836,6 +1121,360 @@ void FrameEditor::drawToolbar(MenuInterface& ui, ImVec2 origin, float width) {
         dl->AddText(ImVec2(nameX - 16.0f, origin.y + 10.0f), feToU32(ImVec4(1.0f, 0.8f, 0.2f, 1.0f)), "*");
     }
 
+}
+
+void FrameEditor::drawFilterBar(MenuInterface& ui, ImVec2 origin, float width, float height) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    feDrawSolidRect(dl, origin, ImVec2(origin.x + width, origin.y + height), ui.theme.cornerRadius, ui.theme, 0.55f);
+
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0f, origin.y + 8.0f));
+    if (ui.fontSmall) ImGui::PushFont(ui.fontSmall);
+    ImGui::TextColored(ui.theme.textSecondary, "%s", feTr("Frame").c_str());
+    if (ui.fontSmall) ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(72.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5, 3));
+    ImGui::InputText("##editorFilterFrame", filterFrameBuf, sizeof(filterFrameBuf), ImGuiInputTextFlags_CharsDecimal);
+
+    ImGui::SameLine(0, 12.0f);
+    auto playerPreview = filterPlayer == 1 ? feTr("P1") : (filterPlayer == 2 ? feTr("P2") : feTr("All Players"));
+    ImGui::SetNextItemWidth(116.0f);
+    if (ImGui::BeginCombo("##editorFilterPlayer", playerPreview.c_str())) {
+        if (ImGui::Selectable(feTr("All Players").c_str(), filterPlayer == 0)) filterPlayer = 0;
+        if (ImGui::Selectable(feTr("P1").c_str(), filterPlayer == 1)) filterPlayer = 1;
+        if (ImGui::Selectable(feTr("P2").c_str(), filterPlayer == 2)) filterPlayer = 2;
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine(0, 8.0f);
+    auto actionPreview = filterAction < 0 ? feTr("All Buttons") : feActionComboLabel(filterAction);
+    ImGui::SetNextItemWidth(126.0f);
+    if (ImGui::BeginCombo("##editorFilterAction", actionPreview.c_str())) {
+        if (ImGui::Selectable(feTr("All Buttons").c_str(), filterAction < 0)) filterAction = -1;
+        for (int i = 0; i < 4; ++i) {
+            int action = feInputActionFromComboIndex(i);
+            auto label = feActionComboLabel(action);
+            if (ImGui::Selectable(label.c_str(), filterAction == action)) {
+                filterAction = action;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine(0, 8.0f);
+    ImGui::Checkbox(feTr("Presses").c_str(), &showPressRows);
+    ImGui::SameLine(0, 8.0f);
+    ImGui::Checkbox(feTr("Holds").c_str(), &showHoldRows);
+    ImGui::PopStyleVar();
+
+    float rightX = origin.x + width - 160.0f;
+    if (rightX > ImGui::GetCursorScreenPos().x + 16.0f) {
+        ImGui::SetCursorScreenPos(ImVec2(rightX, origin.y + 8.0f));
+        ImGui::SetNextItemWidth(72.0f);
+        bool submitted = ImGui::InputText("##editorGoFrame", goToFrameBuf, sizeof(goToFrameBuf),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsDecimal);
+        ImGui::SameLine(0, 6.0f);
+        bool clicked = Widgets::StyledButton("Go##editorGo", ImVec2(54.0f, 24.0f), ui.theme, ui.anim, 4.0f);
+        if (submitted || clicked) {
+            int frame = 0;
+            if (feParseInt(goToFrameBuf, frame)) {
+                selectNearestFrame(frame);
+                std::snprintf(filterFrameBuf, sizeof(filterFrameBuf), "%d", frame);
+            }
+        }
+    }
+}
+
+void FrameEditor::drawSegmentList(MenuInterface& ui, ImVec2 origin, float width, float height) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    feDrawSolidRect(dl, origin, ImVec2(origin.x + width, origin.y + height), ui.theme.cornerRadius, ui.theme, 0.42f);
+
+    std::vector<int> visible;
+    visible.reserve(segments.size());
+
+    int frameFilter = 0;
+    bool hasFrameFilter = feParseInt(filterFrameBuf, frameFilter);
+    for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
+        auto const& seg = segments[i];
+        if (filterPlayer == 1 && seg.player2) continue;
+        if (filterPlayer == 2 && !seg.player2) continue;
+        if (filterAction >= 0 && seg.actionType != filterAction) continue;
+        if (!showPressRows && !seg.hasRelease) continue;
+        if (!showHoldRows && seg.hasRelease) continue;
+        if (hasFrameFilter && (frameFilter < seg.startFrame || frameFilter > seg.endFrame)) continue;
+        visible.push_back(i);
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 6.0f, origin.y + 6.0f));
+    ImVec2 tableSize(std::max(20.0f, width - 12.0f), std::max(20.0f, height - 12.0f));
+    ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+
+    ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, feToU32(feWithAlpha(ui.theme.getAccent(), 0.16f)));
+    ImGui::PushStyleColor(ImGuiCol_TableRowBg, feToU32(ImVec4(0.04f, 0.04f, 0.055f, 0.25f)));
+    ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, feToU32(ImVec4(0.08f, 0.08f, 0.10f, 0.24f)));
+    if (ImGui::BeginTable("##macroEditorList", 9, flags, tableSize)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+        ImGui::TableSetupColumn(feTr("Start").c_str(), ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn(feTr("End").c_str(), ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn(feTr("Duration").c_str(), ImGuiTableColumnFlags_WidthFixed, 82.0f);
+        ImGui::TableSetupColumn(feTr("Time").c_str(), ImGuiTableColumnFlags_WidthFixed, 78.0f);
+        ImGui::TableSetupColumn(feTr("Player").c_str(), ImGuiTableColumnFlags_WidthFixed, 64.0f);
+        ImGui::TableSetupColumn(feTr("Button").c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn(feTr("Kind").c_str(), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn(feTr("Offset").c_str(), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableHeadersRow();
+
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(visible.size()));
+        while (clipper.Step()) {
+            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                int segIndex = visible[row];
+                auto const& seg = segments[segIndex];
+                bool selected = segIndex == selectedSegment;
+                auto playerColor = seg.player2 ? p2Color : ui.theme.getAccent();
+                auto actionColor = feActionColor(seg.actionType, playerColor);
+
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, 26.0f);
+                if (selected) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ui.theme.getAccentU32(0.20f));
+                }
+
+                ImGui::TableSetColumnIndex(0);
+                std::string rowLabel = fmt::format("{}##seg{}", row + 1, segIndex);
+                if (ImGui::Selectable(rowLabel.c_str(), selected,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                    ImVec2(0.0f, 22.0f))) {
+                    selectSegment(segIndex);
+                }
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem(feTr("Duplicate").c_str())) {
+                        selectSegment(segIndex);
+                        duplicateSelectedSegment();
+                    }
+                    if (ImGui::MenuItem(feTr("Delete").c_str())) {
+                        selectSegment(segIndex);
+                        deleteSelectedSegment();
+                    }
+                    if (ImGui::MenuItem(feTr("Focus Frame").c_str())) {
+                        std::snprintf(filterFrameBuf, sizeof(filterFrameBuf), "%d", seg.startFrame);
+                        selectSegment(segIndex);
+                    }
+                    ImGui::EndPopup();
+                }
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%d", seg.startFrame);
+                ImGui::TableSetColumnIndex(2);
+                if (seg.hasRelease) ImGui::Text("%d", seg.endFrame);
+                else ImGui::TextDisabled("--");
+                ImGui::TableSetColumnIndex(3);
+                if (seg.hasRelease) ImGui::Text("%d", std::max<int32_t>(0, seg.endFrame - seg.startFrame));
+                else ImGui::TextDisabled("--");
+                ImGui::TableSetColumnIndex(4);
+                auto timeText = feFrameTimeLabel(seg.startFrame, framerate);
+                ImGui::TextUnformatted(timeText.c_str());
+                ImGui::TableSetColumnIndex(5);
+                ImGui::TextColored(playerColor, "%s", feTr(seg.player2 ? "P2" : "P1").c_str());
+                ImGui::TableSetColumnIndex(6);
+                auto actionLabel = feActionLabel(seg.actionType);
+                ImGui::TextColored(actionColor, "%s", actionLabel.c_str());
+                ImGui::TableSetColumnIndex(7);
+                auto kind = feSegmentKind(seg);
+                ImGui::TextUnformatted(kind.c_str());
+                ImGui::TableSetColumnIndex(8);
+                float offset = 0.0f;
+                if (seg.pressIndex < inputs.size()) offset = inputs[seg.pressIndex].stepOffset;
+                if (std::abs(offset) > 0.0001f) ImGui::Text("%.2f", offset);
+                else ImGui::TextDisabled("0");
+            }
+        }
+
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleColor(3);
+
+    if (visible.empty()) {
+        auto msg = segments.empty() ? feTr("No inputs to edit") : feTr("No matching inputs");
+        ImVec2 textSize = ImGui::CalcTextSize(msg.c_str());
+        dl->AddText(
+            ImVec2(origin.x + (width - textSize.x) * 0.5f, origin.y + height * 0.5f - textSize.y * 0.5f),
+            ui.theme.getTextSecondaryU32(),
+            msg.c_str()
+        );
+    }
+}
+
+void FrameEditor::drawInspector(MenuInterface& ui, ImVec2 origin, float width, float height) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    feDrawSolidRect(dl, origin, ImVec2(origin.x + width, origin.y + height), ui.theme.cornerRadius, ui.theme, 0.55f);
+
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0f, origin.y + 8.0f));
+    ImGui::TextColored(ui.theme.getAccent(), "%s", feTr("Selected Input").c_str());
+
+    if (selectedSegment < 0 || selectedSegment >= static_cast<int>(segments.size())) {
+        auto hint = feTr("Select a row to edit it");
+        dl->AddText(ImVec2(origin.x + 10.0f, origin.y + 42.0f), ui.theme.getTextSecondaryU32(), hint.c_str());
+        return;
+    }
+
+    auto seg = segments[selectedSegment];
+    bool hasRelease = seg.hasRelease && seg.releaseIndex != seg.pressIndex;
+    float rowY = origin.y + 34.0f;
+    float x = origin.x + 10.0f;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5, 3));
+
+    ImGui::SetCursorScreenPos(ImVec2(x, rowY));
+    ImGui::Text("%s", feTr("Start").c_str());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70.0f);
+    bool startSubmitted = ImGui::InputText("##selectedStart", selectedFrameBuf, sizeof(selectedFrameBuf),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsDecimal);
+    if (startSubmitted || ImGui::IsItemDeactivatedAfterEdit()) {
+        commitSelectedStartFrameText();
+    }
+
+    ImGui::SameLine(0, 10.0f);
+    ImGui::Text("%s", feTr("End").c_str());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!hasRelease);
+    ImGui::SetNextItemWidth(70.0f);
+    bool endSubmitted = ImGui::InputText("##selectedEnd", selectedEndFrameBuf, sizeof(selectedEndFrameBuf),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsDecimal);
+    if (endSubmitted || ImGui::IsItemDeactivatedAfterEdit()) {
+        commitSelectedEndFrameText();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine(0, 10.0f);
+    ImGui::Text("%s", feTr("Duration").c_str());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!hasRelease);
+    ImGui::SetNextItemWidth(70.0f);
+    bool durationSubmitted = ImGui::InputText("##selectedDuration", selectedDurationBuf, sizeof(selectedDurationBuf),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsDecimal);
+    if (durationSubmitted || ImGui::IsItemDeactivatedAfterEdit()) {
+        commitSelectedDurationText();
+    }
+    ImGui::EndDisabled();
+
+    rowY += 34.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x, rowY));
+    ImGui::Text("%s", feTr("Button").c_str());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(118.0f);
+    auto actionPreview = feActionComboLabel(seg.actionType);
+    if (ImGui::BeginCombo("##selectedAction", actionPreview.c_str())) {
+        for (int i = 0; i < 4; ++i) {
+            int action = feInputActionFromComboIndex(i);
+            auto label = feActionComboLabel(action);
+            if (ImGui::Selectable(label.c_str(), seg.actionType == action)) {
+                setSelectedActionType(action);
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine(0, 10.0f);
+    ImGui::Text("%s", feTr("Player").c_str());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(82.0f);
+    auto playerPreview = feTr(seg.player2 ? "P2" : "P1");
+    if (ImGui::BeginCombo("##selectedPlayer", playerPreview.c_str())) {
+        if (ImGui::Selectable(feTr("P1").c_str(), !seg.player2)) setSelectedPlayer(false);
+        if (ImGui::Selectable(feTr("P2").c_str(), seg.player2)) setSelectedPlayer(true);
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine(0, 10.0f);
+    ImGui::Text("%s", feTr("Kind").c_str());
+    ImGui::SameLine();
+    auto kind = feSegmentKind(seg);
+    ImGui::TextColored(ui.theme.textSecondary, "%s", kind.c_str());
+
+    rowY += 36.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x, rowY));
+    if (Widgets::StyledButton("-10##nudgeLeft10", ImVec2(42.0f, 25.0f), ui.theme, ui.anim, 4.0f)) nudgeSelected(-10);
+    ImGui::SameLine(0, 5.0f);
+    if (Widgets::StyledButton("-1##nudgeLeft1", ImVec2(36.0f, 25.0f), ui.theme, ui.anim, 4.0f)) nudgeSelected(-1);
+    ImGui::SameLine(0, 5.0f);
+    if (Widgets::StyledButton("+1##nudgeRight1", ImVec2(36.0f, 25.0f), ui.theme, ui.anim, 4.0f)) nudgeSelected(1);
+    ImGui::SameLine(0, 5.0f);
+    if (Widgets::StyledButton("+10##nudgeRight10", ImVec2(42.0f, 25.0f), ui.theme, ui.anim, 4.0f)) nudgeSelected(10);
+    ImGui::SameLine(0, 10.0f);
+    if (Widgets::StyledButton("Duplicate##selectedDuplicate", ImVec2(82.0f, 25.0f), ui.theme, ui.anim, 4.0f)) duplicateSelectedSegment();
+    ImGui::SameLine(0, 5.0f);
+    if (!hasRelease) {
+        if (Widgets::StyledButton("Add Release##selectedRelease", ImVec2(86.0f, 25.0f), ui.theme, ui.anim, 4.0f)) createReleaseForSelected();
+        ImGui::SameLine(0, 5.0f);
+    }
+    if (Widgets::StyledButton("Delete##selectedDelete", ImVec2(64.0f, 25.0f), ui.theme, ui.anim, 4.0f)) deleteSelectedSegment();
+
+    ImGui::PopStyleVar();
+}
+
+void FrameEditor::drawAddPanel(MenuInterface& ui, ImVec2 origin, float width, float height) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    feDrawSolidRect(dl, origin, ImVec2(origin.x + width, origin.y + height), ui.theme.cornerRadius, ui.theme, 0.55f);
+
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0f, origin.y + 8.0f));
+    ImGui::TextColored(ui.theme.getAccent(), "%s", feTr("Add Input").c_str());
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5, 3));
+
+    float rowY = origin.y + 34.0f;
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0f, rowY));
+    ImGui::Text("%s", feTr("Frame").c_str());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(68.0f);
+    ImGui::InputText("##addFrame", addFrameBuf, sizeof(addFrameBuf), ImGuiInputTextFlags_CharsDecimal);
+    ImGui::SameLine(0, 8.0f);
+    ImGui::Text("%s", feTr("Duration").c_str());
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(58.0f);
+    ImGui::InputText("##addDuration", addDurationBuf, sizeof(addDurationBuf), ImGuiInputTextFlags_CharsDecimal);
+
+    rowY += 34.0f;
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0f, rowY));
+    ImGui::SetNextItemWidth(std::max(90.0f, width * 0.48f));
+    auto actionPreview = feActionComboLabel(addActionType);
+    if (ImGui::BeginCombo("##addAction", actionPreview.c_str())) {
+        for (int i = 0; i < 4; ++i) {
+            int action = feInputActionFromComboIndex(i);
+            auto label = feActionComboLabel(action);
+            if (ImGui::Selectable(label.c_str(), addActionType == action)) {
+                addActionType = action;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine(0, 8.0f);
+    ImGui::SetNextItemWidth(72.0f);
+    auto playerPreview = feTr(addPlayer == 1 ? "P2" : "P1");
+    if (ImGui::BeginCombo("##addPlayer", playerPreview.c_str())) {
+        if (ImGui::Selectable(feTr("P1").c_str(), addPlayer == 0)) addPlayer = 0;
+        if (ImGui::Selectable(feTr("P2").c_str(), addPlayer == 1)) addPlayer = 1;
+        ImGui::EndCombo();
+    }
+
+    rowY += 36.0f;
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0f, rowY));
+    float buttonW = std::max(72.0f, (width - 28.0f) * 0.5f);
+    if (Widgets::StyledButton("Add Tap##addTap", ImVec2(buttonW, 25.0f), ui.theme, ui.anim, 4.0f)) {
+        addSegmentFromControls(true);
+    }
+    ImGui::SameLine(0, 8.0f);
+    if (Widgets::StyledButton("Add Press##addPress", ImVec2(buttonW, 25.0f), ui.theme, ui.anim, 4.0f)) {
+        addSegmentFromControls(false);
+    }
+
+    ImGui::PopStyleVar();
+
+    if (width < 260.0f) {
+        auto caption = feTr("Tap creates a press and release");
+        dl->AddText(ImVec2(origin.x + 10.0f, origin.y + height - 18.0f), ui.theme.getTextSecondaryU32(), caption.c_str());
+    }
 }
 
 void FrameEditor::drawOverviewBar(MenuInterface& ui, ImVec2 origin, float width, float height) {
@@ -1101,18 +1740,8 @@ void FrameEditor::drawDetailBar(MenuInterface& ui, ImVec2 origin, float width, f
         ImGui::PopStyleVar();
         ImGui::PopItemWidth();
 
-        if (submitted) {
-            int newFrame = std::atoi(selectedFrameBuf);
-            if (newFrame >= 0) {
-                pushUndo();
-                int32_t delta = newFrame - inputs[seg.pressIndex].frame;
-                inputs[seg.pressIndex].frame = newFrame;
-                if (seg.hasRelease && seg.releaseIndex != seg.pressIndex) {
-                    inputs[seg.releaseIndex].frame += delta;
-                }
-                dirty = true;
-                rebuildSegments();
-            }
+        if (submitted || ImGui::IsItemDeactivatedAfterEdit()) {
+            commitSelectedStartFrameText();
         }
 
         x += 68.0f;

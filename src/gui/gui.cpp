@@ -1,15 +1,17 @@
 #include "gui/gui.hpp"
-#include "i18n/localization.hpp"
+#include "lang/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "audio/clicksounds.hpp"
 #include "hacks/autoclicker.hpp"
 #include "online/online_client.hpp"
+#include "render/watermark_bridge.hpp"
 #include "utils.hpp"
 #include <Geode/Bindings.hpp>
 #include <Geode/modify/LoadingLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <filesystem>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <algorithm>
 #include <cctype>
@@ -81,13 +83,64 @@ static ImVec4 getAccuracyTagColor(AccuracyMode mode) {
     }
 }
 
+static const char* getAutoclickerModeLabel(AutoclickerMode mode) {
+    switch (mode) {
+        case AutoclickerMode::Timed:
+            return "Timed High-CPS";
+        default:
+            return "Legacy (TPS-bound)";
+    }
+}
+
 static ImVec4 getTTRTagColor() {
     return ImVec4(0.30f, 0.70f, 1.0f, 1.0f);
+}
+
+static ImVec4 getPlatformerTagColor() {
+    return ImVec4(0.28f, 0.95f, 0.58f, 1.0f);
 }
 
 static float sanitizeClamped(float value, float minValue, float maxValue, float fallback) {
     if (!std::isfinite(value)) return fallback;
     return std::clamp(value, minValue, maxValue);
+}
+
+static int sanitizeRenderWatermarkFont(int value) {
+    return std::clamp(
+        value,
+        static_cast<int>(RENDER_WATERMARK_FONT_NORMAL_PUSAB),
+        static_cast<int>(RENDER_WATERMARK_FONT_GOLD_PUSAB)
+    );
+}
+
+static int sanitizeRenderWatermarkCorner(int value) {
+    return std::clamp(
+        value,
+        static_cast<int>(RENDER_WATERMARK_CORNER_TOP_LEFT),
+        static_cast<int>(RENDER_WATERMARK_CORNER_BOTTOM_RIGHT)
+    );
+}
+
+static const char* getRenderWatermarkFontLabel(int value) {
+    switch (sanitizeRenderWatermarkFont(value)) {
+        case RENDER_WATERMARK_FONT_GOLD_PUSAB:
+            return "Gold Pusab";
+        default:
+            return "Normal Pusab";
+    }
+}
+
+static const char* getRenderWatermarkCornerLabel(int value) {
+    switch (sanitizeRenderWatermarkCorner(value)) {
+        case RENDER_WATERMARK_CORNER_TOP_LEFT:
+            return "Top Left";
+        case RENDER_WATERMARK_CORNER_TOP_RIGHT:
+            return "Top Right";
+        case RENDER_WATERMARK_CORNER_BOTTOM_LEFT:
+            return "Bottom Left";
+        default:
+            return "Bottom Right";
+    }
 }
 
 static ImVec4 sanitizeColor(ImVec4 value, ImVec4 fallback) {
@@ -138,16 +191,16 @@ static void drawSolidRect(ImDrawList* dl, ImVec2 min, ImVec2 max, float rounding
 }
 
 static std::string trString(std::string_view key) {
-    return std::string(toasty::i18n::tr(key));
+    return std::string(toasty::lang::tr(key));
 }
 
 static std::string trFormat(std::string_view key, fmt::format_args args) {
-    return toasty::i18n::trf(key, args);
+    return toasty::lang::trf(key, args);
 }
 
 template <class... Args>
 static std::string trFormat(std::string_view key, Args&&... args) {
-    return toasty::i18n::trf(key, std::forward<Args>(args)...);
+    return toasty::lang::trf(key, std::forward<Args>(args)...);
 }
 
 static std::string getLocalizedDisplayLabel(const char* label) {
@@ -280,6 +333,41 @@ namespace {
 
         finalName = resolvedName;
         return true;
+    }
+
+    static std::filesystem::path findStoredReplayFile(std::string const& macroName, std::string_view requestedExtension) {
+        auto replayDir = getReplayDirectoryPath();
+        std::error_code ec;
+        if (!std::filesystem::exists(replayDir, ec) || ec) {
+            return {};
+        }
+
+        auto targetPath = replayDir / (macroName + std::string(requestedExtension));
+        if (std::filesystem::is_regular_file(targetPath, ec) && !ec) {
+            return targetPath;
+        }
+
+        std::string wantedExtension(requestedExtension);
+        std::transform(wantedExtension.begin(), wantedExtension.end(), wantedExtension.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+
+        for (std::filesystem::directory_iterator it(replayDir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file()) {
+                continue;
+            }
+
+            auto extension = toasty::pathToUtf8(it->path().extension());
+            std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+
+            if (toasty::pathToUtf8(it->path().stem()) == macroName && extension == wantedExtension) {
+                return it->path();
+            }
+        }
+
+        return {};
     }
 
 }
@@ -601,12 +689,15 @@ static std::string checkKeybindConflict(int* target, int newKey, const KeybindSe
         {"Hitboxes",      &keybinds.hitboxes},
         {"Layout Mode",   &keybinds.layoutMode},
         {"No Mirror",     &keybinds.noMirror},
+        {"Autoclicker",   &keybinds.autoclicker},
+        {"Disable Shaders", &keybinds.disableShaders},
+        {"Click Sounds", &keybinds.clickSounds},
     };
     for (auto& e : entries) {
         if (e.ptr != target && *e.ptr == newKey) {
             return trFormat(
                 "Already bound to {keybind}",
-                fmt::arg("keybind", toasty::i18n::tr(e.name))
+                fmt::arg("keybind", toasty::lang::tr(e.name))
             );
         }
     }
@@ -839,6 +930,52 @@ void SectionHeader(const char* text, ThemeEngine& theme) {
     ImGui::Dummy(ImVec2(0, textSize.y + 11.0f));
 }
 
+static bool CollapsibleSectionHeader(const char* text, bool expanded, ThemeEngine& theme) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float width = ImGui::GetContentRegionAvail().x;
+    std::string displayText = getLocalizedDisplayLabel(text);
+    ImVec2 textSize = ImGui::CalcTextSize(displayText.c_str());
+    float headerH = textSize.y + 11.0f;
+    ImVec4 accent = theme.getAccent();
+
+    ImGui::PushID(text);
+    bool clicked = ImGui::InvisibleButton("##collapsibleSectionHeader", ImVec2(width, headerH));
+    bool hovered = ImGui::IsItemHovered();
+    ImGui::PopID();
+
+    dl->AddText(pos, theme.getAccentU32(hovered ? 1.0f : 0.96f), displayText.c_str());
+    float lineY = pos.y + textSize.y + 5.0f;
+    float leftW = std::min(120.0f, width * 0.35f);
+    dl->AddRectFilledMultiColor(
+        ImVec2(pos.x, lineY),
+        ImVec2(pos.x + leftW, lineY + 2.0f),
+        theme.getAccentU32(hovered ? 0.88f : 0.74f),
+        theme.getAccentU32(0.28f),
+        theme.getAccentU32(0.28f),
+        theme.getAccentU32(hovered ? 0.88f : 0.74f)
+    );
+    dl->AddRectFilledMultiColor(
+        ImVec2(pos.x + leftW, lineY),
+        ImVec2(pos.x + width, lineY + 1.0f),
+        toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.10f + accent.x * 0.04f)),
+        toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.03f)),
+        toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.03f)),
+        toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.10f + accent.z * 0.04f))
+    );
+
+    const char* symbol = expanded ? "-" : "+";
+    ImVec2 symbolSize = ImGui::CalcTextSize(symbol);
+    ImVec2 symbolCenter(pos.x + width - 10.0f, pos.y + textSize.y * 0.5f);
+    dl->AddText(
+        ImVec2(symbolCenter.x - symbolSize.x * 0.5f, symbolCenter.y - symbolSize.y * 0.5f),
+        theme.getAccentU32(hovered ? 1.0f : 0.82f),
+        symbol
+    );
+
+    return clicked;
+}
+
 bool ModuleCard(const char* name, const char* description, bool* enabled,
                 ThemeEngine& theme, AnimationState& anim, int* keybind) {
     ImGui::PushID(enabled);
@@ -929,12 +1066,7 @@ bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
     ImGui::Dummy(ImVec2(0, 4));
 
     if (keybind) {
-        KeybindButton("Keybind", keybind, theme, anim);
-        auto* ui = MenuInterface::get();
-        if (ui && !ui->keybindConflictError.empty() && ui->rebindTarget != keybind) {
-            ImGui::Dummy(ImVec2(0, 2));
-            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", ui->keybindConflictError.c_str());
-        }
+        Widgets::KeybindButton("Keybind", keybind, theme, anim);
         ImGui::Dummy(ImVec2(0, 6));
     }
 
@@ -1130,8 +1262,7 @@ void MenuInterface::drawAmbientWaves(ImDrawList* dl, ImVec2 panelMin, ImVec2 pan
 
     float panelW = panelMax.x - panelMin.x;
     float panelH = panelMax.y - panelMin.y;
-    float cx = panelMin.x + panelW * 0.5f;
-    float cy = panelMin.y + panelH * 0.5f;
+    if (panelW <= 0.0f || panelH <= 0.0f) return;
 
     dl->PushClipRect(panelMin, panelMax, true);
 
@@ -1140,40 +1271,155 @@ void MenuInterface::drawAmbientWaves(ImDrawList* dl, ImVec2 panelMin, ImVec2 pan
     int ag = static_cast<int>(accent.y * 255);
     int ab = static_cast<int>(accent.z * 255);
 
-    struct Orb {
-        float xFreq, yFreq;
-        float xPhase, yPhase;
-        float xAmp, yAmp;
+    struct StarLayer {
+        int count;
         float radius;
-        float peakAlpha;
+        float radiusJitter;
+        float speedX, speedY;
+        float baseAlpha;
+        float twinkleAmp;
     };
 
-    Orb orbs[] = {
-        {0.23f, 0.17f, 0.0f,  1.5f,  0.38f, 0.32f, 180.0f, 0.018f},
-        {0.19f, 0.26f, 2.8f,  0.4f,  0.34f, 0.36f, 160.0f, 0.016f},
-        {0.31f, 0.14f, 1.2f,  3.9f,  0.28f, 0.40f, 170.0f, 0.017f},
-        {0.15f, 0.22f, 4.5f,  2.1f,  0.42f, 0.28f, 140.0f, 0.015f},
-        {0.27f, 0.33f, 3.3f,  5.0f,  0.30f, 0.34f, 150.0f, 0.014f},
-        {0.12f, 0.29f, 5.5f,  0.8f,  0.36f, 0.30f, 130.0f, 0.013f},
-        {0.35f, 0.18f, 1.8f,  4.6f,  0.32f, 0.38f, 145.0f, 0.015f},
-        {0.21f, 0.24f, 3.7f,  2.9f,  0.40f, 0.26f, 155.0f, 0.014f},
+    StarLayer const layers[] = {
+        { 56, 0.55f, 0.22f,  4.0f, 2.0f, 0.16f, 0.06f },
+        { 28, 1.00f, 0.32f,  9.0f, 4.5f, 0.30f, 0.11f },
+        { 14, 1.60f, 0.40f, 16.0f, 8.0f, 0.52f, 0.18f },
     };
 
-    constexpr int layers = 40;
+    auto hash01 = [](uint32_t state) -> float {
+        state ^= state >> 16;
+        state *= 0x7FEB352DU;
+        state ^= state >> 15;
+        state *= 0x846CA68BU;
+        state ^= state >> 16;
+        return static_cast<float>(state & 0x00FFFFFFU) / 16777215.0f;
+    };
 
-    for (auto& o : orbs) {
-        float x = cx + sinf(ambientTime * o.xFreq + o.xPhase) * panelW * o.xAmp;
-        float y = cy + sinf(ambientTime * o.yFreq + o.yPhase) * panelH * o.yAmp;
+    int starIndex = 0;
+    for (auto const& layer : layers) {
+        for (int i = 0; i < layer.count; ++i) {
+            uint32_t seed = static_cast<uint32_t>(starIndex) * 0x9E3779B1U + 0xA5A5A5A5U;
+            float r0 = hash01(seed);
+            float r1 = hash01(seed ^ 0x68E31DA4U);
+            float r2 = hash01(seed ^ 0xB5297A4DU);
+            float r3 = hash01(seed ^ 0x1B56C4E9U);
+            float r4 = hash01(seed ^ 0xC2B2AE35U);
 
-        for (int i = layers; i >= 1; i--) {
-            float t = static_cast<float>(i) / layers;
-            float r = o.radius * t;
-            float g = (1.0f - t);
-            float falloff = g * g * g;
-            float a = o.peakAlpha * falloff;
-            int ai = static_cast<int>(a * 255.0f);
-            if (ai <= 0) continue;
-            dl->AddCircleFilled(ImVec2(x, y), r, IM_COL32(ar, ag, ab, ai), 48);
+            float driftedX = r0 * panelW + ambientTime * layer.speedX;
+            float driftedY = r1 * panelH + ambientTime * layer.speedY;
+
+            float wrappedX = std::fmod(driftedX, panelW);
+            if (wrappedX < 0.0f) wrappedX += panelW;
+            float wrappedY = std::fmod(driftedY, panelH);
+            if (wrappedY < 0.0f) wrappedY += panelH;
+
+            float x = panelMin.x + wrappedX;
+            float y = panelMin.y + wrappedY;
+
+            float radius = layer.radius * (1.0f - layer.radiusJitter * 0.5f + r2 * layer.radiusJitter);
+
+            float twinklePhase = r3 * 6.2831853f;
+            float twinkleRate = 0.6f + r4 * 1.6f;
+            float twinkle = std::sinf(ambientTime * twinkleRate + twinklePhase) * layer.twinkleAmp;
+            float alpha = std::clamp(layer.baseAlpha + twinkle, 0.0f, 1.0f);
+            int ai = static_cast<int>(alpha * 255.0f);
+            if (ai > 0) {
+                dl->AddCircleFilled(ImVec2(x, y), radius, IM_COL32(ar, ag, ab, ai), 12);
+            }
+
+            ++starIndex;
+        }
+    }
+
+    struct ShootingStar {
+        bool active = false;
+        float spawnTime = 0.0f;
+        float duration = 0.0f;
+        ImVec2 origin{0.0f, 0.0f};
+        ImVec2 endPoint{0.0f, 0.0f};
+        float trailLength = 90.0f;
+    };
+
+    static ShootingStar streak;
+    static float nextSpawnEarliest = 0.0f;
+
+    constexpr float kAvgIntervalSec = 90.0f;
+    constexpr float kPostCooldownSec = 5.0f;
+
+    if (!streak.active && ambientTime >= nextSpawnEarliest && dt > 0.0f) {
+        uint32_t spawnSeed = static_cast<uint32_t>(ambientTime * 1000.0f) ^ 0xDEADBEEFU;
+        float chance = std::clamp(dt / kAvgIntervalSec, 0.0f, 1.0f);
+        if (hash01(spawnSeed) < chance) {
+            streak.active = true;
+            streak.spawnTime = ambientTime;
+            streak.duration = 0.85f + hash01(spawnSeed + 1U) * 0.55f;
+
+            float startXRel = -0.05f + hash01(spawnSeed + 2U) * 0.45f;
+            float startYRel = -0.10f + hash01(spawnSeed + 3U) * 0.10f;
+            streak.origin = ImVec2(
+                panelMin.x + panelW * startXRel,
+                panelMin.y + panelH * startYRel
+            );
+
+            float endXRel = 0.75f + hash01(spawnSeed + 4U) * 0.40f;
+            float endYRel = 0.65f + hash01(spawnSeed + 5U) * 0.45f;
+            streak.endPoint = ImVec2(
+                panelMin.x + panelW * endXRel,
+                panelMin.y + panelH * endYRel
+            );
+
+            streak.trailLength = 70.0f + hash01(spawnSeed + 6U) * 50.0f;
+        }
+    }
+
+    if (streak.active) {
+        float elapsed = ambientTime - streak.spawnTime;
+        float progress = elapsed / std::max(0.0001f, streak.duration);
+        if (progress >= 1.0f) {
+            streak.active = false;
+            nextSpawnEarliest = ambientTime + kPostCooldownSec;
+        } else {
+            ImVec2 head{
+                streak.origin.x + (streak.endPoint.x - streak.origin.x) * progress,
+                streak.origin.y + (streak.endPoint.y - streak.origin.y) * progress
+            };
+            ImVec2 delta{
+                streak.endPoint.x - streak.origin.x,
+                streak.endPoint.y - streak.origin.y
+            };
+            float deltaLen = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+            ImVec2 dir{0.0f, 0.0f};
+            if (deltaLen > 0.0f) {
+                dir.x = delta.x / deltaLen;
+                dir.y = delta.y / deltaLen;
+            }
+
+            float life = 1.0f - std::abs(progress - 0.5f) * 2.0f;
+            life = std::clamp(life * 1.55f, 0.0f, 1.0f);
+
+            constexpr int tailSegs = 14;
+            for (int i = 0; i < tailSegs; ++i) {
+                float t0 = static_cast<float>(i) / tailSegs;
+                float t1 = static_cast<float>(i + 1) / tailSegs;
+                float fade = (1.0f - t0) * (1.0f - t0) * life;
+                int segAlpha = static_cast<int>(fade * 255.0f);
+                if (segAlpha <= 0) continue;
+                ImVec2 p0{
+                    head.x - dir.x * streak.trailLength * t0,
+                    head.y - dir.y * streak.trailLength * t0
+                };
+                ImVec2 p1{
+                    head.x - dir.x * streak.trailLength * t1,
+                    head.y - dir.y * streak.trailLength * t1
+                };
+                float thickness = std::max(0.7f, 1.7f * (1.0f - t0 * 0.6f));
+                dl->AddLine(p0, p1, IM_COL32(ar, ag, ab, segAlpha), thickness);
+            }
+
+            int headAlpha = static_cast<int>(std::clamp(life * 0.92f, 0.0f, 1.0f) * 255.0f);
+            if (headAlpha > 0) {
+                dl->AddCircleFilled(head, 1.9f, IM_COL32(ar, ag, ab, headAlpha), 14);
+            }
         }
     }
 
@@ -1191,14 +1437,29 @@ void MenuInterface::drawTitleBar() {
     float titleSize = titleF->FontSize;
     float subtitleSize = subtitleF->FontSize;
 
-    const char* titleText = "ToastyReplay";
-    ImVec2 titleSz = titleF->CalcTextSizeA(titleSize, FLT_MAX, 0.f, titleText);
-    dl->AddText(titleF, titleSize, pos, toU32(ImVec4(0.98f, 0.99f, 1.0f, 0.99f)), titleText);
+    float logoOffset = 0.0f;
+    if (logoTexture) {
+        float logoSize = titleSize + 4.0f;
+        ImTextureID texId = (ImTextureID)(uintptr_t)(logoTexture->getName());
+        ImVec2 logoMin(pos.x, pos.y - 2.0f);
+        ImVec2 logoMax(pos.x + logoSize, pos.y + logoSize - 2.0f);
+        dl->AddImageRounded(texId, logoMin, logoMax, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), logoSize * 0.2f);
+        logoOffset = logoSize + 8.0f;
+    }
 
-    std::string versionText = "v" MOD_VERSION;
+    const char* titleText = toasty::branding::kProductName;
+    ImVec2 titleSz = titleF->CalcTextSizeA(titleSize, FLT_MAX, 0.f, titleText);
+    dl->AddText(titleF, titleSize, ImVec2(pos.x + logoOffset, pos.y), toU32(ImVec4(0.98f, 0.99f, 1.0f, 0.99f)), titleText);
+
+    std::string versionText = toasty::branding::versionText();
     ImVec2 versionSz = subtitleF->CalcTextSizeA(subtitleSize, FLT_MAX, 0.f, versionText.c_str());
     float versionY = pos.y + (titleSz.y - versionSz.y) * 0.58f;
-    dl->AddText(subtitleF, subtitleSize, ImVec2(pos.x + titleSz.x + 10.f, versionY), toU32(ImVec4(accent.x, accent.y, accent.z, 0.92f)), versionText.c_str());
+    ImVec2 versionPos(pos.x + logoOffset + titleSz.x + 10.f, versionY);
+    dl->AddText(subtitleF, subtitleSize, versionPos, toU32(ImVec4(accent.x, accent.y, accent.z, 0.92f)), versionText.c_str());
+
+    const char* editionText = toasty::branding::kEditionLabel;
+    ImVec2 editionPos(versionPos.x + versionSz.x + 8.f, versionY);
+    dl->AddText(subtitleF, subtitleSize, editionPos, IM_COL32(255, 166, 42, 245), editionText);
 
     float y = pos.y + titleSz.y + 8.f;
     dl->AddRectFilledMultiColor(
@@ -1395,13 +1656,13 @@ void MenuInterface::drawStatusBar() {
     float textY = barY + (barH - textSize.y) / 2;
     dl->AddText(ImVec2(windowPos.x + padX + 12.0f, textY), theme.getTextSecondaryU32(), statusText.c_str());
 
-    AccuracyMode statusAccuracyMode = engine->engineMode == MODE_EXECUTE
+    AccuracyMode statusAccuracyMode = engine->hasMacro() && engine->engineMode == MODE_CAPTURE
         ? engine->activeMacroAccuracyMode()
-        : engine->selectedAccuracyMode;
-    if (statusAccuracyMode != AccuracyMode::Vanilla) {
+        : (engine->engineMode == MODE_EXECUTE ? engine->activeMacroAccuracyMode() : engine->selectedAccuracyMode);
+    if (auto* statusAccuracyTag = getAccuracyTag(statusAccuracyMode)) {
         std::string accuracyText = trFormat(
             "{mode} ON",
-            fmt::arg("mode", getAccuracyTag(statusAccuracyMode))
+            fmt::arg("mode", statusAccuracyTag)
         );
         const char* cbfTxt = accuracyText.c_str();
         ImVec2 cbfSize = ImGui::CalcTextSize(cbfTxt);
@@ -1425,29 +1686,45 @@ void MenuInterface::drawReplayTab() {
     float pillW = (ImGui::GetContentRegionAvail().x - 20) / 3.0f;
 
     if (Widgets::PillButton("Disable", engine->engineMode == MODE_DISABLED, pillW, theme, anim)) {
-        engine->pendingPlaybackStart = false;
-        if (engine->engineMode == MODE_CAPTURE) {
-            if (engine->ttrMode && engine->activeTTR) {
-                delete engine->activeTTR;
-                engine->activeTTR = nullptr;
-            } else if (engine->activeMacro) {
-                delete engine->activeMacro;
-                engine->activeMacro = nullptr;
+        auto disableAction = [engine]() {
+            engine->pendingPlaybackStart = false;
+            if (engine->engineMode == MODE_CAPTURE) {
+                engine->discardActiveMacro();
+                engine->engineMode = MODE_DISABLED;
+            } else if (engine->engineMode == MODE_EXECUTE) {
+                engine->haltExecution();
+            } else {
+                engine->engineMode = MODE_DISABLED;
             }
-            ReplayEngine::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
-            engine->resetTimingTracking();
-            engine->engineMode = MODE_DISABLED;
-        } else if (engine->engineMode == MODE_EXECUTE) {
-            engine->haltExecution();
+            engine->clearStartPosWarning();
+        };
+
+        if (engine->engineMode == MODE_CAPTURE) {
+            engine->runWithUnsavedMacroGuard(std::move(disableAction));
         } else {
-            engine->engineMode = MODE_DISABLED;
+            disableAction();
         }
-        engine->clearStartPosWarning();
     }
     ImGui::SameLine(0, 10);
-    static bool showFormatPopup = false;
     if (Widgets::PillButton("Record", engine->engineMode == MODE_CAPTURE, pillW, theme, anim)) {
-        showFormatPopup = true;
+        if (engine->engineMode != MODE_CAPTURE) {
+            auto startCapture = [engine]() {
+                bool previousTTRMode = engine->ttrMode;
+                engine->ttrMode = true;
+                if (PlayLayer::get()) {
+                    if (!engine->beginCapture(PlayLayer::get()->m_level)) {
+                        engine->ttrMode = previousTTRMode;
+                    }
+                } else {
+                    engine->ttrMode = previousTTRMode;
+                }
+            };
+            if (Autoclicker::get()->enabled && Autoclicker::get()->isTimedMode()) {
+                startCapture();
+            } else {
+                engine->runWithUnsavedMacroGuard(std::move(startCapture));
+            }
+        }
     }
     ImGui::SameLine(0, 10);
     bool playbackActive = engine->engineMode == MODE_EXECUTE || engine->pendingPlaybackStart;
@@ -1463,41 +1740,6 @@ void MenuInterface::drawReplayTab() {
         }
     }
 
-    if (showFormatPopup) {
-        ImGui::OpenPopup("##FormatSelect");
-        showFormatPopup = false;
-    }
-    ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Appearing);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kPopupRounding);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
-    if (ImGui::BeginPopup("##FormatSelect", ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
-        auto popupTitle = trString("Select Format");
-        drawPopupChrome(*this, popupTitle.c_str(), kPopupRounding);
-        float popupBtnW = 120.0f;
-        if (Widgets::StyledButton("TTR", ImVec2(popupBtnW, 30), theme, anim, 6.0f)) {
-            engine->ttrMode = true;
-            if (PlayLayer::get())
-                engine->beginCapture(PlayLayer::get()->m_level);
-            else
-                engine->engineMode = MODE_CAPTURE;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine(0, 10);
-        if (Widgets::StyledButton("GDR", ImVec2(popupBtnW, 30), theme, anim, 6.0f)) {
-            engine->ttrMode = false;
-            if (PlayLayer::get())
-                engine->beginCapture(PlayLayer::get()->m_level);
-            else
-                engine->engineMode = MODE_CAPTURE;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(2);
-
     ImGui::Dummy(ImVec2(0, 8));
 
     if (engine->engineMode == MODE_CAPTURE && engine->hasMacro()) {
@@ -1510,11 +1752,18 @@ void MenuInterface::drawReplayTab() {
 
         Widgets::StatusBadge("RECORDING", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
         ImGui::SameLine();
-        Widgets::StatusBadge(engine->ttrMode ? "TTR" : "GDR",
+        const char* recordingFormatLabel = engine->ttrMode
+            ? (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "TTR" : "TTR2")
+            : "GDR";
+        Widgets::StatusBadge(recordingFormatLabel,
             engine->ttrMode ? getTTRTagColor() : ImVec4(1.0f, 0.9f, 0.2f, 1.0f));
-        if (auto* accuracyTag = getAccuracyTag(engine->selectedAccuracyMode)) {
+        if (auto* accuracyTag = getAccuracyTag(engine->activeMacroAccuracyMode())) {
             ImGui::SameLine();
-            Widgets::StatusBadge(accuracyTag, getAccuracyTagColor(engine->selectedAccuracyMode));
+            Widgets::StatusBadge(accuracyTag, getAccuracyTagColor(engine->activeMacroAccuracyMode()));
+        }
+        if (engine->activeMacroPlatformerMode()) {
+            ImGui::SameLine();
+            Widgets::StatusBadge("PLAT", getPlatformerTagColor());
         }
         ImGui::SameLine();
         auto actionsText = trFormat("Actions: {count}", fmt::arg("count", actionCount));
@@ -1531,41 +1780,45 @@ void MenuInterface::drawReplayTab() {
         imguiTextTr("Macro Name:");
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##recordingName", macroNameBuffer, sizeof(macroNameBuffer))) {
-            if (engine->ttrMode && engine->activeTTR)
-                engine->activeTTR->name = macroNameBuffer;
-            else if (engine->activeMacro)
+            if (engine->ttrMode && engine->activeTTR) {
+                if (engine->activeTTR->name != macroNameBuffer) {
+                    engine->activeTTR->name = macroNameBuffer;
+                    engine->markActiveMacroDirty();
+                }
+            } else if (engine->activeMacro && engine->activeMacro->name != macroNameBuffer) {
                 engine->activeMacro->name = macroNameBuffer;
+                engine->markActiveMacroDirty();
+            }
         }
 
         ImGui::Dummy(ImVec2(0, 4));
         float btnW = (ImGui::GetContentRegionAvail().x - 10) / 2.0f;
 
         if (Widgets::StyledButton("Save Macro", ImVec2(btnW, 30), theme, anim)) {
-            if (engine->ttrMode && engine->activeTTR && !engine->activeTTR->inputs.empty()) {
-                engine->activeTTR->persist();
-                std::strncpy(macroNameBuffer, engine->activeTTR->name.c_str(), sizeof(macroNameBuffer) - 1);
-                macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
-                markReplayListDirty();
-                refreshReplayListIfNeeded(true);
+            if (engine->ttrMode && engine->activeTTR &&
+                (!engine->activeTTR->inputs.empty() || !engine->activeTTR->persistenceAttempts.empty())) {
+                if (engine->saveActiveMacro()) {
+                    std::strncpy(macroNameBuffer, engine->activeTTR->name.c_str(), sizeof(macroNameBuffer) - 1);
+                    macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
+                    markReplayListDirty();
+                    refreshReplayListIfNeeded(true);
+                }
             } else if (!engine->ttrMode && engine->activeMacro && !engine->activeMacro->inputs.empty()) {
-                engine->activeMacro->persist(engine->activeMacro->accuracyMode, static_cast<int>(engine->tickRate));
-                std::strncpy(macroNameBuffer, engine->activeMacro->name.c_str(), sizeof(macroNameBuffer) - 1);
-                macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
-                markReplayListDirty();
-                refreshReplayListIfNeeded(true);
+                if (engine->saveActiveMacro()) {
+                    std::strncpy(macroNameBuffer, engine->activeMacro->name.c_str(), sizeof(macroNameBuffer) - 1);
+                    macroNameBuffer[sizeof(macroNameBuffer) - 1] = '\0';
+                    markReplayListDirty();
+                    refreshReplayListIfNeeded(true);
+                }
             }
         }
         ImGui::SameLine(0, 10);
         if (Widgets::StyledButton("Stop", ImVec2(btnW, 30), theme, anim)) {
-            if (engine->ttrMode && engine->activeTTR) {
-                delete engine->activeTTR;
-                engine->activeTTR = nullptr;
-            } else if (engine->activeMacro) {
-                delete engine->activeMacro;
-                engine->activeMacro = nullptr;
-            }
-            engine->pendingPlaybackStart = false;
-            engine->engineMode = MODE_DISABLED;
+            auto stopCapture = [engine]() {
+                engine->discardActiveMacro();
+                engine->engineMode = MODE_DISABLED;
+            };
+            engine->runWithUnsavedMacroGuard(std::move(stopCapture));
             macroNameReady = false;
         }
         ImGui::Dummy(ImVec2(0, 4));
@@ -1587,7 +1840,10 @@ void MenuInterface::drawReplayTab() {
 
         Widgets::StatusBadge("PLAYING", ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
         ImGui::SameLine();
-        Widgets::StatusBadge(engine->ttrMode ? "TTR" : "GDR",
+        const char* activeFormatLabel = engine->ttrMode
+            ? (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "TTR" : "TTR2")
+            : "GDR";
+        Widgets::StatusBadge(activeFormatLabel,
             engine->ttrMode ? getTTRTagColor() : ImVec4(1.0f, 0.9f, 0.2f, 1.0f));
         {
             AccuracyMode accuracyMode = engine->activeMacroAccuracyMode();
@@ -1595,6 +1851,10 @@ void MenuInterface::drawReplayTab() {
                 ImGui::SameLine();
                 Widgets::StatusBadge(accuracyTag, getAccuracyTagColor(accuracyMode));
             }
+        }
+        if (engine->activeMacroPlatformerMode()) {
+            ImGui::SameLine();
+            Widgets::StatusBadge("PLAT", getPlatformerTagColor());
         }
         ImGui::SameLine();
         auto playbackInfo = trFormat(
@@ -1627,7 +1887,7 @@ void MenuInterface::drawReplayTab() {
         ImGui::Dummy(ImVec2(0, 4));
     }
 
-    Widgets::SectionHeader("Saved Replays", theme);
+    Widgets::SectionHeader("Usable Replays", theme);
 
     float listPadY = 8.0f;
     float listPadX = 10.0f;
@@ -1640,40 +1900,53 @@ void MenuInterface::drawReplayTab() {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
     ImGui::BeginChild("##MacroList", ImVec2(-1, listH), false);
 
-    
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
     ImGui::Dummy(ImVec2(0, listPadY));
 
     if (engine->storedMacros.empty()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
-        imguiTextTr("No saved replays");
+        imguiTextTr("No usable replays");
         ImGui::PopStyleColor();
     }
+
+    auto queueReplayLoad = [this](std::string const& macroName, bool isTTR) {
+        replayLoadPending = true;
+        replayLoadPendingMacroName = macroName;
+        replayLoadPendingIsTTR = isTTR;
+        replayLoadReadyTime = ImGui::GetTime() + static_cast<double>(ImGui::GetIO().MouseDoubleClickTime) + 0.02;
+    };
 
     auto macroListCopy = engine->storedMacros;
     for (const auto& macroName : macroListCopy) {
         bool isSelected = (engine->hasMacro() && engine->engineMode != MODE_CAPTURE && engine->getMacroName() == macroName);
         bool isIncompatible = engine->incompatibleMacros.count(macroName) > 0;
         bool isCBS = engine->cbsMacros.count(macroName) > 0;
+        bool isPlatformer = engine->platformerMacros.count(macroName) > 0;
         bool isTTR = engine->ttrMacros.count(macroName) > 0;
+        bool isTTR2 = engine->ttr2Macros.count(macroName) > 0;
+        bool isLegacyTTR = isTTR && !isTTR2;
+        bool isLegacyCBS = engine->legacyCbsMacros.count(macroName) > 0 && !isTTR2;
         ImGui::PushID(macroName.c_str());
 
         float xBtnW = 20.0f;
         float rowH = ImGui::GetTextLineHeight() + 8.0f;
         float fullRowW = ImGui::GetContentRegionAvail().x;
 
-        
         std::string rowLabel = macroName;
         float accuracyLabelW = 0.0f;
         if (!isIncompatible && isCBS) {
-            accuracyLabelW = ImGui::CalcTextSize("CBS").x + 16.0f;
+            auto* tag = getAccuracyTag(AccuracyMode::CBS);
+            accuracyLabelW = ImGui::CalcTextSize(tag).x + 16.0f;
         }
         auto incompatibleText = trString("Incompatible");
-        float ttrLabelW = (!isIncompatible && isTTR) ? ImGui::CalcTextSize("TTR").x + 16.0f : 0.0f;
+        auto platformerText = trString("PLAT");
+        const char* ttrFormatTag = isTTR2 ? "TTR2" : "TTR";
+        float ttrLabelW = (!isIncompatible && isTTR) ? ImGui::CalcTextSize(ttrFormatTag).x + 16.0f : 0.0f;
         float gdrLabelW = (!isIncompatible && !isTTR) ? ImGui::CalcTextSize("GDR").x + 16.0f : 0.0f;
+        float platformerLabelW = (!isIncompatible && isPlatformer) ? ImGui::CalcTextSize(platformerText.c_str()).x + 16.0f : 0.0f;
         float incompatLabelW = isIncompatible ? ImGui::CalcTextSize(incompatibleText.c_str()).x + 16.0f : 0.0f;
-        float maxNameW = std::max(40.0f, fullRowW - xBtnW - accuracyLabelW - ttrLabelW - gdrLabelW - incompatLabelW - listPadX * 2.0f - 24.0f);
+        float maxNameW = std::max(40.0f, fullRowW - xBtnW - accuracyLabelW - ttrLabelW - gdrLabelW - platformerLabelW - incompatLabelW - listPadX * 2.0f - 24.0f);
         if (ImGui::CalcTextSize(rowLabel.c_str()).x > maxNameW) {
             std::string clipped = rowLabel;
             while (!clipped.empty() && ImGui::CalcTextSize((clipped + "...").c_str()).x > maxNameW)
@@ -1691,12 +1964,16 @@ void MenuInterface::drawReplayTab() {
         bool rowActivated = ImGui::Selectable("##row", isSelected, ImGuiSelectableFlags_AllowOverlap, ImVec2(fullRowW, rowH));
         if (ImGui::IsItemHovered() && ImGui::IsMouseDown(1)) {
             std::string tooltip;
-            if (isCBS) {
+            if (isLegacyCBS) {
+                tooltip += trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+            } else if (isCBS) {
                 tooltip += trString("CBS macros do not work on other menus!");
             }
             if (isTTR) {
                 if (!tooltip.empty()) tooltip += "\n";
-                tooltip += trString("TTR macros do not work on other menus!");
+                tooltip += isLegacyTTR
+                    ? trString("TTR macros do not work on other menus!")
+                    : trString("TTR2 macros do not work on other menus!");
             }
             if (!tooltip.empty()) {
                 ImGui::SetTooltip("%s", tooltip.c_str());
@@ -1709,33 +1986,15 @@ void MenuInterface::drawReplayTab() {
             ImGui::PopStyleColor();
         }
 
-        if (rowDoubleClicked || rowRightClicked) {
+        if (!isIncompatible && (rowDoubleClicked || rowRightClicked)) {
+            replayLoadPending = false;
             replayActionMacroName = macroName;
             replayActionIsTTR = isTTR;
+            replayActionIsLegacyCBS = isLegacyCBS;
+            replayActionCanEdit = !isCBS;
             replayActionPopupRequested = true;
         } else if (!isIncompatible && rowActivated && engine->engineMode != MODE_CAPTURE) {
-            engine->pendingPlaybackStart = false;
-            if (isTTR) {
-                TTRMacro* loaded = TTRMacro::loadFromDisk(macroName);
-                if (loaded) {
-                    if (engine->activeTTR) delete engine->activeTTR;
-                    if (engine->activeMacro) { delete engine->activeMacro; engine->activeMacro = nullptr; }
-                    engine->activeTTR = loaded;
-                    engine->ttrMode = true;
-                    engine->enableCBSForLoadedMacroIfNeeded();
-                    ReplayEngine::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
-                }
-            } else {
-                MacroSequence* loaded = MacroSequence::loadFromDisk(macroName);
-                if (loaded) {
-                    if (engine->activeMacro) delete engine->activeMacro;
-                    if (engine->activeTTR) { delete engine->activeTTR; engine->activeTTR = nullptr; }
-                    engine->activeMacro = loaded;
-                    engine->ttrMode = false;
-                    engine->enableCBSForLoadedMacroIfNeeded();
-                    ReplayEngine::applyRuntimeAccuracyMode(engine->selectedAccuracyMode);
-                }
-            }
+            queueReplayLoad(macroName, isTTR);
         }
 
         float itemMinY = rowStart.y;
@@ -1757,16 +2016,25 @@ void MenuInterface::drawReplayTab() {
             );
         }
         if (!isIncompatible && isCBS) {
-            const char* tag = getAccuracyTag(AccuracyMode::CBS);
+            AccuracyMode taggedMode = AccuracyMode::CBS;
+            const char* tag = getAccuracyTag(taggedMode);
             ImVec2 tagSize = ImGui::CalcTextSize(tag);
             tagX -= tagSize.x + 8.0f;
             ImGui::GetWindowDrawList()->AddText(
                 ImVec2(tagX, itemMinY + (itemH - tagSize.y) * 0.5f),
-                toU32(getAccuracyTagColor(AccuracyMode::CBS)), tag
+                toU32(getAccuracyTagColor(taggedMode)), tag
+            );
+        }
+        if (!isIncompatible && isPlatformer) {
+            ImVec2 tagSize = ImGui::CalcTextSize(platformerText.c_str());
+            tagX -= tagSize.x + 8.0f;
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(tagX, itemMinY + (itemH - tagSize.y) * 0.5f),
+                toU32(getPlatformerTagColor()), platformerText.c_str()
             );
         }
         if (!isIncompatible && isTTR) {
-            const char* tag = "TTR";
+            const char* tag = ttrFormatTag;
             ImVec2 tagSize = ImGui::CalcTextSize(tag);
             tagX -= tagSize.x + 8.0f;
             ImGui::GetWindowDrawList()->AddText(
@@ -1790,11 +2058,24 @@ void MenuInterface::drawReplayTab() {
         if (ImGui::Button("x", ImVec2(xBtnW, xBtnW))) {
             auto dir = getReplayDirectoryPath();
             bool deleted = false;
-            for (auto& entry : std::filesystem::directory_iterator(dir)) {
-                if (entry.is_regular_file() && toasty::pathToUtf8(entry.path().stem()) == macroName) {
-                    std::filesystem::remove(entry.path());
-                    deleted = true;
-                    break;
+            std::filesystem::path targetPath = dir / (macroName + (isTTR ? (isTTR2 ? ".ttr2" : ".ttr") : ".gdr"));
+            std::error_code deleteEc;
+            if (std::filesystem::is_regular_file(targetPath, deleteEc) && !deleteEc) {
+                deleted = std::filesystem::remove(targetPath, deleteEc);
+            }
+            if (!deleted) {
+                for (auto& entry : std::filesystem::directory_iterator(dir)) {
+                    auto ext = toasty::pathToUtf8(entry.path().extension());
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+                        return static_cast<char>(std::tolower(ch));
+                    });
+                    if (entry.is_regular_file() &&
+                        toasty::pathToUtf8(entry.path().stem()) == macroName &&
+                        ((isTTR && (ext == ".ttr2" || ext == ".ttr")) || (!isTTR && ext == ".gdr"))) {
+                        std::filesystem::remove(entry.path());
+                        deleted = true;
+                        break;
+                    }
                 }
             }
             if (deleted) {
@@ -1810,6 +2091,38 @@ void MenuInterface::drawReplayTab() {
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+
+    if (replayLoadPending) {
+        if (engine->engineMode == MODE_CAPTURE) {
+            replayLoadPending = false;
+        } else if (ImGui::GetTime() >= replayLoadReadyTime) {
+            auto macroName = replayLoadPendingMacroName;
+            bool isTTR = replayLoadPendingIsTTR;
+            replayLoadPending = false;
+
+            if (engine->incompatibleMacros.count(macroName) == 0) {
+                auto loadMacro = [engine, macroName, isTTR]() {
+                    engine->pendingPlaybackStart = false;
+                    if (isTTR) {
+                        if (TTRMacro* loaded = TTRMacro::loadFromDisk(macroName)) {
+                            engine->discardActiveMacro();
+                            engine->activeTTR = loaded;
+                            engine->ttrMode = true;
+                            engine->clearActiveMacroDirty();
+                        }
+                    } else {
+                        if (MacroSequence* loaded = MacroSequence::loadFromDisk(macroName)) {
+                            engine->discardActiveMacro();
+                            engine->activeMacro = loaded;
+                            engine->ttrMode = false;
+                            engine->clearActiveMacroDirty();
+                        }
+                    }
+                };
+                engine->runWithUnsavedMacroGuard(std::move(loadMacro));
+            }
+        }
+    }
 
     if (replayActionPopupRequested) {
         ImGui::OpenPopup("Macro Actions");
@@ -1852,28 +2165,16 @@ void MenuInterface::drawReplayTab() {
         ImGui::Dummy(ImVec2(0, 4));
 
         {
-            bool canEdit = true;
-            if (replayActionIsTTR) {
-                TTRMacro* probe = TTRMacro::loadFromDisk(replayActionMacroName);
-                if (probe) {
-                    if (probe->accuracyMode != AccuracyMode::Vanilla) canEdit = false;
-                    delete probe;
-                }
-            } else {
-                MacroSequence* probe = MacroSequence::loadFromDisk(replayActionMacroName);
-                if (probe) {
-                    if (probe->accuracyMode != AccuracyMode::Vanilla) canEdit = false;
-                    delete probe;
-                }
-            }
-
+            bool canEdit = replayActionCanEdit;
             if (!canEdit) {
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.4f);
                 Widgets::StyledButton("Open Macro Editor##actionEdit", ImVec2(actionBtnW, 30.0f), theme, anim, 6.0f);
                 ImGui::PopStyleVar();
                 ImVec2 tipPos = ImGui::GetItemRectMin();
                 tipPos.y += 34.0f;
-                auto tipText = trString("CBS macros cannot be edited");
+                auto tipText = replayActionIsLegacyCBS
+                    ? trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.")
+                    : trString("CBS/CBF macros cannot be edited");
                 ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), tipText.c_str());
             } else if (Widgets::StyledButton("Open Macro Editor##actionEdit", ImVec2(actionBtnW, 30.0f), theme, anim, 6.0f)) {
                 if (replayActionIsTTR) {
@@ -1894,6 +2195,64 @@ void MenuInterface::drawReplayTab() {
         }
 
         ImGui::Dummy(ImVec2(0, 6));
+
+        if (!replayActionIsTTR) {
+            bool canStartConversion = !replayConvertRunning && !replayActionIsLegacyCBS;
+            if (!canStartConversion) {
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f);
+            }
+            bool convertClicked = Widgets::StyledButton(
+                replayConvertRunning ? "Converting...##actionConvertTTR" : "Convert to TTR2##actionConvertTTR",
+                ImVec2(actionBtnW, 30.0f),
+                theme,
+                anim,
+                6.0f
+            );
+            if (!canStartConversion) {
+                ImGui::PopStyleVar();
+            }
+            if (replayActionIsLegacyCBS) {
+                ImVec2 tipPos = ImGui::GetItemRectMin();
+                tipPos.y += 34.0f;
+                auto tipText = trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+                ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), tipText.c_str());
+            }
+            if (convertClicked && canStartConversion) {
+                auto macroName = replayActionMacroName;
+                auto startConversion = [this, macroName]() {
+                    auto sourcePath = findStoredReplayFile(macroName, ".gdr");
+                    if (sourcePath.empty()) {
+                        replayConvertRunning = false;
+                        replayConvertStatusOk = false;
+                        replayConvertStatus = "Replay file was not found.";
+                        replayConvertWarnings.clear();
+                        replayConvertShowStandaloneStatus = true;
+                        replayConvertMarkSourceOnComplete = false;
+                        replayConvertSelectOutputOnComplete = false;
+                        replayConvertSourceKeyOnComplete.clear();
+                        return;
+                    }
+
+                    std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
+                    auto outputDirectory = getReplayDirectoryPath();
+                    replayConvertRunning = true;
+                    replayConvertStatusOk = false;
+                    replayConvertStatus = trString("Converting...");
+                    replayConvertWarnings.clear();
+                    replayConvertShowStandaloneStatus = true;
+                    replayConvertMarkSourceOnComplete = false;
+                    replayConvertSelectOutputOnComplete = true;
+                    replayConvertSourceKeyOnComplete.clear();
+                    replayConvertFuture = std::async(std::launch::async, [sourcePath, author, outputDirectory]() {
+                        return toasty::conversion::convertNativeGDRToTTRDuplicate(sourcePath, author, outputDirectory);
+                    });
+                };
+                ImGui::CloseCurrentPopup();
+                engine->runWithUnsavedMacroGuard(std::move(startConversion));
+            }
+
+            ImGui::Dummy(ImVec2(0, 6));
+        }
 
         if (Widgets::StyledButton("Cancel##actionCancel", ImVec2(actionBtnW, 28.0f), theme, anim, 6.0f)) {
             ImGui::CloseCurrentPopup();
@@ -1994,6 +2353,269 @@ void MenuInterface::drawReplayTab() {
             utils::file::openFolder(dir);
     }
 
+    if (replayConvertRunning && replayConvertFuture.valid() &&
+        replayConvertFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        auto result = replayConvertFuture.get();
+        replayConvertRunning = false;
+        replayConvertStatusOk = result.ok;
+        replayConvertStatus = result.message;
+        replayConvertWarnings = result.warnings;
+        if (result.ok) {
+            if (replayConvertMarkSourceOnComplete && !replayConvertSourceKeyOnComplete.empty()) {
+                engine->convertedForeignReplaySources.insert(replayConvertSourceKeyOnComplete);
+            }
+            markReplayListDirty();
+            refreshReplayListIfNeeded(true);
+            if (replayConvertSelectOutputOnComplete && !result.outputName.empty()) {
+                if (TTRMacro* loaded = TTRMacro::loadFromDisk(result.outputName)) {
+                    engine->pendingPlaybackStart = false;
+                    engine->discardActiveMacro();
+                    engine->activeTTR = loaded;
+                    engine->ttrMode = true;
+                    engine->clearActiveMacroDirty();
+                } else {
+                    replayConvertStatusOk = false;
+                    replayConvertStatus += "\nConverted, but failed to load the new TTR2.";
+                }
+            }
+        }
+        replayConvertMarkSourceOnComplete = false;
+        replayConvertSelectOutputOnComplete = false;
+        replayConvertSourceKeyOnComplete.clear();
+    }
+
+    if (replayConvertShowStandaloneStatus && !replayConvertStatus.empty()) {
+        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+        ImGui::PushStyleColor(ImGuiCol_Text, replayConvertStatusOk ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f) : ImVec4(1.0f, 0.7f, 0.25f, 1.0f));
+        ImGui::TextWrapped("%s", replayConvertStatus.c_str());
+        ImGui::PopStyleColor();
+        for (auto const& warning : replayConvertWarnings) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
+            ImGui::TextWrapped("%s", warning.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+
+    ImGui::Dummy(ImVec2(0, 6));
+    if (Widgets::CollapsibleSectionHeader("Conversions", replayConversionsExpanded, theme)) {
+        replayConversionsExpanded = !replayConversionsExpanded;
+    }
+
+    if (replayConversionsExpanded) {
+    ImGui::Dummy(ImVec2(0, 2));
+    Widgets::SectionHeader("Needs Conversion", theme);
+
+    float convertListH = std::max(60.0f, std::min(150.0f, (float)engine->foreignReplays.size() * 28.0f + listPadY * 2.0f));
+    ImVec2 convertListPos = ImGui::GetCursorScreenPos();
+    float convertListW = ImGui::GetContentRegionAvail().x;
+    drawSolidRect(ImGui::GetWindowDrawList(), convertListPos, ImVec2(convertListPos.x + convertListW, convertListPos.y + convertListH), theme.cornerRadius, theme, 0.42f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+    ImGui::BeginChild("##ForeignMacroList", ImVec2(-1, convertListH), false);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+    ImGui::Dummy(ImVec2(0, listPadY));
+
+    if (engine->foreignReplays.empty()) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
+        imguiTextTr("No old macros found");
+        ImGui::PopStyleColor();
+    }
+
+    for (auto const& entry : engine->foreignReplays) {
+        auto pathKey = toasty::conversion::normalizedPathKey(entry.path);
+        bool selected = replayConvertSelectedPath == pathKey;
+        bool converted = entry.converted || engine->convertedForeignReplaySources.count(pathKey) > 0;
+        bool canConvert = entry.supported && !replayConvertRunning;
+        std::string statusText = converted ? "Converted" : (entry.supported ? "Convert" : (entry.recognized ? "Unsupported" : "Error"));
+        ImVec4 statusColor = converted
+            ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f)
+            : (entry.supported ? theme.getAccent() : ImVec4(1.0f, 0.35f, 0.28f, 1.0f));
+
+        ImGui::PushID(pathKey.c_str());
+        float rowH = ImGui::GetTextLineHeight() + 8.0f;
+        float fullRowW = ImGui::GetContentRegionAvail().x;
+        ImVec2 rowStart = ImGui::GetCursorScreenPos();
+        bool rowActivated = ImGui::Selectable("##foreignrow", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(fullRowW, rowH));
+        if (ImGui::IsItemHovered() && !entry.detail.empty()) {
+            ImGui::SetTooltip("%s", entry.detail.c_str());
+        }
+        if (rowActivated) {
+            replayConvertSelectedPath = pathKey;
+            std::strncpy(replayConvertNameBuffer, entry.stem.c_str(), sizeof(replayConvertNameBuffer) - 1);
+            replayConvertNameBuffer[sizeof(replayConvertNameBuffer) - 1] = '\0';
+            replayConvertTargetTTR = true;
+            replayConvertStatus.clear();
+            replayConvertWarnings.clear();
+            replayConvertStatusOk = false;
+            replayConvertShowStandaloneStatus = false;
+        }
+
+        std::string nameLabel = entry.filename.empty() ? entry.stem : entry.filename;
+        std::string formatLabel = toasty::conversion::formatDisplayName(entry.format);
+        float statusW = ImGui::CalcTextSize(statusText.c_str()).x + 10.0f;
+        float formatW = ImGui::CalcTextSize(formatLabel.c_str()).x + 12.0f;
+        float maxNameW = std::max(40.0f, fullRowW - statusW - formatW - listPadX * 2.0f - 22.0f);
+        if (ImGui::CalcTextSize(nameLabel.c_str()).x > maxNameW) {
+            while (!nameLabel.empty() && ImGui::CalcTextSize((nameLabel + "...").c_str()).x > maxNameW) {
+                nameLabel.pop_back();
+            }
+            nameLabel += "...";
+        }
+
+        float itemMinY = rowStart.y;
+        float itemH = rowH;
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(rowStart.x + listPadX, itemMinY + (itemH - ImGui::GetTextLineHeight()) * 0.5f),
+            entry.supported ? theme.getTextU32() : toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.55f)),
+            nameLabel.c_str()
+        );
+
+        float tagX = rowStart.x + fullRowW - listPadX;
+        ImVec2 statusSize = ImGui::CalcTextSize(statusText.c_str());
+        tagX -= statusSize.x;
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(tagX, itemMinY + (itemH - statusSize.y) * 0.5f),
+            toU32(statusColor),
+            statusText.c_str()
+        );
+        ImVec2 formatSize = ImGui::CalcTextSize(formatLabel.c_str());
+        tagX -= formatSize.x + 12.0f;
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(tagX, itemMinY + (itemH - formatSize.y) * 0.5f),
+            toU32(ImVec4(1.0f, 0.85f, 0.35f, entry.recognized ? 1.0f : 0.55f)),
+            formatLabel.c_str()
+        );
+
+        if (rowActivated && canConvert && ImGui::IsMouseDoubleClicked(0)) {
+            replayConvertStatus.clear();
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    auto selectedForeign = std::find_if(engine->foreignReplays.begin(), engine->foreignReplays.end(), [&](auto const& entry) {
+        return toasty::conversion::normalizedPathKey(entry.path) == replayConvertSelectedPath;
+    });
+
+    if (selectedForeign != engine->foreignReplays.end()) {
+        bool converted = selectedForeign->converted || engine->convertedForeignReplaySources.count(replayConvertSelectedPath) > 0;
+        ImGui::Dummy(ImVec2(0, 6));
+        ImVec2 panelPos = ImGui::GetCursorScreenPos();
+        float panelW = ImGui::GetContentRegionAvail().x;
+        float panelH = selectedForeign->supported ? 134.0f : 82.0f;
+        drawSolidRect(ImGui::GetWindowDrawList(), panelPos, ImVec2(panelPos.x + panelW, panelPos.y + panelH), theme.cornerRadius, theme, 0.38f);
+        ImGui::Dummy(ImVec2(0, 8));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+        ImGui::TextColored(theme.getAccent(), "%s", selectedForeign->filename.c_str());
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+        auto detectedText = fmt::format("{}{}", toasty::conversion::formatDisplayName(selectedForeign->format), converted ? " | Converted" : "");
+        ImGui::TextUnformatted(detectedText.c_str());
+
+        if (!selectedForeign->detail.empty()) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.35f, 1.0f));
+            ImGui::TextWrapped("%s", selectedForeign->detail.c_str());
+            ImGui::PopStyleColor();
+        }
+
+        if (selectedForeign->supported) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+            float targetW = (ImGui::GetContentRegionAvail().x - listPadX - 10.0f) / 2.0f;
+            if (Widgets::PillButton("TTR2##convertTarget", replayConvertTargetTTR, targetW, theme, anim)) {
+                replayConvertTargetTTR = true;
+            }
+            ImGui::SameLine(0, 10);
+            if (Widgets::PillButton("GDR##convertTarget", !replayConvertTargetTTR, targetW, theme, anim)) {
+                replayConvertTargetTTR = false;
+            }
+
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - listPadX);
+            ImGui::InputText("##convertOutputName", replayConvertNameBuffer, sizeof(replayConvertNameBuffer));
+
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+            bool canStartConversion = !replayConvertRunning;
+            if (!canStartConversion) {
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f);
+            }
+            bool convertClicked = Widgets::StyledButton(replayConvertRunning ? "Converting..." : "Convert", ImVec2(ImGui::GetContentRegionAvail().x - listPadX, 28.0f), theme, anim, 6.0f);
+            if (!canStartConversion) {
+                ImGui::PopStyleVar();
+            }
+            if (convertClicked && canStartConversion) {
+                auto sourcePath = selectedForeign->path;
+                auto target = replayConvertTargetTTR ? toasty::conversion::ConversionTarget::TTR : toasty::conversion::ConversionTarget::GDR;
+                std::string requestedName = replayConvertNameBuffer;
+                std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
+                auto outputDirectory = getReplayDirectoryPath();
+                replayConvertRunning = true;
+                replayConvertStatusOk = false;
+                replayConvertStatus = trString("Converting...");
+                replayConvertWarnings.clear();
+                replayConvertShowStandaloneStatus = false;
+                replayConvertMarkSourceOnComplete = true;
+                replayConvertSelectOutputOnComplete = false;
+                replayConvertSourceKeyOnComplete = replayConvertSelectedPath;
+                replayConvertFuture = std::async(std::launch::async, [sourcePath, target, requestedName, author, outputDirectory]() {
+                    return toasty::conversion::convertReplay(sourcePath, target, requestedName, author, outputDirectory);
+                });
+            }
+        }
+
+        if (!replayConvertShowStandaloneStatus && !replayConvertStatus.empty()) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+            ImGui::PushStyleColor(ImGuiCol_Text, replayConvertStatusOk ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f) : ImVec4(1.0f, 0.7f, 0.25f, 1.0f));
+            ImGui::TextWrapped("%s", replayConvertStatus.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (!replayConvertShowStandaloneStatus) {
+            for (auto const& warning : replayConvertWarnings) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
+                ImGui::TextWrapped("%s", warning.c_str());
+                ImGui::PopStyleColor();
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 4));
+    }
+
+    static std::string convertibleFormatsText = [] {
+        std::string text;
+        for (auto format : toasty::conversion::supportedFormats()) {
+            if (!text.empty()) {
+                text += ", ";
+            }
+            text += toasty::conversion::formatDisplayName(format);
+        }
+        return text;
+    }();
+
+    ImGui::Dummy(ImVec2(0, 6));
+    Widgets::SectionHeader("Convertible Formats", theme);
+    ImVec2 formatsPos = ImGui::GetCursorScreenPos();
+    float formatsW = ImGui::GetContentRegionAvail().x;
+    float formatsWrapW = std::max(40.0f, formatsW - listPadX * 2.0f);
+    float formatsTextH = ImGui::CalcTextSize(convertibleFormatsText.c_str(), nullptr, false, formatsWrapW).y;
+    float formatsH = std::max(54.0f, formatsTextH + listPadY * 2.0f + 4.0f);
+    float formatsCursorY = ImGui::GetCursorPosY();
+    drawSolidRect(ImGui::GetWindowDrawList(), formatsPos, ImVec2(formatsPos.x + formatsW, formatsPos.y + formatsH), theme.cornerRadius, theme, 0.34f);
+    ImGui::SetCursorPosY(formatsCursorY + listPadY);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + formatsWrapW);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.72f));
+    ImGui::TextUnformatted(convertibleFormatsText.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+    ImGui::SetCursorPosY(formatsCursorY + formatsH);
+    }
+
     if (engine->hasMacro() && engine->engineMode == MODE_EXECUTE && PlayLayer::get()) {
         size_t actionCount = 0;
         std::string loadedName;
@@ -2016,13 +2638,20 @@ void MenuInterface::drawReplayTab() {
         if (engine->ttrMode) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, getTTRTagColor());
-            ImGui::TextUnformatted("(TTR)");
+            ImGui::TextUnformatted(engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "(TTR)" : "(TTR2)");
             ImGui::PopStyleColor();
         }
         if (auto* accuracyTag = getAccuracyTag(loadedAccuracyMode)) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, getAccuracyTagColor(loadedAccuracyMode));
             ImGui::Text("(%s)", accuracyTag);
+            ImGui::PopStyleColor();
+        }
+        if (engine->activeMacroPlatformerMode()) {
+            auto platformerText = trString("PLAT");
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, getPlatformerTagColor());
+            ImGui::Text("(%s)", platformerText.c_str());
             ImGui::PopStyleColor();
         }
         auto loadedActions = trFormat("Actions: {count}", fmt::arg("count", actionCount));
@@ -2032,11 +2661,15 @@ void MenuInterface::drawReplayTab() {
             ImGui::TextUnformatted(anchorsText.c_str());
         }
 
-        if (engine->engineMode == MODE_EXECUTE) {
-            ImGui::Dummy(ImVec2(0, 4));
-            Widgets::ToggleSwitch("Ignore Manual Input", &engine->userInputIgnored, theme, anim);
-        }
+
     }
+
+    // Keybinds for replay control
+    ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Keybinds", theme);
+    Widgets::KeybindButton("Toggle Playback", &keybinds.replayToggle, theme, anim);
+    ImGui::Dummy(ImVec2(0, 4));
+    Widgets::KeybindButton("Menu Toggle", &keybinds.menu, theme, anim);
 }
 
 void MenuInterface::drawToolsTab() {
@@ -2054,6 +2687,7 @@ void MenuInterface::drawToolsTab() {
         if (canChange) {
             engine->tickRate = tempTickRate;
             Mod::get()->setSavedValue("eng_tick_rate", (float)engine->tickRate);
+            TrajectoryPredictionService::get().markDirty();
         }
     }
 
@@ -2065,15 +2699,22 @@ void MenuInterface::drawToolsTab() {
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
     ImGui::InputFloat("##speed", &tempGameSpeed, 0, 0, "%.2f");
     ImGui::SameLine(0, 6);
-    if (Widgets::StyledButton("Apply###spd", ImVec2(78, 28), theme, anim))
+    if (Widgets::StyledButton("Apply###spd", ImVec2(78, 28), theme, anim)) {
         engine->gameSpeed = tempGameSpeed;
+        TrajectoryPredictionService::get().markDirty();
+    }
 
     ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Features", theme);
 
+    bool frameAdvanceBefore = engine->tickStepping;
     if (Widgets::ModuleCardBegin("Frame Advance", "Pause and step frame-by-frame",
         &engine->tickStepping, theme, anim, &keybinds.frameAdvance)) {
+        Widgets::KeybindButton("Step Key", &keybinds.frameStep, theme, anim);
         Widgets::ModuleCardEnd();
+    }
+    if (engine->tickStepping != frameAdvanceBefore) {
+        engine->setFrameStepEnabled(engine->tickStepping, PlayLayer::get());
     }
 
     if (Widgets::ModuleCardBegin("Speedhack Audio", "Apply speed changes to game audio",
@@ -2083,6 +2724,11 @@ void MenuInterface::drawToolsTab() {
 
     if (Widgets::ModuleCardBegin("Layout Mode", "Remove all decorations",
         &engine->layoutMode, theme, anim, &keybinds.layoutMode)) {
+        Widgets::ModuleCardEnd();
+    }
+
+    if (Widgets::ModuleCardBegin("Disable Shaders", "Suppress level shader effects",
+        &engine->disableShaders, theme, anim, &keybinds.disableShaders)) {
         Widgets::ModuleCardEnd();
     }
 
@@ -2104,7 +2750,39 @@ void MenuInterface::drawHacksTab() {
 
     if (Widgets::ModuleCardBegin("Show Trajectory", "Display predicted player path",
         &engine->pathPreview, theme, anim, &keybinds.trajectory)) {
-        Widgets::StyledSliderInt("Trajectory Length", &engine->pathLength, 50, 480, theme);
+        auto setTrajectoryLength = [&](int length) {
+            int sanitizedLength = ReplayEngine::sanitizeTrajectoryLength(length);
+            if (engine->pathLength != sanitizedLength) {
+                engine->pathLength = sanitizedLength;
+                TrajectoryPredictionService::get().markDirty();
+            }
+        };
+
+        setTrajectoryLength(engine->pathLength);
+
+        int sliderLength = engine->pathLength;
+        if (Widgets::StyledSliderInt(
+            "Trajectory Length",
+            &sliderLength,
+            ReplayEngine::kTrajectoryLengthMin,
+            ReplayEngine::kTrajectoryLengthSliderMax,
+            theme
+        )) {
+            setTrajectoryLength(sliderLength);
+        }
+
+        ImGui::Dummy(ImVec2(0, 4));
+        int exactLength = engine->pathLength;
+        ImGui::SetNextItemWidth(-1);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 20, 25, 200));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
+        if (ImGui::InputInt("##trajectory_length_exact", &exactLength, 0, 0)) {
+            setTrajectoryLength(exactLength);
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
+
         Widgets::ModuleCardEnd();
     }
 
@@ -2121,10 +2799,7 @@ void MenuInterface::drawHacksTab() {
 
     if (Widgets::ModuleCardBegin("Noclip", "Disable collision with obstacles",
         &engine->collisionBypass, theme, anim, &keybinds.noclip)) {
-        float hitRate = 100.0f;
-        if (engine->totalTickCount > 0)
-            hitRate = 100.0f * (1.0f - (float)engine->bypassedCollisions / (float)engine->totalTickCount);
-        if (hitRate < 0.0f) hitRate = 0.0f;
+        float hitRate = engine->noclipAccuracyPercent();
 
         ImVec4 hitColor;
         if (hitRate >= 90.0f) hitColor = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
@@ -2135,9 +2810,10 @@ void MenuInterface::drawHacksTab() {
         ImGui::SameLine();
         ImGui::TextColored(hitColor, "%.2f%%", hitRate);
         auto deathFrameText = trFormat(
-            "Deaths: {deaths} | Frames: {frames}",
-            fmt::arg("deaths", engine->bypassedCollisions),
-            fmt::arg("frames", engine->totalTickCount)
+            "Deaths: {deaths} | Unsafe: {unsafe} | Frames: {frames}",
+            fmt::arg("deaths", engine->noclipDeathEvents),
+            fmt::arg("unsafe", engine->noclipUnsafeFrames),
+            fmt::arg("frames", engine->noclipTotalFrames)
         );
         ImGui::TextUnformatted(deathFrameText.c_str());
 
@@ -2587,7 +3263,7 @@ void MenuInterface::drawAutoclickerTab() {
     auto* eng = ReplayEngine::get();
 
     ImGui::Dummy(ImVec2(0, 4));
-    if (Widgets::ModuleCard("Autoclicker", "Auto-click at configurable intervals", &ac->enabled, theme, anim))
+    if (Widgets::ModuleCard("Autoclicker", "Auto-click at configurable intervals", &ac->enabled, theme, anim, &keybinds.autoclicker))
         mod->setSavedValue("ac_enabled", ac->enabled);
 
     if (ac->enabled && eng->engineMode == MODE_EXECUTE) {
@@ -2607,19 +3283,66 @@ void MenuInterface::drawAutoclickerTab() {
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Timing", theme);
 
-    if (Widgets::StyledSliderInt("Hold Ticks", &ac->holdTicks, 1, 120, theme))
-        mod->setSavedValue("ac_hold_ticks", ac->holdTicks);
-    if (Widgets::StyledSliderInt("Release Ticks", &ac->releaseTicks, 1, 120, theme))
-        mod->setSavedValue("ac_release_ticks", ac->releaseTicks);
+    ImGui::TextUnformatted(trString("Mode").c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##autoclick_mode", trString(getAutoclickerModeLabel(ac->mode)).c_str())) {
+        for (AutoclickerMode mode : { AutoclickerMode::Legacy, AutoclickerMode::Timed }) {
+            bool selected = ac->mode == mode;
+            auto label = trString(getAutoclickerModeLabel(mode));
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                ac->mode = mode;
+                ac->reset();
+                mod->setSavedValue("ac_mode", static_cast<int>(ac->mode));
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
 
-    float cps = static_cast<float>(eng->tickRate) / static_cast<float>(ac->holdTicks + ac->releaseTicks);
+    float cps = 0.0f;
+    if (ac->isTimedMode()) {
+        if (Widgets::StyledSliderFloat("Target CPS", &ac->targetCps, 1.0f, 20000.0f, theme, true)) {
+            ac->targetCps = std::clamp(ac->targetCps, 1.0f, 20000.0f);
+            ac->reset();
+            mod->setSavedValue("ac_target_cps", static_cast<double>(ac->targetCps));
+        }
+        if (Widgets::StyledSliderFloat("Hold Ratio", &ac->holdRatio, 0.05f, 0.95f, theme, true)) {
+            ac->holdRatio = std::clamp(ac->holdRatio, 0.05f, 0.95f);
+            ac->reset();
+            mod->setSavedValue("ac_hold_ratio", static_cast<double>(ac->holdRatio));
+        }
+        cps = ac->timedClicksPerSecond();
+    } else {
+        if (Widgets::StyledSliderInt("Hold Ticks", &ac->holdTicks, 1, 120, theme)) {
+            ac->holdTicks = std::clamp(ac->holdTicks, 1, 120);
+            ac->reset();
+            mod->setSavedValue("ac_hold_ticks", ac->holdTicks);
+        }
+        if (Widgets::StyledSliderInt("Release Ticks", &ac->releaseTicks, 1, 120, theme)) {
+            ac->releaseTicks = std::clamp(ac->releaseTicks, 1, 120);
+            ac->reset();
+            mod->setSavedValue("ac_release_ticks", ac->releaseTicks);
+        }
+        cps = ac->legacyClicksPerSecond(eng->tickRate);
+    }
+
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
-    auto cpsText = trFormat(
-        "~{cps} clicks/sec at {tps} TPS",
-        fmt::arg("cps", fmt::format("{:.1f}", cps)),
-        fmt::arg("tps", fmt::format("{:.0f}", eng->tickRate))
-    );
+    auto cpsText = ac->isTimedMode()
+        ? trFormat(
+            "~{cps} clicks/sec with fractional substeps",
+            fmt::arg("cps", fmt::format("{:.0f}", cps))
+        )
+        : trFormat(
+            "~{cps} clicks/sec at {tps} TPS",
+            fmt::arg("cps", fmt::format("{:.1f}", cps)),
+            fmt::arg("tps", fmt::format("{:.0f}", eng->tickRate))
+        );
     ImGui::TextUnformatted(cpsText.c_str());
+    if (ac->isTimedMode()) {
+        imguiTextWrappedTr("Timed mode records fractional offsets without raising TPS.");
+    }
     ImGui::PopStyleColor();
 
     ImGui::Dummy(ImVec2(0, 8));
@@ -2634,7 +3357,6 @@ void MenuInterface::drawAutoclickerTab() {
 
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Keybind", theme);
-
     Widgets::KeybindButton("Toggle Autoclicker", &keybinds.autoclicker, theme, anim);
 }
 
@@ -2657,6 +3379,10 @@ void MenuInterface::drawClicksTab() {
                 if (csm->availablePacksP2[i] == csm->activePackNameP2) { clickPackIndexP2 = i; break; }
             }
         }
+        if (!csm->availablePacks.empty()) clickPackIndex = std::clamp(clickPackIndex, 0, (int)csm->availablePacks.size() - 1);
+        else clickPackIndex = 0;
+        if (!csm->availablePacksP2.empty()) clickPackIndexP2 = std::clamp(clickPackIndexP2, 0, (int)csm->availablePacksP2.size() - 1);
+        else clickPackIndexP2 = 0;
     }
 
     ImGui::Dummy(ImVec2(0, 4));
@@ -2875,36 +3601,41 @@ void MenuInterface::drawClicksTab() {
                 mod->setSavedValue("click_release_vol_p2", (double)csm->p2Pack.releaseVolume);
         }
     }
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Keybind", theme);
+    Widgets::KeybindButton("Toggle Click Sounds", &keybinds.clickSounds, theme, anim);
 }
 
 void MenuInterface::drawSettingsTab() {
     auto* eng = ReplayEngine::get();
     auto* mod = Mod::get();
+    auto* csm = ClickSoundManager::get();
 
     Widgets::SectionHeader("Customization", theme);
 
     imguiTextTr("Language");
     ImGui::SetNextItemWidth(-1);
     {
-        using toasty::i18n::UiLanguage;
+        using toasty::lang::UiLanguage;
         static constexpr UiLanguage languages[] = {
             UiLanguage::Auto,
             UiLanguage::English,
             UiLanguage::Spanish,
         };
 
-        UiLanguage configuredLanguage = toasty::i18n::getConfiguredLanguage();
-        std::string preview = std::string(toasty::i18n::getLanguageDisplayName(configuredLanguage));
+        UiLanguage configuredLanguage = toasty::lang::getConfiguredLanguage();
+        std::string preview = std::string(toasty::lang::getLanguageDisplayName(configuredLanguage));
         if (ImGui::BeginCombo("##uiLanguage", preview.c_str())) {
             for (auto language : languages) {
-                std::string displayName = std::string(toasty::i18n::getLanguageDisplayName(language));
+                std::string displayName = std::string(toasty::lang::getLanguageDisplayName(language));
                 bool selected = configuredLanguage == language;
                 if (ImGui::Selectable(displayName.c_str(), selected)) {
                     mod->setSettingValue<std::string>(
                         "ui_language",
-                        std::string(toasty::i18n::getLanguageSettingValue(language))
+                        std::string(toasty::lang::getLanguageSettingValue(language))
                     );
-                    toasty::i18n::refresh();
+                    toasty::lang::refresh();
                 }
                 if (selected) ImGui::SetItemDefaultFocus();
             }
@@ -3021,6 +3752,49 @@ void MenuInterface::drawSettingsTab() {
     }
     if (eng->engineMode != MODE_DISABLED) ImGui::EndDisabled();
 
+    {
+        ImGui::Dummy(ImVec2(0, 6));
+
+        auto cbfLabel = trString("CBF (Buy Pro)");
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        constexpr float switchW = 44.0f;
+        constexpr float switchH = 22.0f;
+        constexpr float switchR = switchH * 0.5f;
+        float labelW = ImGui::CalcTextSize(cbfLabel.c_str()).x;
+
+        ImGui::InvisibleButton("##cbfProOnlyDisabled", ImVec2(switchW + 12.0f + labelW, switchH));
+        if (ImGui::IsItemHovered()) {
+            auto tooltip = trString("Buy Pro to use CBF.");
+            ImGui::SetTooltip("%s", tooltip.c_str());
+        }
+
+        dl->AddRectFilled(
+            pos,
+            ImVec2(pos.x + switchW, pos.y + switchH),
+            toU32(ImVec4(0.16f, 0.16f, 0.18f, 0.36f)),
+            switchR
+        );
+        dl->AddRect(
+            pos,
+            ImVec2(pos.x + switchW, pos.y + switchH),
+            toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.08f)),
+            switchR,
+            0,
+            1.0f
+        );
+        dl->AddCircleFilled(
+            ImVec2(pos.x + switchR, pos.y + switchR),
+            switchR - 2.0f,
+            toU32(ImVec4(0.43f, 0.43f, 0.47f, 0.74f))
+        );
+        dl->AddText(
+            ImVec2(pos.x + switchW + 12.0f, pos.y + 2.0f),
+            toU32(withAlpha(theme.textSecondary, 0.52f)),
+            cbfLabel.c_str()
+        );
+    }
+
     if (eng->engineMode != MODE_DISABLED) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
         imguiTextWrappedTr("Stop recording or playback before changing accuracy mode.");
@@ -3036,31 +3810,79 @@ void MenuInterface::drawSettingsTab() {
     Widgets::SectionHeader("Advanced", theme);
 
     Widgets::ModuleCard("FastPlayback", "Start playback without restarting the level", &eng->fastPlayback, theme, anim);
+    if (Widgets::ModuleCard("Autosave", "Automatically save completed recordings", &eng->completionAutosave, theme, anim)) {
+        if (eng->completionAutosave && eng->persistenceMode) {
+            eng->setPersistenceMode(false);
+        }
+        mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
+    }
+    if (eng->engineMode != MODE_DISABLED) ImGui::BeginDisabled();
+    if (Widgets::ModuleCard("Persistence Mode", "Keep failed attempts before the completed run", &eng->persistenceMode, theme, anim)) {
+        eng->setPersistenceMode(eng->persistenceMode);
+    }
+    if (eng->engineMode != MODE_DISABLED) ImGui::EndDisabled();
+    if (Widgets::ModuleCard(
+        "Mute Left/Right Clicks",
+        "Disable click sounds for platformer left and right inputs",
+        &csm->muteLeftRightClicks,
+        theme,
+        anim
+    )) {
+        mod->setSavedValue("click_mute_left_right", csm->muteLeftRightClicks);
+    }
+    bool prevRenderWatermarkEnabled = renderWatermarkEnabled;
+    if (Widgets::ModuleCardBegin("Render Watermark", "Add a watermark into rendered video only", &renderWatermarkEnabled, theme, anim)) {
+        renderWatermarkFont = sanitizeRenderWatermarkFont(renderWatermarkFont);
+        renderWatermarkCorner = sanitizeRenderWatermarkCorner(renderWatermarkCorner);
+        renderWatermarkScale = sanitizeClamped(renderWatermarkScale, 0.25f, 3.0f, 1.0f);
 
-    ImGui::Dummy(ImVec2(0, 12));
-    Widgets::SectionHeader("Keybinds", theme);
+        imguiTextTr("Watermark Font");
+        ImGui::SetNextItemWidth(-1);
+        auto fontPreview = trString(getRenderWatermarkFontLabel(renderWatermarkFont));
+        if (ImGui::BeginCombo("##renderWatermarkFont", fontPreview.c_str())) {
+            for (int fontOption = RENDER_WATERMARK_FONT_NORMAL_PUSAB; fontOption <= RENDER_WATERMARK_FONT_GOLD_PUSAB; ++fontOption) {
+                bool selected = renderWatermarkFont == fontOption;
+                auto label = trString(getRenderWatermarkFontLabel(fontOption));
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    renderWatermarkFont = fontOption;
+                    mod->setSavedValue("render_watermark_font", renderWatermarkFont);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
 
-    struct KeybindEntry { const char* label; int* keyPtr; bool alwaysShow; };
-    KeybindEntry kbEntries[] = {
-        {"Menu Toggle",   &keybinds.menu,          true},
-        {"Frame Advance", &keybinds.frameAdvance,  true},
-        {"Frame Step",    &keybinds.frameStep,     true},
-        {"Replay Toggle", &keybinds.replayToggle,  false},
-        {"Noclip",        &keybinds.noclip,        false},
-        {"Safe Mode",     &keybinds.safeMode,      false},
-        {"Trajectory",    &keybinds.trajectory,     false},
-        {"Hitboxes",      &keybinds.hitboxes,      false},
-        {"Audio Pitch",   &keybinds.audioPitch,    false},
-        {"RNG Lock",      &keybinds.rngLock,       false},
-        {"Layout Mode",   &keybinds.layoutMode,    false},
-        {"No Mirror",     &keybinds.noMirror,      false},
-    };
-    bool firstKb = true;
-    for (auto& e : kbEntries) {
-        if (!e.alwaysShow && *e.keyPtr == 0) continue;
-        if (!firstKb) ImGui::Dummy(ImVec2(0, 4));
-        Widgets::KeybindButton(e.label, e.keyPtr, theme, anim);
-        firstKb = false;
+        ImGui::Dummy(ImVec2(0, 6));
+        imguiTextTr("Watermark Position");
+        ImGui::SetNextItemWidth(-1);
+        auto positionPreview = trString(getRenderWatermarkCornerLabel(renderWatermarkCorner));
+        if (ImGui::BeginCombo("##renderWatermarkCorner", positionPreview.c_str())) {
+            for (int cornerOption = RENDER_WATERMARK_CORNER_TOP_LEFT; cornerOption <= RENDER_WATERMARK_CORNER_BOTTOM_RIGHT; ++cornerOption) {
+                bool selected = renderWatermarkCorner == cornerOption;
+                auto label = trString(getRenderWatermarkCornerLabel(cornerOption));
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    renderWatermarkCorner = cornerOption;
+                    mod->setSavedValue("render_watermark_corner", renderWatermarkCorner);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::Dummy(ImVec2(0, 6));
+        if (Widgets::StyledSliderFloat("Watermark Size", &renderWatermarkScale, 0.25f, 3.0f, theme, true)) {
+            renderWatermarkScale = sanitizeClamped(renderWatermarkScale, 0.25f, 3.0f, 1.0f);
+            mod->setSavedValue("render_watermark_scale", renderWatermarkScale);
+        }
+
+        Widgets::ModuleCardEnd();
+    }
+    if (renderWatermarkEnabled != prevRenderWatermarkEnabled) {
+        mod->setSavedValue("render_watermark_enabled", renderWatermarkEnabled);
     }
 
     ImGui::Dummy(ImVec2(0, 12));
@@ -3069,11 +3891,107 @@ void MenuInterface::drawSettingsTab() {
         anim.animSpeed = 8.0f;
         anim.openDirection = ANIM_CENTER;
         eng->fastPlayback = false;
+        eng->disableShaders = false;
+        eng->persistenceMode = false;
         eng->selectedAccuracyMode = AccuracyMode::Vanilla;
         ReplayEngine::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
+        csm->muteLeftRightClicks = false;
         ambientWavesEnabled = true;
+        renderWatermarkEnabled = false;
+        renderWatermarkFont = RENDER_WATERMARK_FONT_NORMAL_PUSAB;
+        renderWatermarkCorner = RENDER_WATERMARK_CORNER_BOTTOM_RIGHT;
+        renderWatermarkScale = 1.0f;
         saveSettings();
     }
+
+    ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Credits", theme);
+    if (Widgets::StyledButton("View Credits", ImVec2(-1, 32), theme, anim)) {
+        ImGui::OpenPopup("Credits##settingsCredits");
+    }
+
+    constexpr float kCreditsPopupRounding = 0.0f;
+    ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kCreditsPopupRounding);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
+    if (ImGui::BeginPopupModal(
+        "Credits##settingsCredits",
+        nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+    )) {
+        auto creditsTitle = trString("Credits");
+        drawPopupChrome(*this, creditsTitle.c_str(), kCreditsPopupRounding);
+
+        Widgets::SectionHeader("Fellow Devs", theme);
+
+        struct CreditEntry {
+            const char* name;
+            const char* url;
+            const char* buttonId;
+        };
+
+        static constexpr std::array<CreditEntry, 3> credits = {{
+            {"ThisisLinh", "https://github.com/linhisreal", "GitHub##creditsLinh"},
+            {"Nigel", "https://github.com/guccimanefan", "GitHub##creditsNigel"},
+            {"Human", "https://github.com/MEME-KING16", "GitHub##creditsHuman"},
+        }};
+
+        auto drawCreditRow = [&](CreditEntry const& credit) {
+            ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            float rowW = ImGui::GetContentRegionAvail().x;
+            constexpr float rowH = 46.0f;
+            ImVec2 rowMax(rowPos.x + rowW, rowPos.y + rowH);
+
+            drawSolidRect(ImGui::GetWindowDrawList(), rowPos, rowMax, theme.cornerRadius, theme, 0.44f);
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 12.0f, rowPos.y + 8.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
+            ImGui::TextUnformatted(credit.name);
+            ImGui::PopStyleColor();
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 12.0f, rowPos.y + 27.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+            ImGui::TextUnformatted(credit.url);
+            ImGui::PopStyleColor();
+
+            constexpr float buttonW = 82.0f;
+            constexpr float buttonH = 26.0f;
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + rowW - buttonW - 10.0f, rowPos.y + 10.0f));
+            if (Widgets::StyledButton(credit.buttonId, ImVec2(buttonW, buttonH), theme, anim, 6.0f)) {
+                geode::utils::web::openLinkInBrowser(credit.url);
+            }
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowMax.y + 6.0f));
+        };
+
+        for (auto const& credit : credits) {
+            drawCreditRow(credit);
+        }
+
+        ImGui::Dummy(ImVec2(0, 2));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+        ImGui::TextWrapped(
+            "%s",
+            "Thank you to my loyal devs, and to all the supporters who have kept ToastyReplay alive and running, your contributions mean the world to me. If you want to contribute to this project, buying ToastyReplay Pro helps support me, and my devs."
+        );
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy(ImVec2(0, 8));
+        if (Widgets::StyledButton("Open ToastyReplay Website##creditsWebsite", ImVec2(-1, 30.0f), theme, anim, 6.0f)) {
+            geode::utils::web::openLinkInBrowser("https://toastyreplay.xyz/");
+        }
+        ImGui::Dummy(ImVec2(0, 4));
+        if (Widgets::StyledButton("Ok##creditsClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
 }
 
 static void saveColor(const char* prefix, const ImVec4& col) {
@@ -3203,8 +4121,32 @@ void MenuInterface::drawOnlineTab() {
         if (selectedUploadMacro >= static_cast<int>(macros.size()))
             selectedUploadMacro = -1;
 
+        auto uploadMacroLabel = [engine](std::string const& macroName) {
+            std::string label = macroName;
+            if (engine->ttr2Macros.count(macroName)) {
+                label += "  [TTR2]";
+            } else if (engine->ttrMacros.count(macroName)) {
+                label += "  [TTR]";
+            } else {
+                label += "  [GDR]";
+            }
+            if (engine->cbsMacros.count(macroName)) label += " [CBS]";
+            if (engine->legacyCbsMacros.count(macroName) && !engine->ttr2Macros.count(macroName)) label += " [PLAYBACK ONLY]";
+            if (engine->platformerMacros.count(macroName)) {
+                label += " [";
+                label += trString("PLAT");
+                label += "]";
+            }
+            return label;
+        };
+
         auto emptyMacroPreview = trString("Select a macro...");
-        const char* preview = selectedUploadMacro >= 0 ? macros[selectedUploadMacro].c_str() : emptyMacroPreview.c_str();
+        std::string selectedMacroPreview;
+        const char* preview = emptyMacroPreview.c_str();
+        if (selectedUploadMacro >= 0) {
+            selectedMacroPreview = uploadMacroLabel(macros[selectedUploadMacro]);
+            preview = selectedMacroPreview.c_str();
+        }
 
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 20, 25, 200));
         ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(25, 25, 30, 240));
@@ -3215,9 +4157,7 @@ void MenuInterface::drawOnlineTab() {
                 if (engine->incompatibleMacros.count(macros[i])) continue;
 
                 bool selected = (selectedUploadMacro == i);
-                std::string label = macros[i];
-                if (engine->ttrMacros.count(macros[i])) label += "  [TTR]";
-                else label += "  [GDR]";
+                std::string label = uploadMacroLabel(macros[i]);
 
                 if (ImGui::Selectable(label.c_str(), selected)) {
                     selectedUploadMacro = i;
@@ -3242,7 +4182,11 @@ void MenuInterface::drawOnlineTab() {
 
         ImGui::Dummy(ImVec2(0, 4));
 
+        bool selectedLegacyCBS = selectedUploadMacro >= 0 &&
+            engine->legacyCbsMacros.count(macros[selectedUploadMacro]) &&
+            !engine->ttr2Macros.count(macros[selectedUploadMacro]);
         bool canUpload = selectedUploadMacro >= 0 &&
+            !selectedLegacyCBS &&
             online->uploadState != OnlineClient::PENDING &&
             online->canUploadMacros();
         if (!canUpload) ImGui::BeginDisabled();
@@ -3252,6 +4196,11 @@ void MenuInterface::drawOnlineTab() {
             uploadCommentBuf[0] = '\0';
         }
         if (!canUpload) ImGui::EndDisabled();
+        if (selectedLegacyCBS) {
+            ImGui::Dummy(ImVec2(0, 4));
+            auto legacyText = trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+            ImGui::TextWrapped("%s", legacyText.c_str());
+        }
     }
 
     if (!uploadRestriction.empty()) {
@@ -3341,6 +4290,17 @@ void MenuInterface::drawOnlineTab() {
         ImGui::TextWrapped("%s", online->issueResultMsg.c_str());
         ImGui::PopStyleColor();
     }
+
+    ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Upgrade to Pro", theme);
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+    imguiTextWrappedTr("Create or sign in to your ToastyReplay account to upgrade.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 6));
+    if (Widgets::StyledButton("Open ToastyReplay Website", ImVec2(-1, 32), theme, anim)) {
+        geode::utils::web::openLinkInBrowser("https://toastyreplay.xyz/");
+    }
 }
 
 void MenuInterface::saveSettings() {
@@ -3379,12 +4339,15 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("key_hitboxes", keybinds.hitboxes);
     mod->setSavedValue("key_layout_mode", keybinds.layoutMode);
     mod->setSavedValue("key_no_mirror", keybinds.noMirror);
+    mod->setSavedValue("key_disable_shaders", keybinds.disableShaders);
+    mod->setSavedValue("key_click_sounds", keybinds.clickSounds);
 
     mod->setSavedValue("hack_hitboxes", eng->showHitboxes);
     mod->setSavedValue("hack_hitbox_death", eng->hitboxOnDeath);
     mod->setSavedValue("hack_hitbox_trail", eng->hitboxTrail);
     mod->setSavedValue("hack_hitbox_trail_len", eng->hitboxTrailLength);
     mod->setSavedValue("hack_trajectory", eng->pathPreview);
+    eng->pathLength = ReplayEngine::sanitizeTrajectoryLength(eng->pathLength);
     mod->setSavedValue("hack_trajectory_len", eng->pathLength);
     mod->setSavedValue("hack_noclip", eng->collisionBypass);
     mod->setSavedValue("hack_noclip_flash", eng->noclipDeathFlash);
@@ -3397,6 +4360,7 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("hack_audio_pitch", eng->audioPitchEnabled);
     mod->setSavedValue("hack_no_mirror", eng->noMirrorEffect);
     mod->setSavedValue("hack_layout_mode", eng->layoutMode);
+    mod->setSavedValue("hack_disable_shaders", eng->disableShaders);
     mod->setSavedValue("hack_no_mirror_rec_only", eng->noMirrorRecordingOnly);
     mod->setSavedValue("hack_fast_playback", eng->fastPlayback);
 
@@ -3404,8 +4368,11 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("ac_enabled", ac->enabled);
     mod->setSavedValue("ac_player1", ac->player1);
     mod->setSavedValue("ac_player2", ac->player2);
+    mod->setSavedValue("ac_mode", static_cast<int>(ac->mode));
     mod->setSavedValue("ac_hold_ticks", ac->holdTicks);
     mod->setSavedValue("ac_release_ticks", ac->releaseTicks);
+    mod->setSavedValue("ac_target_cps", (double)ac->targetCps);
+    mod->setSavedValue("ac_hold_ratio", (double)ac->holdRatio);
     mod->setSavedValue("ac_only_holding", ac->onlyWhileHolding);
     mod->setSavedValue("key_autoclicker", keybinds.autoclicker);
 
@@ -3413,6 +4380,8 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("eng_tick_rate", (float)eng->tickRate);
     mod->setSavedValue("eng_speed", (float)eng->gameSpeed);
     mod->setSavedValue("eng_ttr_mode", eng->ttrMode);
+    mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
+    mod->setSavedValue("eng_persistence_mode", eng->persistenceMode);
 
     mod->setSavedValue("render_width", (int64_t)std::atoi(renderWidthBuf));
     mod->setSavedValue("render_height", (int64_t)std::atoi(renderHeightBuf));
@@ -3430,6 +4399,10 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("render_music_volume", (double)renderMusicVol);
     mod->setSavedValue("render_hide_endscreen", renderHideEndscreen);
     mod->setSavedValue("render_hide_levelcomplete", renderHideLevelComplete);
+    mod->setSavedValue("render_watermark_enabled", renderWatermarkEnabled);
+    mod->setSavedValue("render_watermark_font", renderWatermarkFont);
+    mod->setSavedValue("render_watermark_corner", renderWatermarkCorner);
+    mod->setSavedValue("render_watermark_scale", renderWatermarkScale);
 
     auto* csm = ClickSoundManager::get();
     mod->setSavedValue("click_enabled", csm->enabled);
@@ -3442,6 +4415,7 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("click_delay_max", (double)csm->clickDelayMax);
     mod->setSavedValue("click_play_during_playback", csm->playDuringPlayback);
     mod->setSavedValue("click_separate_p2", csm->separateP2Clicks);
+    mod->setSavedValue("click_mute_left_right", csm->muteLeftRightClicks);
     mod->setSavedValue("click_pack_p2", csm->activePackNameP2);
     mod->setSavedValue("click_hard_vol_p2", (double)csm->p2Pack.hardVolume);
     mod->setSavedValue("click_soft_vol_p2", (double)csm->p2Pack.softVolume);
@@ -3569,21 +4543,33 @@ void MenuInterface::loadSettings() {
     keybinds.layoutMode = mod->getSavedValue<int>("key_layout_mode", 0);
     keybinds.noMirror = mod->getSavedValue<int>("key_no_mirror", 0);
     keybinds.autoclicker = mod->getSavedValue<int>("key_autoclicker", 0);
+    keybinds.disableShaders = mod->getSavedValue<int>("key_disable_shaders", 0);
+    keybinds.clickSounds = mod->getSavedValue<int>("key_click_sounds", 0);
 
     auto* ac = Autoclicker::get();
     ac->enabled = mod->getSavedValue<bool>("ac_enabled", false);
     ac->player1 = mod->getSavedValue<bool>("ac_player1", true);
     ac->player2 = mod->getSavedValue<bool>("ac_player2", false);
+    ac->mode = sanitizeAutoclickerMode(mod->getSavedValue<int>("ac_mode", 0));
     ac->holdTicks = mod->getSavedValue<int>("ac_hold_ticks", 1);
     ac->releaseTicks = mod->getSavedValue<int>("ac_release_ticks", 1);
+    ac->targetCps = static_cast<float>(mod->getSavedValue<double>("ac_target_cps", 1000.0));
+    ac->holdRatio = static_cast<float>(mod->getSavedValue<double>("ac_hold_ratio", 0.5));
     ac->onlyWhileHolding = mod->getSavedValue<bool>("ac_only_holding", false);
+    ac->holdTicks = std::clamp(ac->holdTicks, 1, 120);
+    ac->releaseTicks = std::clamp(ac->releaseTicks, 1, 120);
+    ac->targetCps = std::clamp(ac->targetCps, 1.0f, 20000.0f);
+    ac->holdRatio = std::clamp(ac->holdRatio, 0.05f, 0.95f);
+    ac->reset();
 
     eng->showHitboxes = mod->getSavedValue<bool>("hack_hitboxes", false);
     eng->hitboxOnDeath = mod->getSavedValue<bool>("hack_hitbox_death", false);
     eng->hitboxTrail = mod->getSavedValue<bool>("hack_hitbox_trail", false);
     eng->hitboxTrailLength = mod->getSavedValue<int>("hack_hitbox_trail_len", 240);
     eng->pathPreview = mod->getSavedValue<bool>("hack_trajectory", false);
-    eng->pathLength = mod->getSavedValue<int>("hack_trajectory_len", 312);
+    eng->pathLength = ReplayEngine::sanitizeTrajectoryLength(
+        mod->getSavedValue<int>("hack_trajectory_len", ReplayEngine::kTrajectoryLengthDefault)
+    );
     eng->collisionBypass = mod->getSavedValue<bool>("hack_noclip", false);
     eng->noclipDeathFlash = mod->getSavedValue<bool>("hack_noclip_flash", true);
     eng->noclipDeathColorR = mod->getSavedValue<float>("hack_noclip_color_r", 1.0f);
@@ -3595,14 +4581,17 @@ void MenuInterface::loadSettings() {
     eng->audioPitchEnabled = mod->getSavedValue<bool>("hack_audio_pitch", true);
     eng->noMirrorEffect = mod->getSavedValue<bool>("hack_no_mirror", false);
     eng->layoutMode = mod->getSavedValue<bool>("hack_layout_mode", false);
+    eng->disableShaders = mod->getSavedValue<bool>("hack_disable_shaders", false);
     eng->noMirrorRecordingOnly = mod->getSavedValue<bool>("hack_no_mirror_rec_only", false);
     eng->fastPlayback = mod->getSavedValue<bool>("hack_fast_playback", false);
     eng->selectedAccuracyMode = sanitizeAccuracyMode(mod->getSavedValue<int>("eng_accuracy_mode", 0));
     eng->tickRate = mod->getSavedValue<float>("eng_tick_rate", 240.f);
     eng->gameSpeed = mod->getSavedValue<float>("eng_speed", 1.0f);
     eng->ttrMode = mod->getSavedValue<bool>("eng_ttr_mode", true);
-    if (eng->selectedAccuracyMode == AccuracyMode::CBF) {
-        eng->selectedAccuracyMode = AccuracyMode::Vanilla;
+    eng->completionAutosave = mod->getSavedValue<bool>("eng_completion_autosave", true);
+    eng->persistenceMode = mod->getSavedValue<bool>("eng_persistence_mode", false);
+    if (eng->persistenceMode) {
+        eng->completionAutosave = false;
     }
     ReplayEngine::applyRuntimeAccuracyMode(eng->selectedAccuracyMode);
 
@@ -3612,6 +4601,10 @@ void MenuInterface::loadSettings() {
     windowSize.x = sanitizeClamped(mod->getSavedValue<float>("window_size_w", 580.0f), 480.0f, 2000.0f, 580.0f);
     windowSize.y = sanitizeClamped(mod->getSavedValue<float>("window_size_h", 540.0f), 400.0f, 2000.0f, 540.0f);
     mainSubTab = std::clamp(mod->getSavedValue<int>("main_sub_tab", 0), 0, 2);
+    renderWatermarkEnabled = mod->getSavedValue<bool>("render_watermark_enabled", false);
+    renderWatermarkFont = sanitizeRenderWatermarkFont(mod->getSavedValue<int>("render_watermark_font", RENDER_WATERMARK_FONT_NORMAL_PUSAB));
+    renderWatermarkCorner = sanitizeRenderWatermarkCorner(mod->getSavedValue<int>("render_watermark_corner", RENDER_WATERMARK_CORNER_BOTTOM_RIGHT));
+    renderWatermarkScale = sanitizeClamped(mod->getSavedValue<float>("render_watermark_scale", 1.0f), 0.25f, 3.0f, 1.0f);
 
     loadRenderSettings();
 
@@ -3626,6 +4619,7 @@ void MenuInterface::loadSettings() {
     csm->clickDelayMax = static_cast<float>(mod->getSavedValue<double>("click_delay_max", 0.0));
     csm->playDuringPlayback = mod->getSavedValue<bool>("click_play_during_playback", true);
     csm->separateP2Clicks = mod->getSavedValue<bool>("click_separate_p2", false);
+    csm->muteLeftRightClicks = mod->getSavedValue<bool>("click_mute_left_right", false);
     csm->activePackNameP2 = mod->getSavedValue<std::string>("click_pack_p2", "");
     csm->p2Pack.hardVolume = static_cast<float>(mod->getSavedValue<double>("click_hard_vol_p2", 1.0));
     csm->p2Pack.softVolume = static_cast<float>(mod->getSavedValue<double>("click_soft_vol_p2", 0.5));
@@ -3779,20 +4773,22 @@ void MenuInterface::drawInterface() {
     if (shouldShowWatermark) {
         ImGuiIO& io = ImGui::GetIO();
         ImFont* wmFont = fontSmall ? fontSmall : ImGui::GetFont();
-        const char* wmText = "ToastyReplay v" MOD_VERSION;
-        ImVec2 textSz = wmFont->CalcTextSizeA(wmFont->FontSize, FLT_MAX, 0.f, wmText);
-        ImVec2 wmPos(
-            (io.DisplaySize.x - textSz.x) * 0.5f,
-            io.DisplaySize.y - 25.0f
-        );
         ImVec4 a = theme.getAccent();
-        float wmAlpha = menuVisible
-            ? 0.6f * anim.easeOutCubic(anim.openProgress)
-            : 0.6f;
-        ImGui::GetForegroundDrawList()->AddText(
-            wmFont, wmFont->FontSize, wmPos,
-            toU32(ImVec4(a.x, a.y, a.z, wmAlpha)), wmText
-        );
+        auto versionText = toasty::branding::versionText();
+        toasty::watermark::PlaybackWatermarkFrame frame;
+        frame.structSize = sizeof(frame);
+        frame.drawList = ImGui::GetForegroundDrawList();
+        frame.font = wmFont;
+        frame.fontSize = wmFont ? wmFont->FontSize : ImGui::GetFontSize();
+        frame.displaySize = io.DisplaySize;
+        frame.accent = a;
+        frame.alpha = menuVisible ? 0.6f * anim.easeOutCubic(anim.openProgress) : 0.6f;
+        frame.menuVisible = menuVisible;
+        frame.playbackVisible = inPlayback;
+        frame.productName = toasty::branding::kProductName;
+        frame.versionText = versionText.c_str();
+        frame.editionLabel = toasty::branding::kEditionLabel;
+        toasty::watermark::drawPlaybackWatermark(frame);
     }
 
     if (!shown && anim.openProgress <= 0.0f) {
@@ -3820,7 +4816,7 @@ void MenuInterface::drawInterface() {
 
 void MenuInterface::initialize() {
     ImGuiIO& io = ImGui::GetIO();
-    toasty::i18n::initialize();
+    toasty::lang::initialize();
 
     auto regularPath = Mod::get()->getResourcesDir() / "Inter-Regular.ttf";
     auto boldPath = Mod::get()->getResourcesDir() / "Inter-Bold.ttf";
@@ -3864,6 +4860,17 @@ void MenuInterface::initialize() {
     captureReplayDirectoryTimestamp();
     replayListDirty = true;
     replayRefreshQueued = true;
+
+    // Load logo texture
+    auto logoPath = Mod::get()->getPackagePath() / "logo.png";
+    if (!std::filesystem::exists(logoPath)) {
+        logoPath = Mod::get()->getTempDir() / "logo.png";
+    }
+    if (std::filesystem::exists(logoPath)) {
+        auto pathStr = toasty::pathToUtf8(logoPath);
+        logoTexture = CCTextureCache::sharedTextureCache()->addImage(pathStr.c_str(), false);
+        if (logoTexture) logoTexture->retain();
+    }
 }
 
 $on_mod(Loaded) {
@@ -3873,3 +4880,19 @@ $on_mod(Loaded) {
         MenuInterface::get()->drawInterface();
     });
 }
+
+#include <Geode/modify/MenuLayer.hpp>
+
+class $modify(FirstRunMenuLayer, MenuLayer) {
+    bool init() {
+        if (!MenuLayer::init()) return false;
+
+        auto* mod = Mod::get();
+        if (!mod->getSavedValue<bool>("first_run_shown", false)) {
+            mod->setSavedValue("first_run_shown", true);
+            Notification::create("Press B to open ToastyReplay!", NotificationIcon::Info, 4.0f)->show();
+        }
+
+        return true;
+    }
+};
