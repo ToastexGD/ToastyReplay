@@ -6,11 +6,11 @@
 
 **Geometry Dash's most accurate replay bot.**
 
-Record, playback, edit, and render frame-perfect macros with 100% accuracy.
+Record, playback, edit, convert, and render frame-perfect macros with 100% accuracy.
 
-[![Geode](https://img.shields.io/badge/Geode-v5.3.0-blue?style=flat-square)](https://geode-sdk.org)
+[![Geode](https://img.shields.io/badge/Geode-v5.7.1-blue?style=flat-square)](https://geode-sdk.org)
 [![GD](https://img.shields.io/badge/GD-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
-[![Version](https://img.shields.io/badge/version-v1.3.0-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
+[![Version](https://img.shields.io/badge/version-v2.0.0-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
 
 </div>
@@ -25,8 +25,9 @@ Record, playback, edit, and render frame-perfect macros with 100% accuracy.
 
 ### Recording & Playback
 - Frame-perfect macro recording at any TPS
-- Two native formats: **TTR** (A compact binary made by me) and **GDR** (legacy format which had previous support)
-- Full two-player and normal replay support (Platformer soon trust)
+- Two native formats: **TTR2** (the new compact binary, default) and **GDR** (legacy support kept around)
+- Legacy **TTR** files auto-detected and loaded with no extra steps
+- Full two-player and platformer macro support
 - Practice mode recording with checkpoint snapshots
 - Start position support with tick offset
 
@@ -36,22 +37,33 @@ Record, playback, edit, and render frame-perfect macros with 100% accuracy.
 ### Accuracy Modes
 - **Vanilla** for standard frame-by-frame (No sub-step compatability)
 - **CBS** (Click Between Steps) for native sub-step timing (ingame option)
-- **CBF** (Click Between Frames) via Syzzi's mod 
+- **CBF** (Click Between Frames) via Syzzi's mod
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
+### Macro Conversion (new in v2)
+- Import macros from **30+ external replay bots** and convert to TTR2 or GDR
+- Supports: MegaHack JSON/Binary, TasBot, zBot, OmegaBot, YBot / YBot 2, xdBot, XBot, Echo, Amethyst, Osu Replay, GDMO, ReplayBot, Rush, KDBot, DDHOR, QBot, RBot, Zephyrus, ReplayEngine 1/2/3, Silicate 1/2/3, GDR2, UvBot, TCBot, and plaintext dumps
+- Auto-detects the source format, surfaces unsupported edge cases with a warning instead of silently breaking
+- Conversions panel lives in the Replay tab (collapsible if you dont care)
+
+</td>
+<td width="50%" valign="top">
+
 ### Frame Editor
 - Visual timeline with drag and edit input segments
 - Zoom, scroll, and overview bar for ease of access
 - Per-player input lanes (for 1 and 2 player)
-- Full undo/redo stack ability (200 in depth)
+- Full undo/redo with a commit-based history (200 in depth)
 - Drag edges to resize holds, move segments to retime inputs
 - Each input is frame changeable, Macro editor will NEVER support CBS/CBF macros.
 
 </td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
 ### Video Rendering
@@ -63,8 +75,6 @@ Record, playback, edit, and render frame-perfect macros with 100% accuracy.
 - Extended fallback for FFmpeg.exe for extra customizability.
 
 </td>
-</tr>
-<tr>
 <td width="50%" valign="top">
 
 ### Click Sounds
@@ -72,31 +82,36 @@ Record, playback, edit, and render frame-perfect macros with 100% accuracy.
 - Separate packs for Player 1 and Player 2
 - Softness slider, click delay randomization (For SpaceUK)
 - Background noise loop option
-
-</td>
-<td width="50%" valign="top">
-
-### Hacks & Tools
-- **Noclip** with accuracy %, Death limits, and customizable death flash.
-- **Hitboxes** (always-on, on-death, or trail mode)
-- **Trajectory** preview (300 frames ahead as a max)
-- **Safe Mode**, **Layout Mode**, **No Mirror**
-- **Autoclicker** with per-player configuration (1 and 2 player)
-- **RNG Lock** for random triggers (duhh)
-- **Speed Control** with audio pitch sync
-- **Frame Advance** (tick-by-tick/frame-by-frame stepping)
+- Hold/release buffer fix so packs dont cut off mid-press anymore
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### Online
-- Discord login with macro uploading
-- Bug report submission from in-game
-- Cloud macro sharing (to my discord)
+### Hacks & Tools
+- **Noclip** with accuracy %, Death limits, and customizable death flash.
+- **Hitboxes** (always-on, on-death, or trail mode)
+- **Trajectory** preview (300 frames ahead as a max), now backed by a dedicated physics sim module
+- **Safe Mode**, **Layout Mode**, **No Mirror**
+- **Disable Shaders** to kill all level shader effects in one click
+- **Autoclicker** with per-player configuration (1 and 2 player)
+- **RNG Lock** for random triggers (duhh)
+- **Speed Control** with audio pitch sync
+- **Frame Advance** (tick-by-tick/frame-by-frame stepping)
 
 </td>
+<td width="50%" valign="top">
+
+### Online
+- Discord login via device-code pairing (the 6-character code thing, no more 32-char hex session)
+- Refresh-token auth against the macro backend so a session lasts way longer
+- Macro uploading (TTR / TTR2 / GDR)
+- Bug report submission from in-game
+
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
 ### Customization
@@ -104,6 +119,16 @@ Record, playback, edit, and render frame-perfect macros with 100% accuracy.
 - Rebindable hotkeys for every feature
 - Glow cycle animation
 - Animated menu transitions
+- **Star ambient background** (new), drifting twinkles + occasional streaks
+- UI Language setting (English + Spanish for now)
+
+</td>
+<td width="50%" valign="top">
+
+### Engine & Tooling
+- Geode SDK **v5.7.1**
+- Watermark module runs as a runtime-loaded DLL with SHA-256 integrity check (bundled inside the .geode, no extra install)
+- Fixed timestep accumulator for TPS control, stable up to a million TPS
 
 </td>
 </tr>
@@ -113,7 +138,7 @@ Record, playback, edit, and render frame-perfect macros with 100% accuracy.
 
 ## How It Works
 
-> Everything below is updated for **v1.3.0**. If you want the quick version, just read the Features table above. (I hid the stuff below into dropdowns to save your eyes)
+> Everything below is updated for **v2.0.0**. If you want the quick version, just read the Features table above. (I hid the stuff below into dropdowns to save your eyes)
 
 ---
 
@@ -130,7 +155,7 @@ enum MacroMode {
 };
 ```
 
-Every input gets stored as a `MacroAction` extending [TTR] or [GDR](https://github.com/geode-sdk/GDReplayFormat):
+Every input gets stored as a `MacroAction` extending [TTR2] or [GDR](https://github.com/geode-sdk/GDReplayFormat):
 
 ```cpp
 struct MacroAction : gdr::Input {
@@ -159,20 +184,20 @@ while (inputIdx < inputList.size() && tick >= inputList[inputIdx].frame) {
 }
 ```
 
-Replays live as `.ttr` or `.gdr` files in the mod's save directory under `replays/`.
+Replays live as `.ttr` or `.gdr` files in the mod's save directory under `replays/`. The engine auto-detects v1 TTR vs the new TTR2 layout when loading, so old macros just keep working.
 
 </details>
 
 ---
 
 <details>
-<summary><h3>TTR Format (v1.3.0+)</h3></summary>
+<summary><h3>TTR2 Format (v2.0.0+)</h3></summary>
 
-The new native format. Compact binary with zlib compression. Way smaller than GDR files. (Yes I compressed it)
+The new native format. Same `TTR\0` magic, bumped internal version, still zlib-compressed. Way smaller than GDR files and stores more metadata about the run.
 
 ```
-Header: "TTR\0" format version (currently 4) + flags
-Payload: compressed of metadata + inputs + anchors 
+Header: "TTR\0" format version + flags
+Payload: compressed metadata + inputs + anchors
 ```
 
 **Flags stored per-macro:**
@@ -188,9 +213,42 @@ Payload: compressed of metadata + inputs + anchors
 
 **Metadata includes:** author, level name, level ID, framerate, duration, game version, and a unix timestamp of when it was recorded. (Level ID is 0 if in the editor or playback)
 
-**Playback Anchors** are checkpoint snapshots saved every 240 ticks (1 second). They store both players' full state (position, velocity, rotation, gravity, holds) plus the RNG seed. During playback the engine compares live state against anchors to catch and correct physics drift.  
+**Playback Anchors** are checkpoint snapshots saved every 240 ticks (1 second). They store both players' full state (position, velocity, rotation, gravity, holds) plus the RNG seed. During playback the engine compares live state against anchors to catch and correct physics drift.
 
-GDR is still supported for backward compatibility. The replay list automatically detects the format.
+Legacy TTR (v1.3.0 builds) and GDR are both still supported. The replay list automatically detects the format and tags it on the row so you know what you're loading.
+
+</details>
+
+---
+
+<details>
+<summary><h3>Macro Conversion</h3></summary>
+
+New in v2.0.0. Drop a macro from basically any other replay bot into the `replays/` folder and ToastyReplay will sniff out the format and let you convert it to TTR2 or GDR.
+
+**Supported source formats:**
+
+| Group | Formats |
+|-------|---------|
+| MegaHack | JSON + Binary |
+| TasBot | TasBot JSON |
+| zBot | ZBot Frame |
+| OmegaBot | OmegaBot |
+| YBot | YBot Frame, YBot 2 |
+| xdBot family | xdBot, XBot Frame |
+| Echo | Echo |
+| Amethyst | Amethyst |
+| Osu | Osu Replay |
+| Old stuff | GDMO, ReplayBot, Rush, KDBot, DDHOR, Plaintext |
+| Q/R/Z bots | QBot, RBot, Zephyrus |
+| ReplayEngine | 1, 2, 3 |
+| Silicate | 1, 2, 3 |
+| GDR2 | GDR2 |
+| Others | UvBot, TCBot |
+
+The conversion runs on a background thread so the menu doesnt freeze on huge macros. If a format is half-busted or missing fields (cough, some MegaHack binary dumps cough) you get a warning instead of a silent failure. Once a foreign macro is converted its source row gets tagged "Converted" so you dont accidentally do it twice.
+
+Conversions never overwrite the source file. The new .ttr / .gdr lands next to it in the `replays/` folder under whatever name you typed in the convert panel.
 
 </details>
 
@@ -215,7 +273,7 @@ stepDelta = m_currentStep - tickStartStep
 
 During playback, both the tick AND the step delta have to match before the input fires. This preserves the exact sub-step timing from the original run.
 
-The input timing system (new in v1.3.0) queues the sheer raw inputs with microsecond timestamps and converts them to fractional step phases. Up to 32 pending inputs can be queued at once.
+The input timing system queues the sheer raw inputs with microsecond timestamps and converts them to fractional step phases. Up to 32 pending inputs can be queued at once.
 
 Macros are tagged in the replay list so you know what accuracy mode they were recorded with. The engine auto-toggles the CBS game variable when loading those macros so you dont have to do it manually.
 
@@ -295,8 +353,10 @@ If `collisionLimitActive` is on and accuracy drops below `collisionThreshold`, n
 Creates invisible cloned `PlayerObject`s on level load. Every frame:
 
 1. Copy the real player's full state onto the clone
-2. Simulate `N` frames ahead (default 312) via `checkCollisions` + `update` + `updateRotation`
+2. Simulate `N` frames ahead (default 312) via the dedicated `trajectory::physics` module — same collision + ring + pad + portal logic as the real game, just driven manually
 3. Draw lines between each simulated position
+
+New in v2: the physics sim got pulled into its own module so portals, dash rings, pads, and bumps line up with the actual gameplay path way closer than before.
 
 **Color coding:**
 - **Green** = holding jump
@@ -351,7 +411,7 @@ Supports rectangles, circles, triangles, and oriented quads.
 <details>
 <summary><h3>Frame Editor</h3></summary>
 
-New in v1.3.0. A full visual timeline editor for your macros.
+A full visual timeline editor for your macros. Got a big upgrade in v2 with a proper commit-based history model so undo/redo never gets out of sync with the file on disk.
 
 **What you see:**
 - Horizontal ruler with frame tick marks
@@ -364,10 +424,10 @@ New in v1.3.0. A full visual timeline editor for your macros.
 - **Drag edges** to adjust when a press or release happens
 - **Scroll and zoom** (0.5x to 40x pixels per frame of superzoom)
 - **Go to frame** for quick navigation
-- **Undo/redo** with a 200-entry stack limit 
+- **Undo/redo** with a 200-entry stack limit, every edit gets recorded as a commit
 - **Delete inputs** and adjust step offsets
 
-Supports both TTR and GDR formats. Auto-detects two-player macros and shows both lanes. Player 2 gets a different color so you can tell them apart.
+Supports both TTR2 and GDR formats. Auto-detects two-player macros and shows both lanes. Player 2 gets a different color so you can tell them apart.
 
 Unsaved changes trigger a confirmation dialog when you try to close. Because losing edits sucks (I lost a bunch while testing)
 
@@ -409,6 +469,8 @@ FFmpeg API video export. Uses the FFmpeg API mod when available, falls back to p
 
 Click sounds are pre added at the render's sample rate and mixed in at the exact frame they should play. The renderer handles song file detection for both custom and built-in level music.
 
+The watermark module is a runtime-loaded DLL bundled inside the .geode. On launch it gets SHA-256 verified against an embedded hash, so a tampered build refuses to render instead of quietly producing dodgy output.
+
 </details>
 
 ---
@@ -435,6 +497,8 @@ my-click-pack/
 - **Separate P1/P2 packs** for two-player mode
 
 Clicks play in real-time during recording and playback. For renders, all sounds get pre added and mixed into the final audio at precise frame offsets. The system picks randomly from available sound files each time so it doesnt sound robotic.
+
+v2 fixed the hold/release buffer issue where packs with long release samples could cut off if you pressed again before the previous release finished playing.
 
 </details>
 
@@ -479,6 +543,8 @@ You still see the level complete screen normally, it just doesnt save anything. 
 
 **No Mirror** blocks mirror/flip portal effects. Can be set to only apply during recording if you want normal visuals during playback.
 
+**Disable Shaders** (new in v2) kills every shader layer the level applies, so you can practice in the unshaded view without editing the level.
+
 **Audio Pitch Control** adjusts FMOD's master channel pitch proportional to game speed. So 2x speed = 2x pitch. Automatically disabled during rendering to prevent audio desync.
 
 **Autoclicker** with separate P1/P2 toggles, configurable hold/release duration in ticks, and a "only while holding" mode. Shows calculated CPS based on your engine TPS.
@@ -497,6 +563,7 @@ Built with [ImGui Cocos](https://github.com/geode-sdk/imgui-cocos). Six tabs: **
 - Custom accent, background, card, and text colors
 - Corner radius and text scale
 - Glow cycle animation with adjustable speed
+- **Star ambient background** (new) — drifting twinkle particles plus the occasional streak
 
 Animations use eased transitions:
 
@@ -509,6 +576,8 @@ float easeOutCubic(float t) {
 
 Toggle switches, tab transitions, and card expansions are all individually animated. Every keybind is rebindable with conflict detection. All settings persist through Geode's saved values.
 
+**UI Language** is configurable from the mod settings — English and Spanish are bundled in v2, with more coming as translations roll in.
+
 </details>
 
 ---
@@ -516,9 +585,11 @@ Toggle switches, tab transitions, and card expansions are all individually anima
 <details>
 <summary><h3>Online Features</h3></summary>
 
-**Discord Integration** for account linking. Login opens your browser, checks for auth status, and grabs your avatar + username.
+**Discord Integration** uses a device-code pairing flow now. The menu shows a 6-character code, you open your browser, paste it, approve, done — no more dealing with 32-char hex session strings. After linking, your avatar + username + Discord ID show up in the Online tab.
 
-**Macro Upload** lets you share macros to the cloud with metadata (level name, ID, TPS, action count, duration) and an optional comment. Supports both TTR and GDR.
+**Refresh-Token Auth** keeps you signed in across game restarts. The client holds a refresh token that rotates on every refresh, and a session is good until you click Unlink or the backend revokes it.
+
+**Macro Upload** lets you share macros to the cloud with metadata (level name, ID, TPS, action count, duration) and an optional comment. Supports TTR, TTR2, and GDR.
 
 **Issue Reporting** so you can submit bug reports with a title and description straight from in the game.
 
@@ -529,19 +600,20 @@ Toggle switches, tab transitions, and card expansions are all individually anima
 ## Credits
 
 - [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features.
-- [Zilko](https://github.com/Zilko) Original ideas of Frame Fixing from [xdBot](https://github.com/Zilko/xdBot))
+- [Zilko](https://github.com/Zilko) Original ideas of Frame Fixing from [xdBot](https://github.com/Zilko/xdBot)) Which is now changed.
 - [Jarvisdevil](https://github.com/thejarvisdevil) for helping me put my brain cells together.
-- [NinXout](https://github.com/ninXout) for inspiration similar to Eclipse Menu. (Received help for my hitbox implementation)
+- [NinXout](https://github.com/ninXout) Great open-source reference for overall, highly recommend checking them out.
 - [C++ and C++ Together Discords](https://discord.gg/WeBHv6b4WS) for helping me learn C++ and their amazing guides.
 - [GDH by Toby](https://github.com/TobyAdd/GDH/blob/main/LICENSE) for being an amazing open source reference to fix up trajectory, hitboxes, and a bunch of other bugs.
-- jimmybutlerfan for extensive testing on my v1.3.0 build, could not have bug-fixed this menu without him.
-- And of course, [Geode](https://github.com/geode-sdk) for the amazing framework this is built on.
+- My loyal Playtesters: therealkeanan00, xen_dnr, 
+- Everyone who gave weird macros to the DB so I could fix the replay engine bug 😭
+- And of course, [Geode](https://github.com/geode-sdk) for the amazing framework this is built on. <3
 
 ---
 
 <div align="center">
 
-Updates will come to add features and squash bugs. If you find anything broken, msg me in the Discord or open an issue.
+Updates will come to add features and squash bugs. If you find anything broken, msg me on Discord or make a ticket at https://Toastyreplay.xyz
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
 [![Issues](https://img.shields.io/badge/GitHub-Report%20Bug-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ToastexGD/ToastyReplay/issues)
@@ -549,3 +621,5 @@ Updates will come to add features and squash bugs. If you find anything broken, 
 Thanks everyone! <3
 
 </div>
+
+---
