@@ -239,6 +239,7 @@ public:
     std::unordered_set<std::string> legacyCbsMacros;
     std::vector<toasty::conversion::DetectedReplay> foreignReplays;
     std::unordered_set<std::string> convertedForeignReplaySources;
+    std::unordered_map<std::string, std::string> convertedMacroSources;
 
     int hotkey_tickStep = 0x56;
     int hotkey_audioPitch = 0;

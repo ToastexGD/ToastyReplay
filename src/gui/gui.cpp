@@ -2364,6 +2364,9 @@ void MenuInterface::drawReplayTab() {
             if (replayConvertMarkSourceOnComplete && !replayConvertSourceKeyOnComplete.empty()) {
                 engine->convertedForeignReplaySources.insert(replayConvertSourceKeyOnComplete);
             }
+            if (!result.outputName.empty() && result.detectedFormat != toasty::conversion::ReplayFormat::Unknown) {
+                engine->convertedMacroSources[result.outputName] = toasty::conversion::formatDisplayName(result.detectedFormat);
+            }
             markReplayListDirty();
             refreshReplayListIfNeeded(true);
             if (replayConvertSelectOutputOnComplete && !result.outputName.empty()) {

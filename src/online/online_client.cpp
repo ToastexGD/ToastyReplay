@@ -993,7 +993,6 @@ void OnlineClient::uploadMacro(std::string const& macroName, std::string const& 
 
 void OnlineClient::doUploadMacro(std::string const& macroName, std::string const& comment) {
     auto* engine = ReplayEngine::get();
-    bool isTTR = engine->ttrMacros.count(macroName) > 0;
     bool isLegacyCBS = engine->legacyCbsMacros.count(macroName) > 0 && engine->ttr2Macros.count(macroName) == 0;
     if (isLegacyCBS) {
         uploadState = RSERROR;
@@ -1011,15 +1010,17 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
     std::string accuracyMode = "Vanilla";
     std::vector<uint8_t> fileData;
     std::string filename;
+    std::string macroFormat;
+    std::string macroOrigin = "recorded";
+    std::string sourceFormat;
 
-    if (isTTR) {
-        auto* macro = TTRMacro::loadFromDisk(macroName);
-        if (!macro) {
-            uploadState = RSERROR;
-            uploadResultMsg = trString("Failed to load macro file.");
-            uploadResultTimer = 5.0f;
-            return;
-        }
+    auto convertedSource = engine->convertedMacroSources.find(macroName);
+    if (convertedSource != engine->convertedMacroSources.end()) {
+        macroOrigin = "converted";
+        sourceFormat = convertedSource->second;
+    }
+
+    if (auto* macro = TTRMacro::loadFromDisk(macroName)) {
         levelName = macro->levelName;
         levelId = macro->levelId;
         tps = macro->framerate;
@@ -1029,6 +1030,8 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         durationSeconds = macro->duration;
         fileData = macro->serialize();
         filename = macroName + ".ttr2";
+        macroFormat = "ttr2";
+        if (sourceFormat.empty()) macroOrigin = "recorded_ttr2";
         delete macro;
     } else {
         auto* macro = MacroSequence::loadFromDisk(macroName);
@@ -1047,6 +1050,8 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         durationSeconds = macro->duration;
         fileData = macro->exportData(false);
         filename = macroName + ".gdr";
+        macroFormat = "gdr";
+        if (sourceFormat.empty()) macroOrigin = "legacy_gdr";
         delete macro;
     }
 
@@ -1067,6 +1072,9 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
     body["filename"] = filename;
     body["macro_title"] = macroName;
     body["accuracy_mode"] = accuracyMode;
+    body["macro_format"] = macroFormat;
+    body["macro_origin"] = macroOrigin;
+    if (!sourceFormat.empty()) body["source_format"] = sourceFormat;
 
     auto b64Data = fileData.empty() ? std::string() : base64Encode(fileData);
     if (!b64Data.empty()) body["macro_data"] = b64Data;

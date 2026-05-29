@@ -1032,30 +1032,201 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
     return replay;
 }
 
+static uint64_t readLEBytes(ByteReader& reader, size_t byteSize) {
+    if (byteSize == 0 || byteSize > 8) throw FormatError("invalid byte field size");
+    uint64_t value = 0;
+    for (size_t i = 0; i < byteSize; ++i) {
+        value |= static_cast<uint64_t>(reader.u8()) << (i * 8);
+    }
+    return value;
+}
+
+static void addSilicatePlayerInput(
+    ImportedReplay& replay,
+    ImportTimeline& timeline,
+    uint64_t frame,
+    int button,
+    bool player2,
+    bool pressed
+) {
+    addInput(
+        replay,
+        timeline.timeForFrame(static_cast<double>(frame)),
+        static_cast<double>(frame),
+        button,
+        player2,
+        pressed
+    );
+}
+
+static void readSilicatePackedInput(ImportedReplay& replay, ImportTimeline& timeline, uint32_t packed) {
+    uint32_t frame = packed >> 4;
+    bool player2 = (packed & 0b1000) != 0;
+    bool pressed = (packed & 0b0001) != 0;
+    int button = static_cast<int>((packed & 0b0110) >> 1);
+    addSilicatePlayerInput(replay, timeline, frame, button, player2, pressed);
+}
+
+static void readSilicateV2Input(
+    ByteReader& reader,
+    ImportedReplay& replay,
+    ImportTimeline& timeline,
+    uint64_t& currentFrame,
+    size_t byteSize
+) {
+    uint64_t state = readLEBytes(reader, byteSize);
+    uint64_t delta = state >> 5;
+    currentFrame += delta;
+    int button = static_cast<int>((state & 0b11100) >> 2);
+    if (button >= 1 && button <= 3) {
+        bool pressed = (state & 1) != 0;
+        bool player2 = (state & 2) != 0;
+        addSilicatePlayerInput(replay, timeline, currentFrame, button, player2, pressed);
+    } else if (button == 7) {
+        double tps = reader.f64le();
+        timeline.changeFps(replay, static_cast<double>(currentFrame), tps);
+    }
+}
+
+struct Silicate3PlayerInput {
+    uint64_t delta = 0;
+    int button = 1;
+    bool pressed = false;
+    bool player2 = false;
+    bool swift = false;
+};
+
+static Silicate3PlayerInput readSilicate3PlayerInput(ByteReader& reader, size_t byteSize) {
+    uint64_t state = readLEBytes(reader, byteSize);
+    int rawButton = static_cast<int>((state >> 2) & 0b11);
+    Silicate3PlayerInput input;
+    input.delta = state >> 4;
+    input.swift = rawButton == 0;
+    input.button = rawButton == 0 ? 1 : rawButton;
+    input.pressed = (state & 1) != 0;
+    input.player2 = (state & 0b10) != 0;
+    return input;
+}
+
+static void addSilicate3PlayerInput(
+    ImportedReplay& replay,
+    ImportTimeline& timeline,
+    uint64_t& currentFrame,
+    Silicate3PlayerInput const& input,
+    uint64_t& actionCount
+) {
+    currentFrame += input.delta;
+    if (input.swift) {
+        addSilicatePlayerInput(replay, timeline, currentFrame, 1, input.player2, true);
+        addSilicatePlayerInput(replay, timeline, currentFrame, 1, input.player2, false);
+        actionCount += 2;
+        return;
+    }
+    addSilicatePlayerInput(replay, timeline, currentFrame, input.button, input.player2, input.pressed);
+    ++actionCount;
+}
+
+static void readSilicate3Section(
+    ByteReader& reader,
+    ImportedReplay& replay,
+    ImportTimeline& timeline,
+    uint64_t& currentFrame,
+    uint64_t& actionsRead,
+    uint64_t actionCount
+) {
+    uint16_t header = reader.u16le();
+    uint16_t sectionType = header >> 14;
+    if (sectionType == 0) {
+        size_t byteSize = static_cast<size_t>(1u << ((header >> 12) & 0b11));
+        uint64_t length = 1ull << ((header >> 8) & 0b1111);
+        for (uint64_t i = 0; i < length && actionsRead < actionCount; ++i) {
+            auto input = readSilicate3PlayerInput(reader, byteSize);
+            addSilicate3PlayerInput(replay, timeline, currentFrame, input, actionsRead);
+        }
+    } else if (sectionType == 1) {
+        size_t byteSize = static_cast<size_t>(1u << ((header >> 12) & 0b11));
+        uint64_t length = 1ull << ((header >> 8) & 0b1111);
+        uint64_t repeats = 1ull << ((header >> 3) & 0b11111);
+        std::vector<Silicate3PlayerInput> inputs;
+        inputs.reserve(static_cast<size_t>(std::min<uint64_t>(length, 65536)));
+        for (uint64_t i = 0; i < length; ++i) {
+            auto input = readSilicate3PlayerInput(reader, byteSize);
+            inputs.push_back(input);
+        }
+        for (uint64_t r = 0; r < repeats && actionsRead < actionCount; ++r) {
+            for (auto const& input : inputs) {
+                if (actionsRead >= actionCount) break;
+                addSilicate3PlayerInput(replay, timeline, currentFrame, input, actionsRead);
+            }
+        }
+    } else if (sectionType == 2) {
+        size_t byteSize = static_cast<size_t>(1u << ((header >> 8) & 0b11));
+        uint16_t specialType = (header >> 10) & 0b1111;
+        uint64_t delta = readLEBytes(reader, byteSize);
+        currentFrame += delta;
+        if (specialType == 3) {
+            double tps = reader.f64le();
+            timeline.changeFps(replay, static_cast<double>(currentFrame), tps);
+        } else if (specialType <= 2) {
+            reader.u64le();
+        } else {
+            throw FormatError("invalid Silicate 3 special section");
+        }
+        ++actionsRead;
+    } else {
+        throw FormatError("invalid Silicate 3 section");
+    }
+}
+
 static ImportedReplay parseSilicate2(std::vector<uint8_t> const& data) {
     if (!hasMagic(data, "SILL")) throw FormatError("invalid Silicate 2 magic");
     ByteReader reader(data);
-    reader.skip(4); // "SILL"
+    reader.skip(4);
 
     ImportedReplay replay;
     replay.format = ReplayFormat::Silicate2;
-
-    // SLC2: after magic comes f64 TPS, then u32 meta_size, then meta bytes, then inputs
     replay.fps = reader.f64le();
-    uint32_t metaSize = reader.u32le();
-    if (metaSize > reader.remaining()) throw FormatError("invalid Silicate 2 meta size");
-    reader.skip(metaSize); // skip user-defined meta
+    ImportTimeline timeline(replay.fps);
 
-    // Inputs: same packed format as Silicate1
-    uint32_t count = reader.u32le();
-    if (count > reader.remaining() / 4 + 1) throw FormatError("invalid Silicate 2 action count");
-    for (uint32_t i = 0; i < count; ++i) {
-        uint32_t packed = reader.u32le();
-        uint32_t frame = packed >> 4;
-        bool player2 = (packed & 0b1000) != 0;
-        bool pressed = (packed & 0b0001) != 0;
-        int button = static_cast<int>((packed & 0b0110) >> 1);
-        addInput(replay, static_cast<double>(frame) / replay.fps, frame, button, player2, pressed);
+    uint64_t metaSize = reader.u64le();
+    if (metaSize > reader.remaining()) throw FormatError("invalid Silicate 2 meta size");
+    reader.skip(static_cast<size_t>(metaSize));
+
+    uint64_t inputCount = reader.u64le();
+    uint64_t blobCount = reader.u64le();
+    if (blobCount > 1000000) throw FormatError("invalid Silicate 2 blob count");
+
+    struct BlobInfo {
+        uint64_t byteSize = 0;
+        uint64_t start = 0;
+        uint64_t length = 0;
+    };
+    std::vector<BlobInfo> blobs;
+    blobs.reserve(static_cast<size_t>(blobCount));
+    for (uint64_t i = 0; i < blobCount; ++i) {
+        BlobInfo blob;
+        blob.byteSize = reader.u64le();
+        blob.start = reader.u64le();
+        blob.length = reader.u64le();
+        if (blob.byteSize == 0 || blob.byteSize > 8 || blob.start > inputCount || blob.length > inputCount) {
+            throw FormatError("invalid Silicate 2 blob");
+        }
+        blobs.push_back(blob);
+    }
+
+    uint64_t currentFrame = 0;
+    uint64_t readCount = 0;
+    for (auto const& blob : blobs) {
+        for (uint64_t i = 0; i < blob.length; ++i) {
+            if (readCount >= inputCount) throw FormatError("invalid Silicate 2 input table");
+            readSilicateV2Input(reader, replay, timeline, currentFrame, static_cast<size_t>(blob.byteSize));
+            ++readCount;
+        }
+    }
+
+    if (readCount != inputCount) throw FormatError("invalid Silicate 2 input count");
+    if (reader.remaining() < 3 || reader.u8() != 'E' || reader.u8() != 'O' || reader.u8() != 'M') {
+        throw FormatError("invalid Silicate 2 footer");
     }
 
     finishImport(replay);
@@ -1065,35 +1236,66 @@ static ImportedReplay parseSilicate2(std::vector<uint8_t> const& data) {
 static ImportedReplay parseSilicate3(std::vector<uint8_t> const& data) {
     if (!hasMagic(data, "SLC3")) throw FormatError("invalid Silicate 3 magic");
     ByteReader reader(data);
-    reader.skip(4); // "SLC3"
+    if (data.size() >= 8 && std::memcmp(data.data(), "SLC3RPLY", 8) == 0) {
+        reader.skip(8);
+
+        uint16_t metaSize = reader.u16le();
+        if (metaSize < 64 || metaSize > reader.remaining()) throw FormatError("invalid Silicate 3 metadata size");
+
+        ImportedReplay replay;
+        replay.format = ReplayFormat::Silicate3;
+        replay.fps = reader.f64le();
+        reader.skip(static_cast<size_t>(metaSize) - 8);
+        ImportTimeline timeline(replay.fps);
+
+        if (reader.remaining() < 1) throw FormatError("invalid Silicate 3 footer");
+        size_t atomEnd = data.size() - 1;
+        uint64_t currentFrame = 0;
+
+        while (reader.position() < atomEnd) {
+            if (atomEnd - reader.position() < 12) throw FormatError("invalid Silicate 3 atom");
+            uint32_t atomId = reader.u32le();
+            uint64_t atomSize = reader.u64le();
+            if (atomId == 1) {
+                uint64_t actionCount = reader.u64le();
+                uint64_t actionsRead = 0;
+                while (actionsRead < actionCount && reader.position() < atomEnd) {
+                    readSilicate3Section(reader, replay, timeline, currentFrame, actionsRead, actionCount);
+                }
+                if (actionsRead != actionCount) throw FormatError("invalid Silicate 3 action count");
+            } else {
+                if (atomSize > static_cast<uint64_t>(atomEnd - reader.position())) throw FormatError("invalid Silicate 3 atom size");
+                reader.skip(static_cast<size_t>(atomSize));
+            }
+        }
+
+        if (reader.u8() != 0xCC) throw FormatError("invalid Silicate 3 footer");
+        finishImport(replay);
+        return replay;
+    }
+
+    reader.skip(4);
 
     ImportedReplay replay;
     replay.format = ReplayFormat::Silicate3;
-
-    // SLC3: f64 TPS, then atoms
     replay.fps = reader.f64le();
+    ImportTimeline timeline(replay.fps);
     uint32_t atomCount = reader.u32le();
 
     for (uint32_t a = 0; a < atomCount && reader.remaining() > 0; ++a) {
         uint8_t atomType = reader.u8();
         uint32_t atomSize = reader.u32le();
-        size_t atomEnd = reader.remaining() > atomSize ? (data.size() - reader.remaining() + atomSize) : data.size();
+        size_t payloadStart = reader.position();
+        if (atomSize > reader.remaining()) throw FormatError("invalid Silicate 3 atom size");
 
-        if (atomType == 1) { // ActionAtom
+        if (atomType == 1) {
             uint32_t count = reader.u32le();
-            for (uint32_t i = 0; i < count && reader.remaining() >= 4; ++i) {
+            for (uint32_t i = 0; i < count && reader.position() + 4 <= payloadStart + atomSize; ++i) {
                 uint32_t packed = reader.u32le();
-                uint32_t frame = packed >> 4;
-                bool player2 = (packed & 0b1000) != 0;
-                bool pressed = (packed & 0b0001) != 0;
-                int button = static_cast<int>((packed & 0b0110) >> 1);
-                addInput(replay, static_cast<double>(frame) / replay.fps, frame, button, player2, pressed);
+                readSilicatePackedInput(replay, timeline, packed);
             }
-        } else {
-            // Skip unknown atom body
-            if (atomSize > reader.remaining()) break;
-            reader.skip(atomSize);
         }
+        reader.seek(payloadStart + atomSize);
     }
 
     finishImport(replay);
@@ -1110,13 +1312,10 @@ static ImportedReplay parseSilicate1(std::vector<uint8_t> const& data) {
     replay.fps = reader.f64le();
     uint32_t count = reader.u32le();
     if (count > reader.remaining() / 4 + 1) throw FormatError("invalid Silicate action count");
+    ImportTimeline timeline(replay.fps);
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t packed = reader.u32le();
-        uint32_t frame = packed >> 4;
-        bool player2 = (packed & 0b1000) != 0;
-        bool pressed = (packed & 0b0001) != 0;
-        int button = static_cast<int>((packed & 0b0110) >> 1);
-        addInput(replay, static_cast<double>(frame) / replay.fps, frame, button, player2, pressed);
+        readSilicatePackedInput(replay, timeline, packed);
     }
 
     finishImport(replay);
