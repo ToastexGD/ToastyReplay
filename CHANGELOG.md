@@ -2,7 +2,7 @@
 
 ## v2.0.2
 
-## What's fixed?
+### What's fixed?
 
 conversion: fix Silicate accuracy + add Echo support; release v2.0.2
 - Fix stuck-button bug: same-frame press+release (e.g. Silicate 'swift'
@@ -15,19 +15,21 @@ conversion: fix Silicate accuracy + add Echo support; release v2.0.2
 
 ## v2.0.1
 
-## What's new?
+### What's new?
 
 - Resizing menu for Android Devices
 - Touch screen scrolling + Performance Boost
 
-## What's fixed?
+### What's fixed?
 
 - Conversion for silicate macros now parse correctly (old header broke all inputs in the stack)
 - Macro DB now accurately collects ttr2 macros and sends conversion data (forgot to accept the backend PR when I was setting it up 😭)
 - Fixed some updater issues with the Pro Menu.
 - Fixed touchscreen issues with Android 64bit devices.
 
-## What's new?
+## v2.0.0
+
+### What's new?
 
 - **Macro Conversion** Drop a macro from basically any other replay bot into your `replays/` folder and convert it to TTR2 or GDR. Supports MegaHack (JSON + Binary), TasBot, zBot, OmegaBot, YBot / YBot 2, xdBot, XBot Frame, Echo, Amethyst, Osu Replay, GDMO, ReplayBot, Rush, KDBot, DDHOR, QBot, RBot, Zephyrus, ReplayEngine 1 / 2 / 3, Silicate 1 / 2 / 3, GDR2, UvBot, TCBot, and plaintext dumps. Runs on a background thread so the menu doesn't freeze on huge macros, and tags the source row as "Converted" once its done.
 - **TTR2 format** Better TTR2 with platformer mode flag, two-player flag, accuracy mode flags, RNG-locked flag, and extra metadata baked into the header. Same `.ttr` extension, same zlib payload, just way more info per file. Legacy TTR files are auto-detected and still load with no extra steps.
