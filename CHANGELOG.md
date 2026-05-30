@@ -2,14 +2,25 @@
 
 ## v2.0.2
 
+## What's fixed?
+
+conversion: fix Silicate accuracy + add Echo support; release v2.0.2
+- Fix stuck-button bug: same-frame press+release (e.g. Silicate 'swift'
+  clicks) were reordered release-first then deduped into a permanently held
+  button. Affected every converted format with instant taps.
+- parseSilicate3: accept Bugpoint special sections instead of throwing.
+- Add Echo (.echo) import: binary (META), old JSON ('Echo Replay'), and new
+  JSON ('inputs'); wired into format detection and the supported list.
+- updated the version to v2.0.2
+
 ## v2.0.1
 
-### What's new?
+## What's new?
 
 - Resizing menu for Android Devices
 - Touch screen scrolling + Performance Boost
 
-### What's fixed?
+## What's fixed?
 
 - Conversion for silicate macros now parse correctly (old header broke all inputs in the stack)
 - Macro DB now accurately collects ttr2 macros and sends conversion data (forgot to accept the backend PR when I was setting it up 😭)
