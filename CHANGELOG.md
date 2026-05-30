@@ -2,6 +2,33 @@
 
 ## v2.0.2
 
+## v2.0.1
+
+## What's new?
+
+- **Macro Conversion** Drop a macro from basically any other replay bot into your `replays/` folder and convert it to TTR2 or GDR. Supports MegaHack (JSON + Binary), TasBot, zBot, OmegaBot, YBot / YBot 2, xdBot, XBot Frame, Echo, Amethyst, Osu Replay, GDMO, ReplayBot, Rush, KDBot, DDHOR, QBot, RBot, Zephyrus, ReplayEngine 1 / 2 / 3, Silicate 1 / 2 / 3, GDR2, UvBot, TCBot, and plaintext dumps. Runs on a background thread so the menu doesn't freeze on huge macros, and tags the source row as "Converted" once its done.
+- **TTR2 format** Better TTR2 with platformer mode flag, two-player flag, accuracy mode flags, RNG-locked flag, and extra metadata baked into the header. Same `.ttr` extension, same zlib payload, just way more info per file. Legacy TTR files are auto-detected and still load with no extra steps.
+- **Platformer macro support** record, playback, and edit platformer levels (left / right inputs included, no longer useless lol).
+- **Disable Shaders** new module that kills every shader layer the level applies. Practice in an unshaded view without having to edit the level.
+- **Star ambient background** drifting twinkle particles in the menu. I cooked trust
+- **UI Language setting** pick from the mod settings. English and Spanish are bundled, with more coming as translations roll in.
+- **Discord device-code login** pair the 6-character code in your browser, done. No more dealing with the old 32-char hex session string.
+- **Refresh-token auth** for the online client. Stays signed in across game restarts, and the token rotates on every refresh so a stolen token can't be replayed.
+- **Frame editor commit model** proper commit-based history so undo/redo never gets out of sync with the file on disk. Ported from the Pro build.
+- **Trajectory rewrite** pulled into its own module with a dedicated physics simulator. Portals, dash rings, pads, and trajectories line up with the actual gameplay closer than before.
+- Geode SDK bumped from v5.3.0 to **v5.7.1**.
+
+### What's fixed?
+
+- HOLY SHIT I FIXED TRAJECTORY (the orb / pad / portal drift everyone complained about, FIXED)
+- Fixed MP4 audio not playing on some mobile devices
+- Stabilized the render audio muxing so exported videos don't desync near the end
+- Fixed level names not actually updating when you load a different macro (old ass bug, finally caught it)
+- Fixed the click sound buffer issue where packs with long release samples could cut off mid-press if you pressed again before the previous release finished playing
+- Fixed a bunch of dev-branch crashes during the trajectory rewrite (frame stepper, checkpoint restore, shit like that)
+- Online client no longer hits a port 3000 (Yes it was open) so now it goes through the proper domain over Toastyreplay
+- Many more fixes.
+
 ## v1.3.0
 
 - New recording format (TTR)
