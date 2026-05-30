@@ -4,7 +4,7 @@
 
 ### What's fixed?
 
-conversion: fix Silicate accuracy + add Echo support; release v2.0.2
+- conversion: fix Silicate accuracy + add Echo support; release v2.0.2
 - Fix stuck-button bug: same-frame press+release (e.g. Silicate 'swift'
   clicks) were reordered release-first then deduped into a permanently held
   button. Affected every converted format with instant taps.
