@@ -35,7 +35,7 @@ static constexpr uint8_t kTCMHeader[16] = {
     0xcc, 0xa1, 0x86, 0x8a, 0x88, 0x99, 0x84, 0x00
 };
 
-static constexpr std::array<ReplayFormat, 26> kSupportedReplayFormats = {
+static constexpr std::array<ReplayFormat, 27> kSupportedReplayFormats = {
     ReplayFormat::MegaHackJson,
     ReplayFormat::MegaHackBinary,
     ReplayFormat::TasBotJson,
@@ -43,6 +43,7 @@ static constexpr std::array<ReplayFormat, 26> kSupportedReplayFormats = {
     ReplayFormat::YBotFrame,
     ReplayFormat::YBot2,
     ReplayFormat::Amethyst,
+    ReplayFormat::Echo,
     ReplayFormat::GDMO,
     ReplayFormat::ReplayBot,
     ReplayFormat::Rush,
@@ -428,7 +429,10 @@ static bool inputLess(ImportedInput const& a, ImportedInput const& b) {
     if (std::abs(a.time - b.time) > kTimeEpsilon) return a.time < b.time;
     if (std::abs(a.sourceFrame - b.sourceFrame) > kTimeEpsilon) return a.sourceFrame < b.sourceFrame;
     if (a.player2 != b.player2 || a.button != b.button) return a.sequence < b.sequence;
-    if (a.pressed != b.pressed) return !a.pressed && b.pressed;
+    // Same time/frame and same button: keep source order (sequence). Forcing
+    // release-before-press here would reorder a same-frame tap (e.g. a Silicate
+    // "swift" click: press + release on one frame) to release-first, and the dedup
+    // pass below would then drop the release, leaving the button stuck held.
     return a.sequence < b.sequence;
 }
 
@@ -555,6 +559,12 @@ static ReplayFormat detectJsonFormat(gdr::json const& json, std::string const& f
     if (ReplayJson::getFloat<double>(*object, "fps") && ReplayJson::getArray(*object, "macro")) {
         return ReplayFormat::TasBotJson;
     }
+    if (ReplayJson::getArray(*object, "Echo Replay")) {
+        return ReplayFormat::Echo;
+    }
+    if (ReplayJson::getFloat<double>(*object, "fps") && ReplayJson::getArray(*object, "inputs")) {
+        return ReplayFormat::Echo;
+    }
     if (endsWith(filename, ".mhr.json")) return ReplayFormat::MegaHackJson;
     if (endsWith(filename, ".echo.json")) return ReplayFormat::Echo;
     return ReplayFormat::TasBotJson;
@@ -603,6 +613,7 @@ static ReplayFormat detectContent(std::filesystem::path const& path, std::vector
     if (hasMagic(data, "GDR")) return ReplayFormat::GDR2;
     if (hasMagic(data, "SILL")) return ReplayFormat::Silicate2;
     if (hasMagic(data, "SLC3")) return ReplayFormat::Silicate3;
+    if (hasMagic(data, "META")) return ReplayFormat::Echo;
     if (hasMagic(data, "UVBOT")) return ReplayFormat::UvBot;
     if (data.size() >= 16 && std::memcmp(data.data(), kTCMHeader, 16) == 0) return ReplayFormat::TCBot;
     if (hasMagic(data, "RPLY")) return ReplayFormat::ReplayBot;
@@ -914,6 +925,81 @@ static ImportedReplay parseAmethyst(std::vector<uint8_t> const& data) {
     return replay;
 }
 
+static ImportedReplay parseEchoBinary(std::vector<uint8_t> const& data) {
+    if (data.size() < 48) throw FormatError("Echo binary file is too small");
+    ByteReader reader(data);
+    if (reader.u32be() != 0x4d455441) throw FormatError("invalid Echo binary magic");
+    uint32_t replayType = reader.u32be();
+    size_t actionSize = replayType == 0x44424700u ? 24u : 6u;
+
+    ImportedReplay replay;
+    replay.format = ReplayFormat::Echo;
+    reader.seek(24);
+    replay.fps = static_cast<double>(reader.f32le());
+    reader.seek(48);
+
+    while (reader.remaining() >= actionSize) {
+        size_t start = reader.position();
+        uint32_t frame = reader.u32le();
+        bool down = reader.u8() == 1;
+        bool player1 = reader.u8() == 0;
+        reader.seek(start + actionSize);
+        addInput(replay, static_cast<double>(frame) / replay.fps, frame, 1, !player1, down);
+    }
+
+    finishImport(replay);
+    return replay;
+}
+
+static ImportedReplay parseEchoJson(gdr::json const& json) {
+    auto const* object = ReplayJson::asObject(json);
+    if (!object) throw FormatError("Echo JSON root is not an object");
+
+    ImportedReplay replay;
+    replay.format = ReplayFormat::Echo;
+
+    // Old Echo JSON: { "FPS", "Starting Frame", "Echo Replay": [ { "Frame", "Player 2", "Hold" } ] }
+    if (auto const* echoReplay = ReplayJson::getArray(*object, "Echo Replay")) {
+        replay.fps = ReplayJson::getFloat<double>(*object, "FPS").value_or(240.0);
+        int64_t startingFrame = ReplayJson::getInteger<int64_t>(*object, "Starting Frame").value_or(0);
+        for (auto const& entry : *echoReplay) {
+            auto const* action = ReplayJson::asObject(entry);
+            if (!action) continue;
+            auto frame = ReplayJson::getInteger<int64_t>(*action, "Frame");
+            auto hold = ReplayJson::getBool(*action, "Hold");
+            if (!frame || !hold) continue;
+            bool player2 = ReplayJson::getBool(*action, "Player 2").value_or(false);
+            int64_t resolved = *frame + startingFrame;
+            addInput(replay, static_cast<double>(resolved) / replay.fps, static_cast<double>(resolved), 1, player2, *hold);
+        }
+        finishImport(replay);
+        return replay;
+    }
+
+    // New Echo JSON: { "fps", "inputs": [ { "frame", "holding", "player_2" } ] }
+    auto const* inputs = ReplayJson::getArray(*object, "inputs");
+    if (!inputs) throw FormatError("Echo JSON is missing the 'inputs'/'Echo Replay' array");
+    replay.fps = ReplayJson::getFloat<double>(*object, "fps").value_or(240.0);
+    for (auto const& entry : *inputs) {
+        auto const* action = ReplayJson::asObject(entry);
+        if (!action) continue;
+        auto frame = ReplayJson::getInteger<int64_t>(*action, "frame");
+        auto hold = ReplayJson::getBool(*action, "holding");
+        if (!frame || !hold) continue;
+        bool player2 = ReplayJson::getBool(*action, "player_2").value_or(false);
+        addInput(replay, static_cast<double>(*frame) / replay.fps, static_cast<double>(*frame), 1, player2, *hold);
+    }
+    finishImport(replay);
+    return replay;
+}
+
+static ImportedReplay parseEcho(std::vector<uint8_t> const& data) {
+    if (auto json = parseJson(data)) {
+        return parseEchoJson(*json);
+    }
+    return parseEchoBinary(data);
+}
+
 static uint32_t readLEB128(ByteReader& reader) {
     uint32_t value = 0;
     uint32_t shift = 0;
@@ -1169,6 +1255,10 @@ static void readSilicate3Section(
             timeline.changeFps(replay, static_cast<double>(currentFrame), tps);
         } else if (specialType <= 2) {
             reader.u64le();
+        } else if (specialType == 4) {
+            // Bugpoint (SLC3 SpecialType::Bugpoint): a frame marker with no payload.
+            // Advance the frame only; earlier versions threw here, which made any
+            // Silicate 3 macro containing a bugpoint fail to convert.
         } else {
             throw FormatError("invalid Silicate 3 special section");
         }
@@ -1808,6 +1898,7 @@ static ImportedReplay parseByFormat(ReplayFormat format, std::vector<uint8_t> co
         case ReplayFormat::YBotFrame: return parseYBotFrame(data);
         case ReplayFormat::YBot2: return parseYBot2(data);
         case ReplayFormat::Amethyst: return parseAmethyst(data);
+        case ReplayFormat::Echo: return parseEcho(data);
         case ReplayFormat::GDMO: return parseGDMO(data);
         case ReplayFormat::ReplayBot: return parseReplayBot(data);
         case ReplayFormat::Rush: return parseRush(data);
@@ -1902,9 +1993,9 @@ static std::vector<ImportedInput> prepareOutputInputs(ImportedReplay const& repl
             std::abs(a.cbsTimeOffset - b.cbsTimeOffset) > 0.000001f) {
             return a.cbsTimeOffset < b.cbsTimeOffset;
         }
-        if (a.player2 == b.player2 && a.button == b.button && a.pressed != b.pressed) {
-            return !a.pressed && b.pressed;
-        }
+        // Keep source order for same-tick, same-button transitions so a same-frame
+        // tap stays press-before-release (see inputLess). Reordering to release-first
+        // would net a stuck "held" button on playback.
         return a.sequence < b.sequence;
     });
     return result;

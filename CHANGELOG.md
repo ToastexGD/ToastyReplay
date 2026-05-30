@@ -1,5 +1,7 @@
 # Changelog
 
+## v2.0.2
+
 ## v1.3.0
 
 - New recording format (TTR)

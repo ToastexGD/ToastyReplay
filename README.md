@@ -10,7 +10,7 @@ Record, playback, edit, convert, and render frame-perfect macros with 100% accur
 
 [![Geode](https://img.shields.io/badge/Geode-v5.7.1-blue?style=flat-square)](https://geode-sdk.org)
 [![GD](https://img.shields.io/badge/GD-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
-[![Version](https://img.shields.io/badge/version-v2.0.0-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
+[![Version](https://img.shields.io/badge/version-v2.0.2-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
 
 </div>
@@ -138,7 +138,7 @@ Record, playback, edit, convert, and render frame-perfect macros with 100% accur
 
 ## How It Works
 
-> Everything below is updated for **v2.0.0**. If you want the quick version, just read the Features table above. (I hid the stuff below into dropdowns to save your eyes)
+> Everything below is updated for **v2.0.2**. If you want the quick version, just read the Features table above. (I hid the stuff below into dropdowns to save your eyes)
 
 ---
 
