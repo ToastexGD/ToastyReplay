@@ -33,20 +33,23 @@ namespace toasty::lang {
         constexpr std::array supportedLanguages{
             UiLanguage::English,
             UiLanguage::Spanish,
+            UiLanguage::French,
         };
 
         std::string_view toCode(UiLanguage language) {
             switch (language) {
                 case UiLanguage::English: return "en";
                 case UiLanguage::Spanish: return "es";
+                case UiLanguage::French: return "es";
                 case UiLanguage::Auto:
                 default: return "en";
             }
         }
 
         UiLanguage fromSettingValue(std::string_view value) {
-            if (value == "Spanish") return UiLanguage::Spanish;
+            if (value == "Espanol") return UiLanguage::Spanish;
             if (value == "English") return UiLanguage::English;
+            if (value == "Francais") return UiLanguage::French;
             return UiLanguage::Auto;
         }
 

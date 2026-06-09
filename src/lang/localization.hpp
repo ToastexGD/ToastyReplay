@@ -10,6 +10,7 @@ namespace toasty::lang {
         Auto,
         English,
         Spanish,
+        French,
     };
 
     void initialize();

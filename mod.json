@@ -31,7 +31,8 @@
 			"one-of": [
 				"Auto",
 				"English",
-				"Spanish"
+				"Espanol",
+				"Francais"
 			]
 		},
 		"ffmpeg_path": {
