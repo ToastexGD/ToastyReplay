@@ -4,13 +4,8 @@
 
 ### What's New?
 
-- New Recording/Playback Labels/CPS **(Pro)**
-- Change colors of labels in the labels menu! **(Pro)**
-- Recording/Playback of levels in the editor **(Pro)** 
-- Editing Macros while playing them **(Pro)**
-- Auto Safe Mode **(Pro/Free)**
-- Discord Rich Presence! **(Pro)**
-- Pride Menu Icon change! (Optional) **(Free/Pro)**
+- Auto Safe Mode
+- Pride Menu Icon change! (Optional)
 
 
 ## What's fixed?
