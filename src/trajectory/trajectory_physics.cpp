@@ -539,6 +539,9 @@ namespace toasty::trajectory::physics {
             }
 
             if (isNativeCollisionObject(object->m_objectType)) {
+                if (object->m_objectType == GameObjectType::Breakable) {
+                    continue;
+                }
                 nativeSingle.clear();
                 nativeSingle.push_back(object);
                 NativeCallScope nativeCall;
