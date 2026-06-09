@@ -49,6 +49,89 @@ namespace {
         }
     };
 
+    struct ScopedPredictionCameraState {
+        PlayLayer* layer;
+        float cameraZoom;
+        float targetCameraZoom;
+        cocos2d::CCPoint cameraOffset;
+        float cameraAngle;
+        float targetCameraAngle;
+        cocos2d::CCPoint cameraPosition;
+        cocos2d::CCPoint cameraPosition2;
+        cocos2d::CCPoint cameraStepDiff;
+        bool cameraShakeEnabled;
+        float cameraShakeFactor;
+        float cameraFlip;
+        float cameraWidthOffset;
+        float cameraHeightOffset;
+        float cameraUnzoomedHeightOffset;
+        float targetCameraHeightOffset;
+        bool calculateTargetHeightOffset;
+        float cameraWidth;
+        float cameraHeight;
+        float cameraUnzoomedX;
+        float halfCameraWidth;
+
+        explicit ScopedPredictionCameraState(PlayLayer* playLayer)
+            : layer(playLayer),
+              cameraZoom(playLayer ? playLayer->m_gameState.m_cameraZoom : 0.0f),
+              targetCameraZoom(playLayer ? playLayer->m_gameState.m_targetCameraZoom : 0.0f),
+              cameraOffset(playLayer ? playLayer->m_gameState.m_cameraOffset : cocos2d::CCPoint { 0.0f, 0.0f }),
+              cameraAngle(playLayer ? playLayer->m_gameState.m_cameraAngle : 0.0f),
+              targetCameraAngle(playLayer ? playLayer->m_gameState.m_targetCameraAngle : 0.0f),
+              cameraPosition(playLayer ? playLayer->m_gameState.m_cameraPosition : cocos2d::CCPoint { 0.0f, 0.0f }),
+              cameraPosition2(playLayer ? playLayer->m_gameState.m_cameraPosition2 : cocos2d::CCPoint { 0.0f, 0.0f }),
+              cameraStepDiff(playLayer ? playLayer->m_gameState.m_cameraStepDiff : cocos2d::CCPoint { 0.0f, 0.0f }),
+              cameraShakeEnabled(playLayer ? playLayer->m_gameState.m_cameraShakeEnabled : false),
+              cameraShakeFactor(playLayer ? playLayer->m_gameState.m_cameraShakeFactor : 0.0f),
+              cameraFlip(playLayer ? playLayer->m_cameraFlip : 0.0f),
+              cameraWidthOffset(playLayer ? playLayer->m_cameraWidthOffset : 0.0f),
+              cameraHeightOffset(playLayer ? playLayer->m_cameraHeightOffset : 0.0f),
+              cameraUnzoomedHeightOffset(playLayer ? playLayer->m_cameraUnzoomedHeightOffset : 0.0f),
+              targetCameraHeightOffset(playLayer ? playLayer->m_targetCameraHeightOffset : 0.0f),
+              calculateTargetHeightOffset(playLayer ? playLayer->m_calculateTargetHeightOffset : false),
+              cameraWidth(playLayer ? playLayer->m_cameraWidth : 0.0f),
+              cameraHeight(playLayer ? playLayer->m_cameraHeight : 0.0f),
+              cameraUnzoomedX(playLayer ? playLayer->m_cameraUnzoomedX : 0.0f),
+              halfCameraWidth(playLayer ? playLayer->m_halfCameraWidth : 0.0f) {}
+
+        ScopedPredictionCameraState(ScopedPredictionCameraState const&) = delete;
+        ScopedPredictionCameraState& operator=(ScopedPredictionCameraState const&) = delete;
+
+        ~ScopedPredictionCameraState() {
+            restore();
+        }
+
+        void restore() {
+            if (!layer) {
+                return;
+            }
+
+            layer->m_gameState.m_cameraZoom = cameraZoom;
+            layer->m_gameState.m_targetCameraZoom = targetCameraZoom;
+            layer->m_gameState.m_cameraOffset = cameraOffset;
+            layer->m_gameState.m_cameraAngle = cameraAngle;
+            layer->m_gameState.m_targetCameraAngle = targetCameraAngle;
+            layer->m_gameState.m_cameraPosition = cameraPosition;
+            layer->m_gameState.m_cameraPosition2 = cameraPosition2;
+            layer->m_gameState.m_cameraStepDiff = cameraStepDiff;
+            layer->m_gameState.m_cameraShakeEnabled = cameraShakeEnabled;
+            layer->m_gameState.m_cameraShakeFactor = cameraShakeFactor;
+
+            layer->m_cameraFlip = cameraFlip;
+            layer->m_cameraWidthOffset = cameraWidthOffset;
+            layer->m_cameraHeightOffset = cameraHeightOffset;
+            layer->m_cameraUnzoomedHeightOffset = cameraUnzoomedHeightOffset;
+            layer->m_targetCameraHeightOffset = targetCameraHeightOffset;
+            layer->m_calculateTargetHeightOffset = calculateTargetHeightOffset;
+            layer->m_cameraWidth = cameraWidth;
+            layer->m_cameraHeight = cameraHeight;
+            layer->m_cameraUnzoomedX = cameraUnzoomedX;
+            layer->m_halfCameraWidth = halfCameraWidth;
+            layer = nullptr;
+        }
+    };
+
     struct ScopedReplaySimulationState {
         ReplayEngine* engine;
         bool previousSimulatingPath;
@@ -1130,24 +1213,22 @@ void TrajectoryPredictionService::traceInputPath(
             }
         }
 
-        advancePredictionClock(playLayer, previewPlayer);
-        updatePreviewPlayer(previewPlayer);
+        {
+            ScopedPredictionCameraState cameraState(playLayer);
+            advancePredictionClock(playLayer, previewPlayer);
+            updatePreviewPlayer(previewPlayer);
+            if (!m_context.traceCancelled && linkedDual) {
+                linkedPreviewPlayer->m_totalTime += physicsDelta;
+                updatePreviewPlayer(linkedPreviewPlayer);
+            }
+        }
+
         if (m_context.traceCancelled) {
             drawPredictionBounds(previewPlayer);
             if (linkedDual) {
                 drawPredictionBounds(linkedPreviewPlayer);
             }
             break;
-        }
-
-        if (linkedDual) {
-            linkedPreviewPlayer->m_totalTime += physicsDelta;
-            updatePreviewPlayer(linkedPreviewPlayer);
-            if (m_context.traceCancelled) {
-                drawPredictionBounds(previewPlayer);
-                drawPredictionBounds(linkedPreviewPlayer);
-                break;
-            }
         }
 
         drawTraceSegment(previewPlayer, previousPosition, isSecondPlayer, holdPath, frameIndex);

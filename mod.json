@@ -6,7 +6,7 @@
 	},
 	"id": "toastexgd.toastyreplay",
 	"name": "ToastyReplay",
-	"developer": "ToastexGD", "Human", "Nigel",
+	"developer": "ToastexGD",
 	"description": "Frame-perfect replay bot for Geode.",
 	"links": {
 		"source": "https://github.com/ToastexGD/ToastyReplay"
