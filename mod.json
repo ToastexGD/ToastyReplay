@@ -32,7 +32,9 @@
 				"Auto",
 				"English",
 				"Espanol",
-				"Francais"
+				"Francais",
+				"TiengViet",
+				"Zhongwen"
 			]
 		},
 		"ffmpeg_path": {
