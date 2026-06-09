@@ -1,4 +1,5 @@
 #include "gui/gui.hpp"
+#include "gui/pride_mode.hpp"
 #include "lang/localization.hpp"
 #include "ToastyReplay.hpp"
 #include "audio/clicksounds.hpp"
@@ -2748,6 +2749,9 @@ void MenuInterface::drawHacksTab() {
 
     if (Widgets::ModuleCardBegin("Safe Mode", "Prevents stats and percentage gain",
         &engine->protectedMode, theme, anim, &keybinds.safeMode)) {
+        Widgets::ToggleSwitch("Auto-Enable While Recording / Playing", &engine->autoSafeMode, theme, anim);
+        ImGui::TextColored(ImVec4(theme.textSecondary),
+            "Force Safe Mode on whenever a macro is recording or playing back, even if the toggle above is off.");
         Widgets::ModuleCardEnd();
     }
 
@@ -3649,6 +3653,12 @@ void MenuInterface::drawSettingsTab() {
         }
     }
 
+    ImGui::Dummy(ImVec2(0, 8));
+    if (Widgets::ToggleSwitch("Pride Logo", &prideLogoEnabled, theme, anim)) {
+        ensureLogoTexture();
+        saveSettings();
+    }
+
     imguiTextTr("Theme Preset");
     ImGui::SetNextItemWidth(-1);
     int presetCount = ThemeEngine::getPresetCount();
@@ -4329,6 +4339,7 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("theme_glow_cycle", theme.glowCycleEnabled);
     mod->setSavedValue("theme_glow_rate", theme.glowCycleRate);
     mod->setSavedValue("ambient_waves", ambientWavesEnabled);
+    mod->setSavedValue("pride_logo", prideLogoEnabled);
 
     mod->setSavedValue("anim_speed", anim.animSpeed);
     mod->setSavedValue("anim_direction", (int)anim.openDirection);
@@ -4348,6 +4359,7 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("key_disable_shaders", keybinds.disableShaders);
     mod->setSavedValue("key_click_sounds", keybinds.clickSounds);
 
+    mod->setSavedValue("hack_auto_safe_mode", eng->autoSafeMode);
     mod->setSavedValue("hack_hitboxes", eng->showHitboxes);
     mod->setSavedValue("hack_hitbox_death", eng->hitboxOnDeath);
     mod->setSavedValue("hack_hitbox_trail", eng->hitboxTrail);
@@ -4531,6 +4543,7 @@ void MenuInterface::loadSettings() {
     }
 
     ambientWavesEnabled = mod->getSavedValue<bool>("ambient_waves", true);
+    prideLogoEnabled = mod->getSavedValue<bool>("pride_logo", false);
 
     anim.animSpeed = sanitizeClamped(mod->getSavedValue<float>("anim_speed", 8.0f), 2.0f, 24.0f, 8.0f);
     int savedDirection = mod->getSavedValue<int>("anim_direction", ANIM_CENTER);
@@ -4584,6 +4597,7 @@ void MenuInterface::loadSettings() {
     eng->rngLocked = mod->getSavedValue<bool>("hack_rng_lock", false);
     eng->rngSeedVal = mod->getSavedValue<int>("hack_rng_seed", 1);
     eng->protectedMode = mod->getSavedValue<bool>("hack_safe_mode", false);
+    eng->autoSafeMode = mod->getSavedValue<bool>("hack_auto_safe_mode", false);
     eng->audioPitchEnabled = mod->getSavedValue<bool>("hack_audio_pitch", true);
     eng->noMirrorEffect = mod->getSavedValue<bool>("hack_no_mirror", false);
     eng->layoutMode = mod->getSavedValue<bool>("hack_layout_mode", false);
@@ -4867,16 +4881,39 @@ void MenuInterface::initialize() {
     replayListDirty = true;
     replayRefreshQueued = true;
 
-    // Load logo texture
-    auto logoPath = Mod::get()->getPackagePath() / "logo.png";
-    if (!std::filesystem::exists(logoPath)) {
-        logoPath = Mod::get()->getTempDir() / "logo.png";
+    ensureLogoTexture();
+}
+
+void MenuInterface::ensureLogoTexture() {
+    auto* mod = Mod::get();
+    auto logoPath = toasty::pride::resolveLogoAssetPath(
+        prideLogoEnabled,
+        {
+            mod->getResourcesDir() / "logo-pride.png",
+            mod->getPackagePath() / "logo-pride.png",
+            mod->getTempDir() / "logo-pride.png"
+        },
+        {
+            mod->getPackagePath() / "logo.png",
+            mod->getTempDir() / "logo.png"
+        }
+    );
+
+    if (logoPath.empty()) {
+        return;
     }
-    if (std::filesystem::exists(logoPath)) {
-        auto pathStr = toasty::pathToUtf8(logoPath);
-        logoTexture = CCTextureCache::sharedTextureCache()->addImage(pathStr.c_str(), false);
-        if (logoTexture) logoTexture->retain();
+
+    auto pathStr = toasty::pathToUtf8(logoPath);
+    auto* texture = CCTextureCache::sharedTextureCache()->addImage(pathStr.c_str(), false);
+    if (!texture || texture == logoTexture) {
+        return;
     }
+
+    if (logoTexture) {
+        logoTexture->release();
+    }
+    logoTexture = texture;
+    logoTexture->retain();
 }
 
 $on_mod(Loaded) {

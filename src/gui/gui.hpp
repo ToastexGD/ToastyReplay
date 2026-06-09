@@ -121,6 +121,7 @@ public:
     bool validationFailed = false;
     bool setupComplete = false;
     cocos2d::CCTexture2D* logoTexture = nullptr;
+    bool prideLogoEnabled = false;
 
     int activeTab = 0;
     int previousTab = -1;
@@ -183,6 +184,7 @@ public:
     ImVec2 windowSize = ImVec2(580.0f, 540.0f);
 
     void initialize();
+    void ensureLogoTexture();
     void drawInterface();
     void saveSettings();
     void loadSettings();

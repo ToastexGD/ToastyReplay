@@ -126,6 +126,7 @@ public:
     bool disableShaders = false;
     bool macroInputActive = false;
     bool protectedMode = false;
+    bool autoSafeMode = false;
     bool pathPreview = false;
     bool collisionBypass = false;
     bool collisionLimitActive = false;

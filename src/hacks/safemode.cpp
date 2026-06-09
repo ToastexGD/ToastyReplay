@@ -8,7 +8,11 @@ using namespace geode::prelude;
 namespace {
 
 static bool safeModeEnabled() {
-    return ReplayEngine::get()->protectedMode;
+    auto* engine = ReplayEngine::get();
+    if (!engine) return false;
+    if (engine->protectedMode) return true;
+    if (engine->autoSafeMode && engine->engineMode != MODE_DISABLED) return true;
+    return false;
 }
 
 struct TestModeOverride {
