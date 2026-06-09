@@ -354,11 +354,6 @@ if (TARGET zlibstatic)
     list(APPEND TOASTYREPLAY_LINK_LIBRARIES zlibstatic)
 endif()
 
-# --- Watermark DLL (runtime-loaded with integrity verification) ---
-# The watermark is no longer statically linked. The DLL is loaded at runtime
-# and its SHA-256 is verified against a hash embedded at build time.
-# CI sets TOASTYREPLAY_WATERMARK_DLL_SHA256 as an environment variable.
-
 set(TOASTYREPLAY_WATERMARK_DLL_SHA256 "" CACHE STRING "SHA-256 hex hash of toasty_watermark.dll for integrity verification")
 if (NOT TOASTYREPLAY_WATERMARK_DLL_SHA256 AND DEFINED ENV{TOASTYREPLAY_WATERMARK_DLL_SHA256})
     set(TOASTYREPLAY_WATERMARK_DLL_SHA256 "$ENV{TOASTYREPLAY_WATERMARK_DLL_SHA256}" CACHE STRING "SHA-256 hex hash of toasty_watermark.dll" FORCE)
