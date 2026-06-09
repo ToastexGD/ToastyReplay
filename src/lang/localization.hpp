@@ -11,6 +11,8 @@ namespace toasty::lang {
         English,
         Spanish,
         French,
+        Vietnamese,
+        Chinese,
     };
 
     void initialize();
