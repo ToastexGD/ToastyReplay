@@ -205,8 +205,11 @@ namespace toasty::lang {
 
     std::string_view getLanguageSettingValue(UiLanguage language) {
         switch (language) {
-            case UiLanguage::English: return "English";
-            case UiLanguage::Spanish: return "Spanish";
+            case UiLanguage::English:    return "English";
+            case UiLanguage::Spanish:    return "Espanol";
+            case UiLanguage::French:     return "Francais";
+            case UiLanguage::Vietnamese: return "TiengViet";
+            case UiLanguage::Chinese:    return "Zhongwen";
             case UiLanguage::Auto:
             default: return "Auto";
         }
@@ -214,8 +217,11 @@ namespace toasty::lang {
 
     std::string_view getLanguageDisplayName(UiLanguage language) {
         switch (language) {
-            case UiLanguage::English: return "English";
-            case UiLanguage::Spanish: return "Espa" "\xC3\xB1" "ol";
+            case UiLanguage::English:    return "English";
+            case UiLanguage::Spanish:    return "Espa" "\xC3\xB1" "ol";
+            case UiLanguage::French:     return "Fran" "\xC3\xA7" "ais";
+            case UiLanguage::Vietnamese: return "Tieng Viet";
+            case UiLanguage::Chinese:    return "Chinese (Traditional)";
             case UiLanguage::Auto:
             default: return "Auto (System)";
         }
