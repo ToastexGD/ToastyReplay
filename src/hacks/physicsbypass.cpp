@@ -244,6 +244,58 @@ namespace {
         }
     };
 
+    struct DeferredFrameStepRelease {
+        PlayerButton button;
+        bool player2;
+    };
+
+    static std::vector<DeferredFrameStepRelease> g_frameStepDeferredReleases;
+
+    static constexpr double kFrameStepPairTimestampTolerance = 1e-6;
+
+    static bool isStretchableTapButton(PlayerButton button) {
+        return button == PlayerButton::Jump;
+    }
+
+    static void stretchTrailingTapsForFrameStep(GJBaseGameLayer* layer) {
+        if (!layer) {
+            return;
+        }
+
+        auto& queue = layer->m_queuedButtons;
+        while (queue.size() >= 2) {
+            auto const& release = queue[queue.size() - 1];
+            auto const& press = queue[queue.size() - 2];
+
+            if (release.m_isPush || !press.m_isPush) break;
+            if (release.m_button != press.m_button) break;
+            if (release.m_isPlayer2 != press.m_isPlayer2) break;
+            if (!isStretchableTapButton(release.m_button)) break;
+            if (std::abs(release.m_timestamp - press.m_timestamp) > kFrameStepPairTimestampTolerance) break;
+
+            g_frameStepDeferredReleases.push_back({ release.m_button, release.m_isPlayer2 });
+            queue.pop_back();
+        }
+    }
+
+    static void requeueDeferredFrameStepReleases(GJBaseGameLayer* layer) {
+        if (!layer || g_frameStepDeferredReleases.empty()) {
+            return;
+        }
+
+        double timestamp = layer->m_timestamp;
+        for (auto const& deferred : g_frameStepDeferredReleases) {
+            PlayerButtonCommand command = {};
+            command.m_button = deferred.button;
+            command.m_isPush = false;
+            command.m_isPlayer2 = deferred.player2;
+            command.m_timestamp = timestamp;
+            layer->m_queuedButtons.push_back(command);
+        }
+
+        g_frameStepDeferredReleases.clear();
+    }
+
     struct SimulationTimingController {
         float schedulerCarry = 0.0f;
 
@@ -275,11 +327,17 @@ namespace {
 
             engine.singleTickStep = false;
 
-            if (auto* pl = PlayLayer::get()) {
+            auto* pl = PlayLayer::get();
+            if (pl) {
                 engine.bridgeUserHoldsToPlayer(pl);
+                stretchTrailingTapsForFrameStep(pl);
             }
 
             scheduler->CCScheduler::update(fixedDelta(engine));
+
+            if (pl) {
+                requeueDeferredFrameStepReleases(pl);
+            }
         }
 
         void advanceRecordedScheduler(CCScheduler* scheduler, ReplayEngine& engine, Renderer& renderer, float rawDt) {
