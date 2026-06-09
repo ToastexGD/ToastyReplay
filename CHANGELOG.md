@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.1.0
+
+### What's New?
+
+- New Recording/Playback Labels/CPS **(Pro)**
+- Change colors of labels in the labels menu! **(Pro)**
+- Recording/Playback of levels in the editor **(Pro)** 
+- Editing Macros while playing them **(Pro)**
+- Auto Safe Mode **(Pro/Free)**
+- Discord Rich Presence! **(Pro)**
+- Pride Menu Icon change! (Optional) **(Free/Pro)**
+
+
+## What's fixed?
+
+- Fixed the 1 step delay to frame stepping when clicking on a frame.
+- Dash orb glitch is fixed when not interacting with dash orbs correctly. 
+- Fixed trajectory destroying destroyable items/blocks, breaking immersion. 
+- Fixed fatal crash bug when opening editor with speedhack set to 0.627% (yes we don't know why this was happening)
+- Fixed Label size calculations
+- Fixed wave trail bug (use wave trail fix mod)
+
 ## v2.0.2
 
 ### What's fixed?
