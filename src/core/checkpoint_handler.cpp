@@ -23,6 +23,39 @@ namespace {
         player->m_holdingButtons[2] = (mask & (1 << 1)) != 0;
         player->m_holdingButtons[3] = (mask & (1 << 2)) != 0;
     }
+
+    static void deactivateActiveVehicleVisual(PlayerObject* player) {
+        if (player->m_isShip)   player->toggleFlyMode(false, true);
+        if (player->m_isBall)   player->toggleRollMode(false, true);
+        if (player->m_isBird)   player->toggleBirdMode(false, true);
+        if (player->m_isDart)   player->toggleDartMode(false, true);
+        if (player->m_isSpider) player->toggleSpiderMode(false, true);
+        if (player->m_isSwing)  player->toggleSwingMode(false, true);
+        if (player->m_isRobot)  player->toggleRobotMode(false, true);
+    }
+
+    static void reconcileVehicleVisual(PlayerObject* player, PlayerStateBundle const& state) {
+        bool sameMode = player->m_isShip == state.flags.ship
+            && player->m_isBird == state.flags.bird
+            && player->m_isBall == state.flags.ball
+            && player->m_isDart == state.flags.wave
+            && player->m_isRobot == state.flags.robot
+            && player->m_isSpider == state.flags.spider
+            && player->m_isSwing == state.flags.swing;
+        if (sameMode) {
+            return;
+        }
+
+        deactivateActiveVehicleVisual(player);
+
+        if (state.flags.ship)        player->toggleFlyMode(true, true);
+        else if (state.flags.ball)   player->toggleRollMode(true, true);
+        else if (state.flags.bird)   player->toggleBirdMode(true, true);
+        else if (state.flags.wave)   player->toggleDartMode(true, true);
+        else if (state.flags.spider) player->toggleSpiderMode(true, true);
+        else if (state.flags.swing)  player->toggleSwingMode(true, true);
+        else if (state.flags.robot)  player->toggleRobotMode(true, true);
+    }
 }
 
 uint8_t InputStateRestorer::captureLatchMask(PlayerObject* player) {
@@ -129,6 +162,13 @@ PlayerStateBundle PlayerStateRestorer::captureState(PlayerObject* player, bool i
 void PlayerStateRestorer::restoreState(PlayerObject* player, PlayerStateBundle const& state) {
     if (!player) {
         return;
+    }
+
+    if (state.environment.extendedState) {
+        if (player->m_isDashing && !state.flags.dashing) {
+            player->stopDashing();
+        }
+        reconcileVehicleVisual(player, state);
     }
 
     player->setPosition(state.motion.position);
