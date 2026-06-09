@@ -3625,6 +3625,9 @@ void MenuInterface::drawSettingsTab() {
             UiLanguage::Auto,
             UiLanguage::English,
             UiLanguage::Spanish,
+            UiLanguage::French,
+            UiLanguage::Vietnamese,
+            UiLanguage::Chinese,
         };
 
         UiLanguage configuredLanguage = toasty::lang::getConfiguredLanguage();
