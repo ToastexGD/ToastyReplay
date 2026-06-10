@@ -2884,6 +2884,177 @@ static int audioCodecComboIndex(const char* codec) {
     return kAudioCodecCustomIdx;
 }
 
+void MenuInterface::drawRenderPresetsSection() {
+    bool isExp = ReplayEngine::get()->useNewRenderer;
+    auto* mod = Mod::get();
+    float inputW = ImGui::GetContentRegionAvail().x * 0.45f;
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Presets", theme);
+
+    if (presetListDirty) {
+        auto presetsDir = mod->getSaveDir() / "presets";
+        presetNames = RenderPresetIO::listNames(presetsDir);
+        if (presetSelectedIndex >= (int)presetNames.size())
+            presetSelectedIndex = presetNames.empty() ? -1 : (int)presetNames.size() - 1;
+        presetListDirty = false;
+    }
+
+    {
+        bool hasSelection = presetSelectedIndex >= 0 && presetSelectedIndex < (int)presetNames.size();
+        const char* previewName = hasSelection ? presetNames[presetSelectedIndex].c_str() : "(none)";
+        float btnW = 56.0f;
+        float sp = ImGui::GetStyle().ItemSpacing.x;
+
+        imguiTextTr("Preset");
+        ImGui::SameLine(inputW);
+        float remaining = ImGui::GetContentRegionAvail().x;
+        ImGui::SetNextItemWidth(remaining - (btnW + sp) * 2);
+        if (ImGui::BeginCombo("##presetCombo", previewName)) {
+            for (int i = 0; i < (int)presetNames.size(); i++) {
+                bool sel = (presetSelectedIndex == i);
+                if (ImGui::Selectable(presetNames[i].c_str(), sel))
+                    presetSelectedIndex = i;
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelection);
+        if (Widgets::StyledButton("Load##preset", ImVec2(btnW, 0), theme, anim)) {
+            auto presetsDir = mod->getSaveDir() / "presets";
+            auto preset = RenderPresetIO::load(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]));
+            if (preset) {
+                if (isExp) {
+                    expConfig = preset->toRenderConfig();
+                    expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+                    snprintf(expRenderFpsBuf,      sizeof(expRenderFpsBuf),      "%u", expConfig.fps);
+                    snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
+                    snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
+                    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or("").c_str());
+                    snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
+                    snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
+                    snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
+                    snprintf(expAdvAudioCodecBuf,  sizeof(expAdvAudioCodecBuf),  "%s", expConfig.audioCodec.value_or("").c_str());
+                    snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
+                    if (expConfig.crf.has_value())
+                        snprintf(expAdvCrfBuf, sizeof(expAdvCrfBuf), "%d", *expConfig.crf);
+                    else
+                        expAdvCrfBuf[0] = '\0';
+                    saveRenderConfig(expConfig);
+                } else {
+                    applyRenderPreset(*preset);
+                }
+                presetError.clear();
+            } else {
+                presetError = "Failed to load preset.";
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelection);
+        if (Widgets::StyledButton("Delete##preset", ImVec2(btnW, 0), theme, anim)) {
+            auto presetsDir = mod->getSaveDir() / "presets";
+            std::error_code ec;
+            std::filesystem::remove(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]), ec);
+            presetSelectedIndex = -1;
+            presetListDirty = true;
+            presetError = ec ? "Failed to delete preset." : "";
+        }
+        ImGui::EndDisabled();
+
+        ImGui::Dummy(ImVec2(0, 2));
+        imguiTextTr("New Name");
+        ImGui::SameLine(inputW);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btnW - sp);
+        ImGui::InputText("##presetNameInput", presetNameBuf, sizeof(presetNameBuf));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(presetNameBuf[0] == '\0');
+        if (Widgets::StyledButton("Save##preset", ImVec2(btnW, 0), theme, anim) && presetNameBuf[0] != '\0') {
+            auto presetsDir = mod->getSaveDir() / "presets";
+            RenderPreset preset;
+            if (isExp) {
+                preset = RenderPreset::fromRenderConfig(expConfig, presetNameBuf);
+            } else {
+                preset = captureRenderPreset();
+                preset.name = presetNameBuf;
+            }
+            if (RenderPresetIO::save(RenderPresetIO::pathForName(presetsDir, preset.name), preset)) {
+                presetNameBuf[0] = '\0';
+                presetListDirty = true;
+                presetError.clear();
+            } else {
+                presetError = "Failed to save preset.";
+            }
+        }
+        ImGui::EndDisabled();
+
+        if (!presetError.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+            ImGui::TextUnformatted(presetError.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+}
+
+void MenuInterface::drawRenderAudioSection() {
+    bool isExp = ReplayEngine::get()->useNewRenderer;
+    auto* mod = Mod::get();
+
+    bool&  includeAudio  = isExp ? expConfig.includeAudio  : renderIncludeAudio;
+    bool&  includeClicks = isExp ? expConfig.includeClicks : renderIncludeClicks;
+    float& musicVol      = isExp ? expConfig.musicVol      : renderMusicVol;
+    float& sfxVol        = isExp ? expConfig.sfxVol        : renderSfxVol;
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Audio", theme);
+
+    if (Widgets::ToggleSwitch("Include Audio", &includeAudio, theme, anim)) {
+        if (isExp) saveRenderConfig(expConfig);
+        else mod->setSavedValue("render_include_audio", includeAudio);
+    }
+    if (Widgets::ToggleSwitch("Include Click Sounds", &includeClicks, theme, anim)) {
+        if (isExp) saveRenderConfig(expConfig);
+        else mod->setSavedValue("render_include_clicks", includeClicks);
+    }
+    if (includeClicks) {
+        auto* csm = ClickSoundManager::get();
+        if (csm->p1Pack.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.3f, 0.8f));
+            imguiTextWrappedTr("Configure a click pack in the Clicks tab first.");
+            ImGui::PopStyleColor();
+        }
+    }
+    if (Widgets::StyledSliderFloat("Music Volume", &musicVol, 0.f, 1.f, theme)) {
+        if (isExp) saveRenderConfig(expConfig);
+        else mod->setSavedValue("render_music_volume", (double)musicVol);
+    }
+    if (Widgets::StyledSliderFloat("Click Volume", &sfxVol, 0.f, 1.f, theme)) {
+        if (isExp) saveRenderConfig(expConfig);
+        else mod->setSavedValue("render_sfx_volume", (double)sfxVol);
+    }
+}
+
+void MenuInterface::drawRenderDisplaySection() {
+    bool isExp = ReplayEngine::get()->useNewRenderer;
+    auto* mod = Mod::get();
+
+    bool& hideEndscreen    = isExp ? expConfig.hideEndscreen    : renderHideEndscreen;
+    bool& hideLevelComplete = isExp ? expConfig.hideLevelComplete : renderHideLevelComplete;
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Display", theme);
+
+    if (Widgets::ToggleSwitch("Hide End Screen", &hideEndscreen, theme, anim)) {
+        if (isExp) saveRenderConfig(expConfig);
+        else mod->setSavedValue("render_hide_endscreen", hideEndscreen);
+    }
+    if (Widgets::ToggleSwitch("Hide Level Complete", &hideLevelComplete, theme, anim)) {
+        if (isExp) saveRenderConfig(expConfig);
+        else mod->setSavedValue("render_hide_levelcomplete", hideLevelComplete);
+    }
+}
+
 void MenuInterface::drawRenderTab() {
     if (ReplayEngine::get()->useNewRenderer) {
         drawExpRenderTab();
@@ -2930,85 +3101,7 @@ void MenuInterface::drawRenderTab() {
             r.toggle();
     }
 
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Presets", theme);
-
-    if (presetListDirty) {
-        auto presetsDir = Mod::get()->getSaveDir() / "presets";
-        presetNames = RenderPresetIO::listNames(presetsDir);
-        if (presetSelectedIndex >= (int)presetNames.size())
-            presetSelectedIndex = presetNames.empty() ? -1 : (int)presetNames.size() - 1;
-        presetListDirty = false;
-    }
-
-    {
-        bool hasSelection = presetSelectedIndex >= 0 && presetSelectedIndex < (int)presetNames.size();
-        const char* previewName = hasSelection ? presetNames[presetSelectedIndex].c_str() : "(none)";
-        float btnW = 56.0f;
-        float sp = ImGui::GetStyle().ItemSpacing.x;
-
-        imguiTextTr("Preset");
-        ImGui::SameLine(inputW);
-        float remaining = ImGui::GetContentRegionAvail().x;
-        ImGui::SetNextItemWidth(remaining - (btnW + sp) * 2);
-        if (ImGui::BeginCombo("##presetCombo", previewName)) {
-            for (int i = 0; i < (int)presetNames.size(); i++) {
-                bool sel = (presetSelectedIndex == i);
-                if (ImGui::Selectable(presetNames[i].c_str(), sel))
-                    presetSelectedIndex = i;
-                if (sel) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!hasSelection);
-        if (Widgets::StyledButton("Load##preset", ImVec2(btnW, 0), theme, anim)) {
-            auto presetsDir = Mod::get()->getSaveDir() / "presets";
-            auto preset = RenderPresetIO::load(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]));
-            if (preset) { applyRenderPreset(*preset); presetError.clear(); }
-            else presetError = "Failed to load preset.";
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!hasSelection);
-        if (Widgets::StyledButton("Delete##preset", ImVec2(btnW, 0), theme, anim)) {
-            auto presetsDir = Mod::get()->getSaveDir() / "presets";
-            std::error_code ec;
-            std::filesystem::remove(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]), ec);
-            presetSelectedIndex = -1;
-            presetListDirty = true;
-            presetError = ec ? "Failed to delete preset." : "";
-        }
-        ImGui::EndDisabled();
-
-        ImGui::Dummy(ImVec2(0, 2));
-
-        imguiTextTr("New Name");
-        ImGui::SameLine(inputW);
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btnW - sp);
-        ImGui::InputText("##presetNameInput", presetNameBuf, sizeof(presetNameBuf));
-        ImGui::SameLine();
-        ImGui::BeginDisabled(presetNameBuf[0] == '\0');
-        if (Widgets::StyledButton("Save##preset", ImVec2(btnW, 0), theme, anim) && presetNameBuf[0] != '\0') {
-            auto presetsDir = Mod::get()->getSaveDir() / "presets";
-            auto preset = captureRenderPreset();
-            preset.name = presetNameBuf;
-            if (RenderPresetIO::save(RenderPresetIO::pathForName(presetsDir, preset.name), preset)) {
-                presetNameBuf[0] = '\0';
-                presetListDirty = true;
-                presetError.clear();
-            } else {
-                presetError = "Failed to save preset.";
-            }
-        }
-        ImGui::EndDisabled();
-
-        if (!presetError.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-            ImGui::TextUnformatted(presetError.c_str());
-            ImGui::PopStyleColor();
-        }
-    }
+    drawRenderPresetsSection();
 
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Resolution", theme);
@@ -3159,38 +3252,8 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_file_extension", std::string(renderExtBuf));
     }
 
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Audio", theme);
-
-    if (Widgets::ToggleSwitch("Include Audio", &renderIncludeAudio, theme, anim))
-        mod->setSavedValue("render_include_audio", renderIncludeAudio);
-
-    if (Widgets::ToggleSwitch("Include Click Sounds", &renderIncludeClicks, theme, anim))
-        mod->setSavedValue("render_include_clicks", renderIncludeClicks);
-
-    if (renderIncludeClicks) {
-        auto* csm = ClickSoundManager::get();
-        if (csm->p1Pack.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.7f, 0.3f, 0.8f));
-            imguiTextWrappedTr("Configure a click pack in the Clicks tab first.");
-            ImGui::PopStyleColor();
-        }
-    }
-
-    if (Widgets::StyledSliderFloat("Click Volume", &renderSfxVol, 0.f, 1.f, theme))
-        mod->setSavedValue("render_sfx_volume", (double)renderSfxVol);
-
-    if (Widgets::StyledSliderFloat("Music Volume", &renderMusicVol, 0.f, 1.f, theme))
-        mod->setSavedValue("render_music_volume", (double)renderMusicVol);
-
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Display", theme);
-
-    if (Widgets::ToggleSwitch("Hide End Screen", &renderHideEndscreen, theme, anim))
-        mod->setSavedValue("render_hide_endscreen", renderHideEndscreen);
-
-    if (Widgets::ToggleSwitch("Hide Level Complete", &renderHideLevelComplete, theme, anim))
-        mod->setSavedValue("render_hide_levelcomplete", renderHideLevelComplete);
+    drawRenderAudioSection();
+    drawRenderDisplaySection();
 
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Advanced", theme);
@@ -4896,103 +4959,7 @@ void MenuInterface::drawExpRenderTab() {
         }
     }
 
-    // ── PRESETS ─────────────────────────────────────────────────────────────
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Presets", theme);
-
-    if (presetListDirty) {
-        auto presetsDir = mod->getSaveDir() / "presets";
-        presetNames = RenderPresetIO::listNames(presetsDir);
-        if (presetSelectedIndex >= (int)presetNames.size())
-            presetSelectedIndex = presetNames.empty() ? -1 : (int)presetNames.size() - 1;
-        presetListDirty = false;
-    }
-
-    {
-        bool hasSelection = presetSelectedIndex >= 0 && presetSelectedIndex < (int)presetNames.size();
-        const char* previewName = hasSelection ? presetNames[presetSelectedIndex].c_str() : "(none)";
-        float btnW = 56.0f;
-        float sp = ImGui::GetStyle().ItemSpacing.x;
-
-        imguiTextTr("Preset");
-        ImGui::SameLine(inputW);
-        float remaining = ImGui::GetContentRegionAvail().x;
-        ImGui::SetNextItemWidth(remaining - (btnW + sp) * 2);
-        if (ImGui::BeginCombo("##expPresetCombo", previewName)) {
-            for (int i = 0; i < (int)presetNames.size(); i++) {
-                bool sel = (presetSelectedIndex == i);
-                if (ImGui::Selectable(presetNames[i].c_str(), sel))
-                    presetSelectedIndex = i;
-                if (sel) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!hasSelection);
-        if (Widgets::StyledButton("Load##expPreset", ImVec2(btnW, 0), theme, anim)) {
-            auto presetsDir = mod->getSaveDir() / "presets";
-            auto preset = RenderPresetIO::load(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]));
-            if (preset) {
-                expConfig = preset->toRenderConfig();
-                expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
-                snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
-                snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
-                snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
-                snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or("").c_str());
-                snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
-                snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
-                snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
-                snprintf(expAdvAudioCodecBuf,  sizeof(expAdvAudioCodecBuf),  "%s", expConfig.audioCodec.value_or("").c_str());
-                snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
-                if (expConfig.crf.has_value())
-                    snprintf(expAdvCrfBuf, sizeof(expAdvCrfBuf), "%d", *expConfig.crf);
-                else
-                    expAdvCrfBuf[0] = '\0';
-                saveRenderConfig(expConfig);
-                presetError.clear();
-            } else {
-                presetError = "Failed to load preset.";
-            }
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!hasSelection);
-        if (Widgets::StyledButton("Delete##expPreset", ImVec2(btnW, 0), theme, anim)) {
-            auto presetsDir = mod->getSaveDir() / "presets";
-            std::error_code ec;
-            std::filesystem::remove(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]), ec);
-            presetSelectedIndex = -1;
-            presetListDirty = true;
-            presetError = ec ? "Failed to delete preset." : "";
-        }
-        ImGui::EndDisabled();
-
-        ImGui::Dummy(ImVec2(0, 2));
-        imguiTextTr("New Name");
-        ImGui::SameLine(inputW);
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btnW - sp);
-        ImGui::InputText("##expPresetNameInput", presetNameBuf, sizeof(presetNameBuf));
-        ImGui::SameLine();
-        ImGui::BeginDisabled(presetNameBuf[0] == '\0');
-        if (Widgets::StyledButton("Save##expPreset", ImVec2(btnW, 0), theme, anim) && presetNameBuf[0] != '\0') {
-            auto presetsDir = mod->getSaveDir() / "presets";
-            auto preset = RenderPreset::fromRenderConfig(expConfig, presetNameBuf);
-            if (RenderPresetIO::save(RenderPresetIO::pathForName(presetsDir, preset.name), preset)) {
-                presetNameBuf[0] = '\0';
-                presetListDirty = true;
-                presetError.clear();
-            } else {
-                presetError = "Failed to save preset.";
-            }
-        }
-        ImGui::EndDisabled();
-
-        if (!presetError.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
-            ImGui::TextUnformatted(presetError.c_str());
-            ImGui::PopStyleColor();
-        }
-    }
+    drawRenderPresetsSection();
 
     // ── RESOLUTION ──────────────────────────────────────────────────────────
     ImGui::Dummy(ImVec2(0, 8));
@@ -5097,27 +5064,8 @@ void MenuInterface::drawExpRenderTab() {
         }
     }
 
-    // ── AUDIO ───────────────────────────────────────────────────────────────
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Audio", theme);
-
-    if (Widgets::ToggleSwitch("Include Audio", &expConfig.includeAudio, theme, anim))
-        saveRenderConfig(expConfig);
-    if (Widgets::ToggleSwitch("Include Click Sounds", &expConfig.includeClicks, theme, anim))
-        saveRenderConfig(expConfig);
-    if (Widgets::StyledSliderFloat("Music Volume", &expConfig.musicVol, 0.f, 1.f, theme))
-        saveRenderConfig(expConfig);
-    if (Widgets::StyledSliderFloat("Click Volume", &expConfig.sfxVol, 0.f, 1.f, theme))
-        saveRenderConfig(expConfig);
-
-    // ── DISPLAY ─────────────────────────────────────────────────────────────
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Display", theme);
-
-    if (Widgets::ToggleSwitch("Hide End Screen", &expConfig.hideEndscreen, theme, anim))
-        saveRenderConfig(expConfig);
-    if (Widgets::ToggleSwitch("Hide Level Complete", &expConfig.hideLevelComplete, theme, anim))
-        saveRenderConfig(expConfig);
+    drawRenderAudioSection();
+    drawRenderDisplaySection();
 
     // ── ADVANCED ────────────────────────────────────────────────────────────
     ImGui::Dummy(ImVec2(0, 8));
