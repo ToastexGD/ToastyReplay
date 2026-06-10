@@ -417,7 +417,8 @@ static bool tryMuxAudioWithExe(
     bool fadeOut,
     float timeAfter,
     float audioVolume,
-    std::string extraAudioArgs
+    std::string extraAudioArgs,
+    std::string audioCodec
 ) {
     if (ffmpegPath.empty()) {
         return false;
@@ -442,8 +443,9 @@ static bool tryMuxAudioWithExe(
         extraAudioArgs += " ";
     }
 
-    std::string audioEncodeArgs = "-c:a aac";
-    if (shouldUseMobileMp4Audio(outputPath)) {
+    bool isAac = audioCodec.empty() || audioCodec == "aac";
+    std::string audioEncodeArgs = "-c:a " + (audioCodec.empty() ? std::string("aac") : audioCodec);
+    if (isAac && shouldUseMobileMp4Audio(outputPath)) {
         audioEncodeArgs += fmt::format(
             " -profile:a aac_low -b:a {}k -ac {} -ar {} -movflags +faststart",
             kMobileMp4AudioBitrateKbps,
@@ -849,10 +851,10 @@ bool Renderer::toggle() {
         renderPath = dirs::getGameDir() / "renders";
     }
     if (pathExists(renderPath)) {
-        engine->renderer.start();
+        engine->renderer.startFromPending();
     } else {
         if (utils::file::createDirectoryAll(renderPath).isOk())
-            engine->renderer.start();
+            engine->renderer.startFromPending();
         else {
             auto errorTitle = trString("Error");
             auto errorMessage = trString("Failed to prepare the output directory.");
@@ -865,6 +867,43 @@ bool Renderer::toggle() {
     return true;
 }
 
+void Renderer::startFromPending() {
+    if (m_pendingConfig.has_value()) {
+        auto cfg = std::move(*m_pendingConfig);
+        m_pendingConfig.reset();
+        start(cfg);
+    } else {
+        start();
+    }
+}
+
+void Renderer::start(const RenderConfig& config) {
+    m_resolvedParams = resolve(config);
+
+    fps             = config.fps;
+    width           = config.width;
+    height          = config.height;
+    sfxVolume       = config.sfxVol;
+    musicVolume     = config.musicVol;
+    stopAfter       = config.secondsAfter;
+    includeClickSounds = config.includeClicks;
+    audioMode       = config.includeAudio ? AUDIO_SONG : AUDIO_OFF;
+    hideEndscreen   = config.hideEndscreen;
+    hideLevelComplete = config.hideLevelComplete;
+    codec           = m_resolvedParams->codec;
+    extraArgs       = m_resolvedParams->extraArgs;
+    videoArgs       = m_resolvedParams->videoArgs;
+    extraAudioArgs  = m_resolvedParams->audioArgs;
+    audioCodec      = m_resolvedParams->audioCodec;
+    m_extOverride   = m_resolvedParams->ext;
+
+    // lossless (libx264rgb + CRF 0) requires the subprocess path
+    if (config.tier == RenderQualityTier::Lossless)
+        usingApi = false;
+
+    start();
+}
+
 void Renderer::start() {
     PlayLayer* pl = PlayLayer::get();
     if (!pl) return;
@@ -874,53 +913,60 @@ void Renderer::start() {
     Mod* mod = Mod::get();
     fmod = FMODAudioEngine::sharedEngine();
 
-    fps = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_fps", 60));
-    codec = mod->getSavedValue<std::string>("render_codec", "");
-    if (codec.empty()) codec = "libx264";
-    bitrate = mod->getSavedValue<std::string>("render_bitrate", "40") + "M";
-    extraArgs = loadSavedValueWithFallback<std::string>(mod, "render_args", "-pix_fmt yuv420p", {"render_extra_args"});
-    videoArgs = mod->getSavedValue<std::string>("render_video_args", "colorspace=all=bt709:iall=bt470bg:fast=1");
-    extraAudioArgs = mod->getSavedValue<std::string>("render_audio_args", "");
-    sfxVolume = static_cast<float>(mod->getSavedValue<double>("render_sfx_volume", 1.0));
-    musicVolume = static_cast<float>(mod->getSavedValue<double>("render_music_volume", 1.0));
-    log::info("Render audio: musicVolume={:.3f}, clickVolume={:.3f}, includeAudio={}, includeClicks={}",
-        musicVolume, sfxVolume,
-        loadSavedValueWithFallback<bool>(mod, "render_include_audio", true, {"render_record_audio", "render_capture_audio"}),
-        mod->getSavedValue<bool>("render_include_clicks", false));
-    stopAfter = static_cast<float>(
-        geode::utils::numFromString<float>(
-            loadSavedValueWithFallback<std::string>(mod, "render_seconds_after", "3", {"render_after_seconds"})
-        ).unwrapOr(3.f));
-    audioMode = AUDIO_OFF;
+    std::string extension;
 
-    std::string extension = loadSavedValueWithFallback<std::string>(mod, "render_file_extension", ".mp4", {"render_extension"});
-
-    if (loadSavedValueWithFallback<bool>(mod, "render_include_audio", true, {"render_record_audio", "render_capture_audio"})) {
-        audioMode = AUDIO_SONG;
+    if (!m_resolvedParams.has_value()) {
+        fps    = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_fps", 60));
+        codec  = mod->getSavedValue<std::string>("render_codec", "");
+        if (codec.empty()) codec = "libx264";
+        bitrate = mod->getSavedValue<std::string>("render_bitrate", "40") + "M";
+        extraArgs    = loadSavedValueWithFallback<std::string>(mod, "render_args", "-pix_fmt yuv420p", {"render_extra_args"});
+        videoArgs    = mod->getSavedValue<std::string>("render_video_args", "colorspace=all=bt709:iall=bt470bg:fast=1");
+        extraAudioArgs = mod->getSavedValue<std::string>("render_audio_args", "");
+        auto savedAudioCodec = mod->getSavedValue<std::string>("render_audio_codec", "");
+        audioCodec = savedAudioCodec.empty() ? "aac" : savedAudioCodec;
+        sfxVolume    = static_cast<float>(mod->getSavedValue<double>("render_sfx_volume", 1.0));
+        musicVolume  = static_cast<float>(mod->getSavedValue<double>("render_music_volume", 1.0));
+        stopAfter    = static_cast<float>(
+            geode::utils::numFromString<float>(
+                loadSavedValueWithFallback<std::string>(mod, "render_seconds_after", "3", {"render_after_seconds"})
+            ).unwrapOr(3.f));
+        extension = loadSavedValueWithFallback<std::string>(mod, "render_file_extension", ".mp4", {"render_extension"});
+        audioMode = loadSavedValueWithFallback<bool>(mod, "render_include_audio", true, {"render_record_audio", "render_capture_audio"})
+            ? AUDIO_SONG : AUDIO_OFF;
+        includeClickSounds = mod->getSavedValue<bool>("render_include_clicks", false);
+        width  = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_width", 1920));
+        height = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_height", 1080));
+        hideEndscreen     = mod->getSavedValue<bool>("render_hide_endscreen", false);
+        hideLevelComplete = mod->getSavedValue<bool>("render_hide_levelcomplete", false);
+    } else {
+        extension = m_extOverride;
+        m_extOverride.clear();
     }
 
-    includeClickSounds = mod->getSavedValue<bool>("render_include_clicks", false);
-
-    width = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_width", 1920));
-    height = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_height", 1080));
-
-    auto now = std::chrono::system_clock::now();
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    log::info("Render audio: musicVolume={:.3f}, clickVolume={:.3f}, includeAudio={}, includeClicks={}",
+        musicVolume, sfxVolume, audioMode == AUDIO_SONG, includeClickSounds);
 
     std::string customName = mod->getSavedValue<std::string>("render_name", "");
-    std::string filename;
-    if (!customName.empty()) {
-        filename = fmt::format("{}_{}{}",
-            customName, std::to_string(timestamp), extension);
-    } else {
-        filename = fmt::format("render_{}_{}x{}_{}{}",
-            std::string_view(pl->m_level->m_levelName), width, height, std::to_string(timestamp), extension);
-    }
+    std::string baseName = customName.empty()
+        ? fmt::format("render_{}_{}x{}", std::string_view(pl->m_level->m_levelName), width, height)
+        : customName;
+
     std::filesystem::path renderFolder = Mod::get()->getSettingValue<std::filesystem::path>("render_folder");
-    if (renderFolder.empty() || pathContainsMarker(renderFolder, "{gd_dir}")) {
+    if (renderFolder.empty() || pathContainsMarker(renderFolder, "{gd_dir}"))
         renderFolder = dirs::getGameDir() / "renders";
-    }
-    path = renderFolder / filename;
+
+    std::error_code ec;
+    std::filesystem::create_directories(renderFolder, ec);
+
+    auto candidatePath = [&](int n) {
+        std::string name = n <= 1 ? baseName + extension
+                                  : fmt::format("{} ({}){}", baseName, n, extension);
+        return renderFolder / name;
+    };
+    int counter = 1;
+    while (std::filesystem::exists(candidatePath(counter))) ++counter;
+    path = candidatePath(counter);
 
     if (width % 2 != 0) width++;
     if (height % 2 != 0) height++;
@@ -1059,8 +1105,10 @@ void Renderer::start() {
         (static_cast<float>(levelStartFrame) / getTPS());
     bool fadeIn = pl->m_levelSettings->m_fadeIn;
     bool fadeOut = pl->m_levelSettings->m_fadeOut;
-    int64_t bitrateApi = geode::utils::numFromString<int64_t>(
-        mod->getSavedValue<std::string>("render_bitrate", "40")).unwrapOr(40) * 1000000;
+    int64_t bitrateApi = m_resolvedParams.has_value()
+        ? m_resolvedParams->apiBitrate
+        : geode::utils::numFromString<int64_t>(
+            mod->getSavedValue<std::string>("render_bitrate", "40")).unwrapOr(40) * 1000000;
 
     if (includeClickSounds) {
         int systemRate = 44100;
@@ -1111,6 +1159,11 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             }
         }
 
+        if (m_resolvedParams.has_value()) {
+            settings.m_codec   = m_resolvedParams->codec;
+            settings.m_bitrate = m_resolvedParams->apiBitrate;
+        }
+
         std::string localCodec = codec;
         std::string localBitrate = bitrate;
         std::string localExtraArgs = extraArgs;
@@ -1154,23 +1207,49 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         
         if (!useApiForEncoding) {
 #ifdef GEODE_IS_WINDOWS
-            if (!localCodec.empty()) localCodec = "-c:v " + localCodec + " ";
-            if (!localBitrate.empty()) localBitrate = "-b:v " + localBitrate + " ";
-            if (localExtraArgs.empty()) localExtraArgs = "-pix_fmt yuv420p";
-            if (localVideoArgs.empty()) localVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
+            std::string command;
+            if (m_resolvedParams.has_value()) {
+                auto const& rp = *m_resolvedParams;
+                bool isNvenc = rp.codec.find("nvenc") != std::string::npos;
+                bool isAmf   = rp.codec.find("amf")   != std::string::npos;
+                bool isQsv   = rp.codec.find("qsv")   != std::string::npos;
+                std::string qualitySection;
+                if (isNvenc)
+                    qualitySection = fmt::format("-cq {}", rp.crf);
+                else if (isAmf)
+                    qualitySection = fmt::format("-rc cqp -qp_i {} -qp_p {}", rp.crf, rp.crf);
+                else if (isQsv)
+                    qualitySection = fmt::format("-global_quality {}", rp.crf);
+                else
+                    qualitySection = fmt::format("-crf {}", rp.crf);
+                if (!rp.x264Preset.empty())
+                    qualitySection += fmt::format(" -preset {}", rp.x264Preset);
+                if (!rp.maxBitrate.empty())
+                    qualitySection += fmt::format(" -maxrate {} -bufsize {}", rp.maxBitrate, rp.maxBitrate);
 
-            std::string command = fmt::format(
-                "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - {}{}{} -vf \"vflip,{}\" -an \"{}\"",
-                toasty::pathToUtf8(ffmpegPath),
-                std::to_string(width),
-                std::to_string(height),
-                std::to_string(fps),
-                localCodec,
-                localBitrate,
-                localExtraArgs,
-                localVideoArgs,
-                toasty::pathToUtf8(path)
-            );
+                command = fmt::format(
+                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - -c:v {} {} {} -vf \"vflip,{}\" -an \"{}\"",
+                    toasty::pathToUtf8(ffmpegPath),
+                    width, height, fps,
+                    rp.codec, qualitySection, rp.extraArgs,
+                    rp.videoArgs,
+                    toasty::pathToUtf8(path)
+                );
+            } else {
+                if (!localCodec.empty()) localCodec = "-c:v " + localCodec + " ";
+                if (!localBitrate.empty()) localBitrate = "-b:v " + localBitrate + " ";
+                if (localExtraArgs.empty()) localExtraArgs = "-pix_fmt yuv420p";
+                if (localVideoArgs.empty()) localVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
+
+                command = fmt::format(
+                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - {}{}{} -vf \"vflip,{}\" -an \"{}\"",
+                    toasty::pathToUtf8(ffmpegPath),
+                    std::to_string(width), std::to_string(height), std::to_string(fps),
+                    localCodec, localBitrate, localExtraArgs,
+                    localVideoArgs,
+                    toasty::pathToUtf8(path)
+                );
+            }
 
             log::info("Executing: {}", command);
             process = Subprocess(command);
@@ -1361,7 +1440,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         if (!hasAudio) {
             Loader::get()->queueInMainThread([this] {
                 Notification::create(trString("Render done without audio"), NotificationIcon::Success)->show();
-                if (Mod::get()->getSavedValue<bool>("render_hide_endscreen", false)) {
+                if (ReplayEngine::get()->renderer.hideEndscreen) {
                     if (PlayLayer* pl = PlayLayer::get())
                         if (EndLevelLayer* layer = pl->getChildByType<EndLevelLayer>(0))
                             layer->setVisible(true);
@@ -1466,7 +1545,8 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 fadeOut,
                 timeAfter,
                 audioVolume,
-                extraAudioArgs
+                extraAudioArgs,
+                audioCodec
             );
         }
 #endif
@@ -1504,6 +1584,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             });
         }
 
+        m_resolvedParams.reset();
 }
 
 void Renderer::restoreAudioVolumes() {
@@ -1640,7 +1721,7 @@ class $modify(RenderPlayLayer, PlayLayer) {
         auto* engine = ReplayEngine::get();
         bool hideLevelComplete = engine->renderer.recording &&
             m_levelEndAnimationStarted &&
-            Mod::get()->getSavedValue<bool>("render_hide_levelcomplete", false);
+            engine->renderer.hideLevelComplete;
 
         hideLevelCompleteText(this, hideLevelComplete);
     }
@@ -1652,7 +1733,7 @@ class $modify(RenderEndLayer, EndLevelLayer) {
         if (!PlayLayer::get()) return;
         auto* engine = ReplayEngine::get();
         if (engine->renderer.recording && PlayLayer::get()->m_levelEndAnimationStarted &&
-            Mod::get()->getSavedValue<bool>("render_hide_endscreen", false)) {
+            engine->renderer.hideEndscreen) {
             this->runAction(CCSequence::createWithTwoActions(
                 CCDelayTime::create(0.f),
                 CCCallFunc::create(this, callfunc_selector(RenderEndLayer::hideForRender))
@@ -1699,7 +1780,7 @@ class $modify(RenderParticle, CCParticleSystemQuad) {
         if (!engine->renderer.recording) return ret;
 
         if (std::string_view(v1) == "levelComplete01.plist" &&
-            Mod::get()->getSavedValue<bool>("render_hide_levelcomplete", false))
+            engine->renderer.hideLevelComplete)
             ret->setVisible(false);
 
         return ret;
