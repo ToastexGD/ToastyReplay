@@ -478,7 +478,6 @@ static void finishImport(ImportedReplay& replay) {
 
     std::stable_sort(replay.inputs.begin(), replay.inputs.end(), inputLess);
 
-    std::array<bool, 6> held = { false, false, false, false, false, false };
     std::vector<ImportedInput> normalized;
     normalized.reserve(replay.inputs.size());
     size_t removedDuplicates = 0;
@@ -486,18 +485,24 @@ static void finishImport(ImportedReplay& replay) {
     for (auto input : replay.inputs) {
         input.button = sanitizeButton(input.button);
         input.tick = static_cast<int64_t>(std::llround(std::max(0.0, input.time * replay.fps)));
-        size_t idx = (input.player2 ? 3u : 0u) + static_cast<size_t>(input.button - 1);
-        if (held[idx] == input.pressed) {
-            ++removedDuplicates;
-            continue;
+
+        if (!normalized.empty()) {
+            auto const& last = normalized.back();
+            if (last.tick == input.tick &&
+                last.button == input.button &&
+                last.player2 == input.player2 &&
+                last.pressed == input.pressed) {
+                ++removedDuplicates;
+                continue;
+            }
         }
-        held[idx] = input.pressed;
+
         input.sequence = static_cast<uint64_t>(normalized.size());
         normalized.push_back(input);
     }
 
     if (removedDuplicates != 0) {
-        addWarningOnce(replay, "Removed duplicate or stale input transitions.");
+        addWarningOnce(replay, "Removed consecutive duplicate input transitions.");
     }
     replay.inputs = std::move(normalized);
 
