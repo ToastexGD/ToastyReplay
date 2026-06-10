@@ -73,6 +73,13 @@ jobs:
             throw "Private watermark build did not produce artifact/include/toasty_watermark.hpp."
           }
 
+      - name: Normalize watermark artifact root
+        id: watermark_root
+        shell: pwsh
+        run: |
+          $root = (Resolve-Path -LiteralPath ".private/watermark-src/artifact").Path.Replace('\', '/')
+          "root=$root" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Reset geode cli before final build
         shell: pwsh
         run: |
@@ -94,7 +101,7 @@ jobs:
         with:
           cli: "latest"
           sdk: "5.7.1"
-          configure-args: "-DTOASTYREPLAY_WATERMARK_ROOT=${{ github.workspace }}/.private/watermark-src/artifact"
+          configure-args: "-DTOASTYREPLAY_WATERMARK_ROOT=${{ steps.watermark_root.outputs.root }}"
           ccache-variant: sccache
 
       - name: Verify package has no runtime watermark DLL
