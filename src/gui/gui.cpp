@@ -12,6 +12,7 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <filesystem>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <algorithm>
@@ -2871,12 +2872,29 @@ void MenuInterface::drawHacksTab() {
     }
 }
 
+static constexpr const char* kAudioCodecIds[]    = { "aac",  "libopus", "flac",  "libmp3lame", "pcm_s16le", "ac3",    nullptr };
+static constexpr const char* kAudioCodecLabels[] = { "AAC", "Opus",    "FLAC",  "MP3",        "PCM",       "AC-3", "Custom..." };
+static constexpr int kAudioCodecCustomIdx = 6;
+
+// Returns combo index for a codec string, or kAudioCodecCustomIdx if not in the list.
+static int audioCodecComboIndex(const char* codec) {
+    if (!codec || codec[0] == '\0' || std::string(codec) == "aac") return 0;
+    for (int i = 0; kAudioCodecIds[i]; ++i)
+        if (std::string(codec) == kAudioCodecIds[i]) return i;
+    return kAudioCodecCustomIdx;
+}
+
 void MenuInterface::drawRenderTab() {
+    if (ReplayEngine::get()->useNewRenderer) {
+        drawExpRenderTab();
+        return;
+    }
+
     auto* engine = ReplayEngine::get();
     auto* mod = Mod::get();
     Renderer& r = engine->renderer;
 
-    
+
     struct ResPreset { const char* name; int width; int height; };
     static const ResPreset presets[] = {
         { "720p  (1280x720)",   1280,  720 },
@@ -2910,6 +2928,86 @@ void MenuInterface::drawRenderTab() {
     } else {
         if (Widgets::StyledButton("Start Render", ImVec2(ImGui::GetContentRegionAvail().x, 36), theme, anim))
             r.toggle();
+    }
+
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Presets", theme);
+
+    if (presetListDirty) {
+        auto presetsDir = Mod::get()->getSaveDir() / "presets";
+        presetNames = RenderPresetIO::listNames(presetsDir);
+        if (presetSelectedIndex >= (int)presetNames.size())
+            presetSelectedIndex = presetNames.empty() ? -1 : (int)presetNames.size() - 1;
+        presetListDirty = false;
+    }
+
+    {
+        bool hasSelection = presetSelectedIndex >= 0 && presetSelectedIndex < (int)presetNames.size();
+        const char* previewName = hasSelection ? presetNames[presetSelectedIndex].c_str() : "(none)";
+        float btnW = 56.0f;
+        float sp = ImGui::GetStyle().ItemSpacing.x;
+
+        imguiTextTr("Preset");
+        ImGui::SameLine(inputW);
+        float remaining = ImGui::GetContentRegionAvail().x;
+        ImGui::SetNextItemWidth(remaining - (btnW + sp) * 2);
+        if (ImGui::BeginCombo("##presetCombo", previewName)) {
+            for (int i = 0; i < (int)presetNames.size(); i++) {
+                bool sel = (presetSelectedIndex == i);
+                if (ImGui::Selectable(presetNames[i].c_str(), sel))
+                    presetSelectedIndex = i;
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelection);
+        if (Widgets::StyledButton("Load##preset", ImVec2(btnW, 0), theme, anim)) {
+            auto presetsDir = Mod::get()->getSaveDir() / "presets";
+            auto preset = RenderPresetIO::load(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]));
+            if (preset) { applyRenderPreset(*preset); presetError.clear(); }
+            else presetError = "Failed to load preset.";
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelection);
+        if (Widgets::StyledButton("Delete##preset", ImVec2(btnW, 0), theme, anim)) {
+            auto presetsDir = Mod::get()->getSaveDir() / "presets";
+            std::error_code ec;
+            std::filesystem::remove(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]), ec);
+            presetSelectedIndex = -1;
+            presetListDirty = true;
+            presetError = ec ? "Failed to delete preset." : "";
+        }
+        ImGui::EndDisabled();
+
+        ImGui::Dummy(ImVec2(0, 2));
+
+        imguiTextTr("New Name");
+        ImGui::SameLine(inputW);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btnW - sp);
+        ImGui::InputText("##presetNameInput", presetNameBuf, sizeof(presetNameBuf));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(presetNameBuf[0] == '\0');
+        if (Widgets::StyledButton("Save##preset", ImVec2(btnW, 0), theme, anim) && presetNameBuf[0] != '\0') {
+            auto presetsDir = Mod::get()->getSaveDir() / "presets";
+            auto preset = captureRenderPreset();
+            preset.name = presetNameBuf;
+            if (RenderPresetIO::save(RenderPresetIO::pathForName(presetsDir, preset.name), preset)) {
+                presetNameBuf[0] = '\0';
+                presetListDirty = true;
+                presetError.clear();
+            } else {
+                presetError = "Failed to save preset.";
+            }
+        }
+        ImGui::EndDisabled();
+
+        if (!presetError.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+            ImGui::TextUnformatted(presetError.c_str());
+            ImGui::PopStyleColor();
+        }
     }
 
     ImGui::Dummy(ImVec2(0, 8));
@@ -2976,14 +3074,15 @@ void MenuInterface::drawRenderTab() {
             snprintf(backupExtBuf, sizeof(backupExtBuf), "%s", renderExtBuf);
             snprintf(backupArgsBuf, sizeof(backupArgsBuf), "%s", renderArgsBuf);
             snprintf(backupVideoArgsBuf, sizeof(backupVideoArgsBuf), "%s", renderVideoArgsBuf);
-            snprintf(backupAudioArgsBuf, sizeof(backupAudioArgsBuf), "%s", renderAudioArgsBuf);
+            snprintf(backupAudioArgsBuf,    sizeof(backupAudioArgsBuf),    "%s", renderAudioArgsBuf);
+            snprintf(backupAudioCodecBuf,   sizeof(backupAudioCodecBuf),   "%s", renderAudioCodecBuf);
             snprintf(backupSecondsAfterBuf, sizeof(backupSecondsAfterBuf), "%s", renderSecondsAfterBuf);
         }
         ImGui::PopStyleColor(3);
 
         ImGui::SameLine(0, 12);
 
-        
+
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.15f, 0.15f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.20f, 0.20f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.50f, 0.10f, 0.10f, 1.0f));
@@ -2996,15 +3095,17 @@ void MenuInterface::drawRenderTab() {
             snprintf(renderExtBuf, sizeof(renderExtBuf), "%s", backupExtBuf);
             snprintf(renderArgsBuf, sizeof(renderArgsBuf), "%s", backupArgsBuf);
             snprintf(renderVideoArgsBuf, sizeof(renderVideoArgsBuf), "%s", backupVideoArgsBuf);
-            snprintf(renderAudioArgsBuf, sizeof(renderAudioArgsBuf), "%s", backupAudioArgsBuf);
+            snprintf(renderAudioArgsBuf,    sizeof(renderAudioArgsBuf),    "%s", backupAudioArgsBuf);
+            snprintf(renderAudioCodecBuf,   sizeof(renderAudioCodecBuf),   "%s", backupAudioCodecBuf);
             snprintf(renderSecondsAfterBuf, sizeof(renderSecondsAfterBuf), "%s", backupSecondsAfterBuf);
-            
+
             mod->setSavedValue("render_codec", std::string(backupCodecBuf));
             mod->setSavedValue("render_bitrate", std::string(backupBitrateBuf));
             mod->setSavedValue("render_file_extension", std::string(backupExtBuf));
             mod->setSavedValue("render_args", std::string(backupArgsBuf));
             mod->setSavedValue("render_video_args", std::string(backupVideoArgsBuf));
             mod->setSavedValue("render_audio_args", std::string(backupAudioArgsBuf));
+            mod->setSavedValue("render_audio_codec", std::string(backupAudioCodecBuf));
             mod->setSavedValue("render_seconds_after", std::string(backupSecondsAfterBuf));
         }
         ImGui::PopStyleColor(3);
@@ -3021,7 +3122,8 @@ void MenuInterface::drawRenderTab() {
             snprintf(backupExtBuf, sizeof(backupExtBuf), "%s", renderExtBuf);
             snprintf(backupArgsBuf, sizeof(backupArgsBuf), "%s", renderArgsBuf);
             snprintf(backupVideoArgsBuf, sizeof(backupVideoArgsBuf), "%s", renderVideoArgsBuf);
-            snprintf(backupAudioArgsBuf, sizeof(backupAudioArgsBuf), "%s", renderAudioArgsBuf);
+            snprintf(backupAudioArgsBuf,    sizeof(backupAudioArgsBuf),    "%s", renderAudioArgsBuf);
+            snprintf(backupAudioCodecBuf,   sizeof(backupAudioCodecBuf),   "%s", renderAudioCodecBuf);
             snprintf(backupSecondsAfterBuf, sizeof(backupSecondsAfterBuf), "%s", renderSecondsAfterBuf);
             showAdvancedWarning = true;
         }
@@ -3109,6 +3211,38 @@ void MenuInterface::drawRenderTab() {
         guardAdvancedEdit();
         if (advancedWarningAccepted)
             mod->setSavedValue("render_video_args", std::string(renderVideoArgsBuf));
+    }
+
+    {
+        int acodecIdx = audioCodecComboIndex(renderAudioCodecBuf);
+        imguiTextTr("Audio Codec");
+        ImGui::SameLine(inputW);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##renderACodecCombo", kAudioCodecLabels[acodecIdx])) {
+            for (int i = 0; i <= kAudioCodecCustomIdx; ++i) {
+                bool sel = (acodecIdx == i);
+                if (ImGui::Selectable(kAudioCodecLabels[i], sel)) {
+                    guardAdvancedEdit();
+                    if (advancedWarningAccepted) {
+                        if (i < kAudioCodecCustomIdx)
+                            snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", kAudioCodecIds[i]);
+                        else
+                            renderAudioCodecBuf[0] = '\0';
+                        mod->setSavedValue("render_audio_codec", std::string(renderAudioCodecBuf));
+                    }
+                }
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (acodecIdx == kAudioCodecCustomIdx) {
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##renderACodecCustom", renderAudioCodecBuf, sizeof(renderAudioCodecBuf))) {
+                guardAdvancedEdit();
+                if (advancedWarningAccepted)
+                    mod->setSavedValue("render_audio_codec", std::string(renderAudioCodecBuf));
+            }
+        }
     }
 
     imguiTextTr("Audio Args");
@@ -3921,6 +4055,66 @@ void MenuInterface::drawSettingsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Experimental", theme);
+
+    bool expRendererPrev = mod->getSavedValue<bool>("experimental_new_renderer", false);
+    bool expRenderer = expRendererPrev;
+    if (Widgets::ToggleSwitch("New Render Engine [!] beta", &expRenderer, theme, anim)) {
+        if (expRenderer) {
+            ImGui::OpenPopup("##ExpRendererWarn");
+        } else {
+            mod->setSavedValue("experimental_new_renderer", false);
+            expRendererRestartNotice = true;
+        }
+    }
+    if (expRendererRestartNotice) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+        imguiTextTr("Restart Geometry Dash to apply this change.");
+        ImGui::PopStyleColor();
+    }
+
+    constexpr float kExpWarnRounding = 0.0f;
+    ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kExpWarnRounding);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 150));
+    if (ImGui::BeginPopupModal("##ExpRendererWarn", nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize)) {
+        drawPopupChrome(*this, "WARNING", kExpWarnRounding);
+        imguiTextTr("Experimental Render Engine");
+        ImGui::Dummy(ImVec2(0, 8));
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+        ImGui::TextUnformatted("[!] This feature is in beta.");
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy(ImVec2(0, 4));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.72f, 0.72f, 1.0f));
+        ImGui::TextWrapped(
+            "The new render engine replaces the existing encode pipeline and may behave "
+            "differently or have bugs. Geometry Dash must be restarted to apply the change.");
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy(ImVec2(0, 10));
+        float halfW = (ImGui::GetContentRegionAvail().x - 8.0f) * 0.5f;
+        if (Widgets::StyledButton("Enable Anyway##expWarnOk", ImVec2(halfW, 30.0f), theme, anim, 6.0f)) {
+            mod->setSavedValue("experimental_new_renderer", true);
+            expRendererRestartNotice = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine(0, 8);
+        if (Widgets::StyledButton("Cancel##expWarnCancel", ImVec2(halfW, 30.0f), theme, anim, 6.0f)) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+
+    ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Credits", theme);
     if (Widgets::StyledButton("View Credits", ImVec2(-1, 32), theme, anim)) {
         ImGui::OpenPopup("Credits##settingsCredits");
@@ -4409,7 +4603,8 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("render_file_extension", std::string(renderExtBuf));
     mod->setSavedValue("render_args", std::string(renderArgsBuf));
     mod->setSavedValue("render_video_args", std::string(renderVideoArgsBuf));
-    mod->setSavedValue("render_audio_args", std::string(renderAudioArgsBuf));
+    mod->setSavedValue("render_audio_args",  std::string(renderAudioArgsBuf));
+    mod->setSavedValue("render_audio_codec", std::string(renderAudioCodecBuf));
     mod->setSavedValue("render_seconds_after", std::string(renderSecondsAfterBuf));
     mod->setSavedValue("render_include_audio", renderIncludeAudio);
     mod->setSavedValue("render_include_clicks", renderIncludeClicks);
@@ -4479,6 +4674,10 @@ void MenuInterface::loadRenderSettings() {
     snprintf(renderAudioArgsBuf, sizeof(renderAudioArgsBuf), "%s", renderAudioArgs.c_str());
     snprintf(renderSecondsAfterBuf, sizeof(renderSecondsAfterBuf), "%s", renderSecondsAfter.c_str());
 
+    auto audioCodecStr = mod->getSavedValue<std::string>("render_audio_codec", "aac");
+    if (audioCodecStr.empty()) audioCodecStr = "aac";
+    snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", audioCodecStr.c_str());
+
     renderIncludeAudio = includeAudio;
     renderIncludeClicks = includeClicks;
     renderSfxVol = static_cast<float>(clickVolume);
@@ -4506,7 +4705,8 @@ void MenuInterface::loadRenderSettings() {
     snprintf(backupExtBuf, sizeof(backupExtBuf), "%s", renderExtBuf);
     snprintf(backupArgsBuf, sizeof(backupArgsBuf), "%s", renderArgsBuf);
     snprintf(backupVideoArgsBuf, sizeof(backupVideoArgsBuf), "%s", renderVideoArgsBuf);
-    snprintf(backupAudioArgsBuf, sizeof(backupAudioArgsBuf), "%s", renderAudioArgsBuf);
+    snprintf(backupAudioArgsBuf,    sizeof(backupAudioArgsBuf),    "%s", renderAudioArgsBuf);
+    snprintf(backupAudioCodecBuf,   sizeof(backupAudioCodecBuf),   "%s", renderAudioCodecBuf);
     snprintf(backupSecondsAfterBuf, sizeof(backupSecondsAfterBuf), "%s", renderSecondsAfterBuf);
 
     showAdvancedWarning = false;
@@ -4514,9 +4714,685 @@ void MenuInterface::loadRenderSettings() {
     renderBufsInit = true;
 }
 
+// has to make another one (this is exprimental render engine)
+void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
+    auto* mod = Mod::get();
+
+    snprintf(renderWidthBuf,      sizeof(renderWidthBuf),      "%d",  preset.width);
+    snprintf(renderHeightBuf,     sizeof(renderHeightBuf),     "%d",  preset.height);
+    snprintf(renderFpsBuf,        sizeof(renderFpsBuf),        "%d",  preset.fps);
+    snprintf(renderCodecBuf,      sizeof(renderCodecBuf),      "%s",  preset.codec.c_str());
+    snprintf(renderBitrateBuf,    sizeof(renderBitrateBuf),    "%s",  preset.bitrate.c_str());
+    snprintf(renderExtBuf,        sizeof(renderExtBuf),        "%s",  preset.ext.c_str());
+    snprintf(renderArgsBuf,       sizeof(renderArgsBuf),       "%s",  preset.extraArgs.c_str());
+    snprintf(renderVideoArgsBuf,  sizeof(renderVideoArgsBuf),  "%s",  preset.videoArgs.c_str());
+    snprintf(renderAudioArgsBuf,  sizeof(renderAudioArgsBuf),  "%s",  preset.audioArgs.c_str());
+    snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s",
+        preset.audioCodec.empty() ? "aac" : preset.audioCodec.c_str());
+    snprintf(renderSecondsAfterBuf, sizeof(renderSecondsAfterBuf), "%g", preset.secondsAfter);
+
+    renderIncludeAudio     = preset.includeAudio;
+    renderIncludeClicks    = preset.includeClicks;
+    renderSfxVol           = preset.sfxVol;
+    renderMusicVol         = preset.musicVol;
+
+    mod->setSavedValue("render_width",              (int64_t)preset.width);
+    mod->setSavedValue("render_height",             (int64_t)preset.height);
+    mod->setSavedValue("render_fps",                (int64_t)preset.fps);
+    mod->setSavedValue("render_codec",              preset.codec);
+    mod->setSavedValue("render_bitrate",            preset.bitrate);
+    mod->setSavedValue("render_file_extension",     preset.ext);
+    mod->setSavedValue("render_args",               preset.extraArgs);
+    mod->setSavedValue("render_video_args",         preset.videoArgs);
+    mod->setSavedValue("render_audio_args",         preset.audioArgs);
+    mod->setSavedValue("render_audio_codec",        preset.audioCodec.empty() ? std::string("aac") : preset.audioCodec);
+    mod->setSavedValue("render_seconds_after",      preset.secondsAfter > 0 ? std::string(renderSecondsAfterBuf) : std::string("0"));
+    mod->setSavedValue("render_include_audio",      preset.includeAudio);
+    mod->setSavedValue("render_include_clicks",     preset.includeClicks);
+    mod->setSavedValue("render_sfx_volume",         (double)preset.sfxVol);
+    mod->setSavedValue("render_music_volume",       (double)preset.musicVol);
+
+    struct ResPreset { const char* name; int width; int height; };
+    static const ResPreset resPresets[] = {
+        { "720p  (1280x720)",   1280,  720 },
+        { "1080p (1920x1080)",  1920, 1080 },
+        { "1440p (2560x1440)",  2560, 1440 },
+        { "4K    (3840x2160)",  3840, 2160 },
+    };
+    renderPresetIndex = 1;
+    for (int i = 0; i < static_cast<int>(sizeof(resPresets) / sizeof(resPresets[0])); i++) {
+        if (resPresets[i].width == preset.width && resPresets[i].height == preset.height) {
+            renderPresetIndex = i;
+            break;
+        }
+    }
+
+    snprintf(backupCodecBuf,        sizeof(backupCodecBuf),        "%s", renderCodecBuf);
+    snprintf(backupBitrateBuf,      sizeof(backupBitrateBuf),      "%s", renderBitrateBuf);
+    snprintf(backupExtBuf,          sizeof(backupExtBuf),          "%s", renderExtBuf);
+    snprintf(backupArgsBuf,         sizeof(backupArgsBuf),         "%s", renderArgsBuf);
+    snprintf(backupVideoArgsBuf,    sizeof(backupVideoArgsBuf),    "%s", renderVideoArgsBuf);
+    snprintf(backupAudioArgsBuf,    sizeof(backupAudioArgsBuf),    "%s", renderAudioArgsBuf);
+    snprintf(backupAudioCodecBuf,   sizeof(backupAudioCodecBuf),   "%s", renderAudioCodecBuf);
+    snprintf(backupSecondsAfterBuf, sizeof(backupSecondsAfterBuf), "%s", renderSecondsAfterBuf);
+
+    advancedWarningAccepted = true;
+    showAdvancedWarning = false;
+}
+
+RenderPreset MenuInterface::captureRenderPreset() {
+    RenderPreset p;
+    if (auto w = toasty::parseInteger<int>(renderWidthBuf))     p.width  = *w;
+    if (auto h = toasty::parseInteger<int>(renderHeightBuf))    p.height = *h;
+    if (auto f = toasty::parseInteger<int>(renderFpsBuf))       p.fps    = *f;
+    p.codec      = renderCodecBuf;
+    p.bitrate    = renderBitrateBuf;
+    p.ext        = renderExtBuf;
+    p.extraArgs  = renderArgsBuf;
+    p.videoArgs  = renderVideoArgsBuf;
+    p.audioArgs  = renderAudioArgsBuf;
+    p.audioCodec = (renderAudioCodecBuf[0] && std::string(renderAudioCodecBuf) != "aac")
+                   ? renderAudioCodecBuf : "";
+    float after = 3.0f;
+    auto* begin = renderSecondsAfterBuf;
+    std::from_chars(begin, begin + strlen(begin), after);
+    p.secondsAfter      = after;
+    p.includeAudio  = renderIncludeAudio;
+    p.includeClicks = renderIncludeClicks;
+    p.sfxVol        = renderSfxVol;
+    p.musicVol      = renderMusicVol;
+    return p;
+}
+
+void MenuInterface::loadExpRenderSettings() {
+    expConfig = loadRenderConfig();
+
+    auto renderName = Mod::get()->getSavedValue<std::string>("render_name", "");
+    snprintf(expRenderNameBuf, sizeof(expRenderNameBuf), "%s", renderName.c_str());
+    snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
+
+    snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
+    snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
+    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or("").c_str());
+    snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
+    snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
+    snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
+    snprintf(expAdvAudioCodecBuf,  sizeof(expAdvAudioCodecBuf),  "%s", expConfig.audioCodec.value_or("").c_str());
+    snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
+
+    if (expConfig.crf.has_value())
+        snprintf(expAdvCrfBuf, sizeof(expAdvCrfBuf), "%d", *expConfig.crf);
+    else
+        expAdvCrfBuf[0] = '\0';
+
+    expConfigInit = true;
+}
+
+void MenuInterface::drawExpRenderTab() {
+    auto* engine = ReplayEngine::get();
+    auto* mod = Mod::get();
+    Renderer& r = engine->renderer;
+
+    if (!expConfigInit)
+        loadExpRenderSettings();
+
+    if (!expGpuProbed) {
+        expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+        expGpuProbed = true;
+    }
+
+    struct ResOption { const char* label; unsigned width; unsigned height; };
+    static constexpr ResOption kResOptions[] = {
+        { "720p  (1280x720)",   1280,  720 },
+        { "1080p (1920x1080)",  1920, 1080 },
+        { "1440p (2560x1440)",  2560, 1440 },
+        { "4K    (3840x2160)",  3840, 2160 },
+    };
+    static constexpr const char* kTierLabels[] = { "Fast", "Balanced", "Quality", "Lossless" };
+
+    float inputW = ImGui::GetContentRegionAvail().x * 0.45f;
+
+    // ── RENDER ──────────────────────────────────────────────────────────────
+    Widgets::SectionHeader("Render", theme);
+
+    imguiTextTr("Name");
+    ImGui::SameLine(inputW);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##expRenderName", expRenderNameBuf, sizeof(expRenderNameBuf)))
+        mod->setSavedValue("render_name", std::string(expRenderNameBuf));
+
+    ImGui::Dummy(ImVec2(0, 4));
+
+    if (r.recording) {
+        Widgets::StatusBadge("Rendering", ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+        ImGui::Dummy(ImVec2(0, 4));
+        if (Widgets::StyledButton("Stop Render", ImVec2(ImGui::GetContentRegionAvail().x, 36), theme, anim))
+            r.toggle();
+    } else {
+        if (Widgets::StyledButton("Start Render", ImVec2(ImGui::GetContentRegionAvail().x, 36), theme, anim)) {
+            if (auto v = toasty::parseInteger<unsigned>(expRenderFpsBuf))
+                expConfig.fps = *v;
+
+            expConfig.codec     = expAdvCodecBuf[0]      ? std::optional<std::string>(expAdvCodecBuf)      : std::nullopt;
+            expConfig.maxBitrate = expAdvMaxBitrateBuf[0] ? std::optional<std::string>(expAdvMaxBitrateBuf) : std::nullopt;
+            expConfig.ext       = expAdvExtBuf[0]         ? std::optional<std::string>(expAdvExtBuf)        : std::nullopt;
+            expConfig.extraArgs  = expAdvExtraArgsBuf[0]  ? std::optional<std::string>(expAdvExtraArgsBuf)  : std::nullopt;
+            expConfig.videoArgs  = expAdvVideoArgsBuf[0]  ? std::optional<std::string>(expAdvVideoArgsBuf)  : std::nullopt;
+            expConfig.audioArgs  = expAdvAudioArgsBuf[0]  ? std::optional<std::string>(expAdvAudioArgsBuf)  : std::nullopt;
+            expConfig.audioCodec = expAdvAudioCodecBuf[0] ? std::optional<std::string>(expAdvAudioCodecBuf) : std::nullopt;
+            if (expAdvCrfBuf[0]) {
+                if (auto v = toasty::parseInteger<int>(expAdvCrfBuf))
+                    expConfig.crf = *v;
+            } else {
+                expConfig.crf = std::nullopt;
+            }
+            expConfig.secondsAfter = 3.0f;
+            if (auto v = geode::utils::numFromString<float>(expAdvSecondsAfterBuf))
+                expConfig.secondsAfter = v.unwrapOr(3.0f);
+
+            saveRenderConfig(expConfig);
+            engine->renderer.m_pendingConfig = expConfig;
+            engine->renderer.toggle();
+        }
+    }
+
+    // ── PRESETS ─────────────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Presets", theme);
+
+    if (presetListDirty) {
+        auto presetsDir = mod->getSaveDir() / "presets";
+        presetNames = RenderPresetIO::listNames(presetsDir);
+        if (presetSelectedIndex >= (int)presetNames.size())
+            presetSelectedIndex = presetNames.empty() ? -1 : (int)presetNames.size() - 1;
+        presetListDirty = false;
+    }
+
+    {
+        bool hasSelection = presetSelectedIndex >= 0 && presetSelectedIndex < (int)presetNames.size();
+        const char* previewName = hasSelection ? presetNames[presetSelectedIndex].c_str() : "(none)";
+        float btnW = 56.0f;
+        float sp = ImGui::GetStyle().ItemSpacing.x;
+
+        imguiTextTr("Preset");
+        ImGui::SameLine(inputW);
+        float remaining = ImGui::GetContentRegionAvail().x;
+        ImGui::SetNextItemWidth(remaining - (btnW + sp) * 2);
+        if (ImGui::BeginCombo("##expPresetCombo", previewName)) {
+            for (int i = 0; i < (int)presetNames.size(); i++) {
+                bool sel = (presetSelectedIndex == i);
+                if (ImGui::Selectable(presetNames[i].c_str(), sel))
+                    presetSelectedIndex = i;
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelection);
+        if (Widgets::StyledButton("Load##expPreset", ImVec2(btnW, 0), theme, anim)) {
+            auto presetsDir = mod->getSaveDir() / "presets";
+            auto preset = RenderPresetIO::load(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]));
+            if (preset) {
+                expConfig = preset->toRenderConfig();
+                expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+                snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
+                snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
+                snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
+                snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or("").c_str());
+                snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
+                snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
+                snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
+                snprintf(expAdvAudioCodecBuf,  sizeof(expAdvAudioCodecBuf),  "%s", expConfig.audioCodec.value_or("").c_str());
+                snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
+                if (expConfig.crf.has_value())
+                    snprintf(expAdvCrfBuf, sizeof(expAdvCrfBuf), "%d", *expConfig.crf);
+                else
+                    expAdvCrfBuf[0] = '\0';
+                saveRenderConfig(expConfig);
+                presetError.clear();
+            } else {
+                presetError = "Failed to load preset.";
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelection);
+        if (Widgets::StyledButton("Delete##expPreset", ImVec2(btnW, 0), theme, anim)) {
+            auto presetsDir = mod->getSaveDir() / "presets";
+            std::error_code ec;
+            std::filesystem::remove(RenderPresetIO::pathForName(presetsDir, presetNames[presetSelectedIndex]), ec);
+            presetSelectedIndex = -1;
+            presetListDirty = true;
+            presetError = ec ? "Failed to delete preset." : "";
+        }
+        ImGui::EndDisabled();
+
+        ImGui::Dummy(ImVec2(0, 2));
+        imguiTextTr("New Name");
+        ImGui::SameLine(inputW);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - btnW - sp);
+        ImGui::InputText("##expPresetNameInput", presetNameBuf, sizeof(presetNameBuf));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(presetNameBuf[0] == '\0');
+        if (Widgets::StyledButton("Save##expPreset", ImVec2(btnW, 0), theme, anim) && presetNameBuf[0] != '\0') {
+            auto presetsDir = mod->getSaveDir() / "presets";
+            auto preset = RenderPreset::fromRenderConfig(expConfig, presetNameBuf);
+            if (RenderPresetIO::save(RenderPresetIO::pathForName(presetsDir, preset.name), preset)) {
+                presetNameBuf[0] = '\0';
+                presetListDirty = true;
+                presetError.clear();
+            } else {
+                presetError = "Failed to save preset.";
+            }
+        }
+        ImGui::EndDisabled();
+
+        if (!presetError.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+            ImGui::TextUnformatted(presetError.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+
+    // ── RESOLUTION ──────────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Resolution", theme);
+
+    int resIndex = 1;
+    for (int i = 0; i < 4; i++) {
+        if (kResOptions[i].width == expConfig.width && kResOptions[i].height == expConfig.height) {
+            resIndex = i;
+            break;
+        }
+    }
+    imguiTextTr("Resolution");
+    ImGui::SameLine(inputW);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##expResCombo", kResOptions[resIndex].label)) {
+        for (int i = 0; i < 4; i++) {
+            bool sel = (resIndex == i);
+            if (ImGui::Selectable(kResOptions[i].label, sel)) {
+                expConfig.width  = kResOptions[i].width;
+                expConfig.height = kResOptions[i].height;
+                saveRenderConfig(expConfig);
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    imguiTextTr("FPS");
+    ImGui::SameLine(inputW);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##expFps", expRenderFpsBuf, sizeof(expRenderFpsBuf), ImGuiInputTextFlags_CharsDecimal)) {
+        if (auto v = toasty::parseInteger<unsigned>(expRenderFpsBuf))
+            expConfig.fps = *v;
+        saveRenderConfig(expConfig);
+    }
+
+    // ── ENCODING ────────────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Encoding", theme);
+
+    int tierIdx = static_cast<int>(expConfig.tier);
+    imguiTextTr("Quality");
+    ImGui::SameLine(inputW);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##expQuality", kTierLabels[tierIdx])) {
+        for (int i = 0; i < 4; i++) {
+            bool sel = (tierIdx == i);
+            if (ImGui::Selectable(kTierLabels[i], sel)) {
+                expConfig.tier = static_cast<RenderQualityTier>(i);
+                // Lossless always CPU, Fast/Balanced default GPU on
+                if (expConfig.tier == RenderQualityTier::Lossless)
+                    expConfig.useGpu = false;
+                else if (expConfig.tier == RenderQualityTier::Fast || expConfig.tier == RenderQualityTier::Balanced)
+                    expConfig.useGpu = !expConfig.gpuEncoder.empty();
+                saveRenderConfig(expConfig);
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    bool gpuAvail = !expConfig.gpuEncoder.empty();
+    bool isLossless = expConfig.tier == RenderQualityTier::Lossless;
+    ImGui::BeginDisabled(!gpuAvail || isLossless);
+    if (Widgets::ToggleSwitch("Use GPU", &expConfig.useGpu, theme, anim))
+        saveRenderConfig(expConfig);
+    ImGui::EndDisabled();
+    ImGui::SameLine(inputW);
+    ImGui::PushStyleColor(ImGuiCol_Text,
+        (gpuAvail && !isLossless) ? ImVec4(0.3f, 0.85f, 0.4f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+    if (isLossless)
+        ImGui::TextUnformatted("[cpu only]");
+    else if (gpuAvail)
+        ImGui::TextUnformatted(expConfig.gpuEncoder.c_str());
+    else
+        ImGui::TextUnformatted("[unavailable]");
+    ImGui::PopStyleColor();
+
+    // Codec family picker: H.264 / AV1
+    imguiTextTr("Codec Family");
+    ImGui::SameLine(inputW);
+    {
+        float pillW = (ImGui::GetContentRegionAvail().x - 4.0f) * 0.5f;
+        bool isH264 = expConfig.codecFamily == RenderCodecFamily::H264;
+        if (Widgets::PillButton("H.264", isH264, pillW, theme, anim)) {
+            if (!isH264) {
+                expConfig.codecFamily = RenderCodecFamily::H264;
+                expConfig.gpuEncoder  = probeGpuEncoder(RenderCodecFamily::H264);
+                expGpuProbed = false;
+                saveRenderConfig(expConfig);
+            }
+        }
+        ImGui::SameLine(0, 4);
+        if (Widgets::PillButton("AV1", !isH264, pillW, theme, anim)) {
+            if (isH264) {
+                expConfig.codecFamily = RenderCodecFamily::AV1;
+                expConfig.gpuEncoder  = probeGpuEncoder(RenderCodecFamily::AV1);
+                expGpuProbed = false;
+                saveRenderConfig(expConfig);
+            }
+        }
+    }
+
+    // ── AUDIO ───────────────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Audio", theme);
+
+    if (Widgets::ToggleSwitch("Include Audio", &expConfig.includeAudio, theme, anim))
+        saveRenderConfig(expConfig);
+    if (Widgets::ToggleSwitch("Include Click Sounds", &expConfig.includeClicks, theme, anim))
+        saveRenderConfig(expConfig);
+    if (Widgets::StyledSliderFloat("Music Volume", &expConfig.musicVol, 0.f, 1.f, theme))
+        saveRenderConfig(expConfig);
+    if (Widgets::StyledSliderFloat("Click Volume", &expConfig.sfxVol, 0.f, 1.f, theme))
+        saveRenderConfig(expConfig);
+
+    // ── DISPLAY ─────────────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Display", theme);
+
+    if (Widgets::ToggleSwitch("Hide End Screen", &expConfig.hideEndscreen, theme, anim))
+        saveRenderConfig(expConfig);
+    if (Widgets::ToggleSwitch("Hide Level Complete", &expConfig.hideLevelComplete, theme, anim))
+        saveRenderConfig(expConfig);
+
+    // ── ADVANCED ────────────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+    bool headerOpen = ImGui::CollapsingHeader("Advanced##expRender", expAdvancedOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+    ImGui::PopStyleColor();
+    expAdvancedOpen = headerOpen;
+
+    if (headerOpen) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+        imguiTextWrappedTr("These fields override the selected quality preset. Leave blank to use preset defaults.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4));
+
+        auto advInput = [&](const char* label, const char* id, char* buf, size_t sz) {
+            imguiTextTr(label);
+            ImGui::SameLine(inputW);
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputText(id, buf, sz);
+        };
+
+        advInput("Codec",        "##expAdvCodec",    expAdvCodecBuf,      sizeof(expAdvCodecBuf));
+        advInput("CRF",          "##expAdvCrf",      expAdvCrfBuf,        sizeof(expAdvCrfBuf));
+        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf));
+        advInput("Extension",    "##expAdvExt",      expAdvExtBuf,        sizeof(expAdvExtBuf));
+        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf));
+        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf));
+        {
+            int acodecIdx = audioCodecComboIndex(expAdvAudioCodecBuf);
+            imguiTextTr("Audio Codec");
+            ImGui::SameLine(inputW);
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##expAdvACodecCombo", kAudioCodecLabels[acodecIdx])) {
+                for (int i = 0; i <= kAudioCodecCustomIdx; ++i) {
+                    bool sel = (acodecIdx == i);
+                    if (ImGui::Selectable(kAudioCodecLabels[i], sel)) {
+                        if (i < kAudioCodecCustomIdx)
+                            snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", kAudioCodecIds[i]);
+                        else
+                            expAdvAudioCodecBuf[0] = '\0';
+                        expConfig.audioCodec = expAdvAudioCodecBuf[0]
+                            ? std::optional<std::string>(expAdvAudioCodecBuf) : std::nullopt;
+                        saveRenderConfig(expConfig);
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (acodecIdx == kAudioCodecCustomIdx) {
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::InputText("##expAdvACodecCustom", expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf))) {
+                    expConfig.audioCodec = expAdvAudioCodecBuf[0]
+                        ? std::optional<std::string>(expAdvAudioCodecBuf) : std::nullopt;
+                    saveRenderConfig(expConfig);
+                }
+            }
+        }
+        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf));
+        advInput("Seconds After","##expAdvSecs",     expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf));
+
+        ImGui::Dummy(ImVec2(0, 4));
+        bool apiAvail = Loader::get()->isModLoaded("eclipse.ffmpeg-api");
+        Widgets::StatusBadge(
+            apiAvail ? "FFmpeg API Available" : "FFmpeg API Not Found",
+            apiAvail ? ImVec4(0.3f, 0.85f, 0.4f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f)
+        );
+    }
+
+    // ── RENDERED VIDEOS ─────────────────────────────────────────────────────
+    ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Rendered Videos", theme);
+
+    std::filesystem::path renderFolder = mod->getSettingValue<std::filesystem::path>("render_folder");
+    if (renderFolder.empty() || toasty::pathToUtf8(renderFolder).find("{gd_dir}") != std::string::npos)
+        renderFolder = geode::dirs::getGameDir() / "renders";
+
+    std::vector<std::filesystem::directory_entry> renderFiles;
+    if (std::filesystem::exists(renderFolder)) {
+        for (auto& entry : std::filesystem::directory_iterator(renderFolder))
+            if (entry.is_regular_file()) renderFiles.push_back(entry);
+        std::sort(renderFiles.begin(), renderFiles.end(), [](auto& a, auto& b) {
+            return a.last_write_time() > b.last_write_time();
+        });
+    }
+
+    float rvPadY = 8.0f, rvPadX = 10.0f;
+    float rvRowH = ImGui::GetTextLineHeight() + 10.0f;
+    float rvListH = std::max(80.0f, std::min(200.0f, (float)renderFiles.size() * rvRowH + rvPadY * 2.0f));
+    ImVec2 rvListPos = ImGui::GetCursorScreenPos();
+    float rvListW = ImGui::GetContentRegionAvail().x;
+    drawSolidRect(ImGui::GetWindowDrawList(), rvListPos,
+        ImVec2(rvListPos.x + rvListW, rvListPos.y + rvListH), theme.cornerRadius, theme, 0.55f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+    ImGui::BeginChild("##ExpRVList", ImVec2(-1, rvListH), false);
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + rvPadX);
+    ImGui::Dummy(ImVec2(0, rvPadY));
+
+    if (renderFiles.empty()) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + rvPadX);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
+        imguiTextTr("No rendered videos");
+        ImGui::PopStyleColor();
+    }
+
+    for (int i = 0; i < (int)renderFiles.size(); i++) {
+        auto& entry = renderFiles[i];
+        std::string name = toasty::pathToUtf8(entry.path().stem());
+        std::string ext  = toasty::pathToUtf8(entry.path().extension());
+        ImGui::PushID(i);
+
+        float fullRowW = ImGui::GetContentRegionAvail().x;
+
+        auto fileSize = entry.file_size();
+        std::string sizeStr;
+        if (fileSize >= 1024 * 1024 * 1024)
+            sizeStr = fmt::format("{:.1f}GB", fileSize / (1024.0 * 1024.0 * 1024.0));
+        else if (fileSize >= 1024 * 1024)
+            sizeStr = fmt::format("{:.1f}MB", fileSize / (1024.0 * 1024.0));
+        else
+            sizeStr = fmt::format("{:.0f}KB", fileSize / 1024.0);
+
+        auto ftime  = entry.last_write_time();
+        auto stime  = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
+        auto tt     = std::chrono::system_clock::to_time_t(stime);
+        std::tm tmv{};
+        localtime_s(&tmv, &tt);
+        std::string dateStr = fmt::format("{:02d}/{:02d}", tmv.tm_mon + 1, tmv.tm_mday);
+
+        std::string resBadge;
+        ImVec4 badgeColor(0.5f, 0.5f, 0.5f, 1.0f);
+        {
+            std::regex resRx("_(\\d+)x(\\d+)_");
+            std::smatch m;
+            if (std::regex_search(name, m, resRx)) {
+                int pw = 0, ph = 0;
+                if (auto w = toasty::parseInteger<int>(m[1].str())) pw = *w;
+                if (auto h = toasty::parseInteger<int>(m[2].str())) ph = *h;
+                if      (pw == 1280 && ph == 720)  { resBadge = "720p";  badgeColor = ImVec4(0.4f, 0.7f, 1.0f, 1.0f); }
+                else if (pw == 1920 && ph == 1080) { resBadge = "1080p"; badgeColor = ImVec4(0.3f, 0.85f, 0.4f, 1.0f); }
+                else if (pw == 2560 && ph == 1440) { resBadge = "1440p"; badgeColor = ImVec4(0.9f, 0.7f, 0.2f, 1.0f); }
+                else if (pw == 3840 && ph == 2160) { resBadge = "4K";   badgeColor = ImVec4(0.9f, 0.3f, 0.3f, 1.0f); }
+                else if (pw > 0 && ph > 0) resBadge = fmt::format("{}x{}", pw, ph);
+            }
+        }
+
+        float btnW   = 26.0f;
+        float dateW  = ImGui::CalcTextSize(dateStr.c_str()).x + 8.0f;
+        float sizeW  = ImGui::CalcTextSize(sizeStr.c_str()).x + 8.0f;
+        float badgeW = resBadge.empty() ? 0.0f : (ImGui::CalcTextSize(resBadge.c_str()).x + 18.0f);
+        float rightW = badgeW + sizeW + dateW + btnW * 2 + rvPadX;
+        float maxNameW = std::max(40.0f, fullRowW - rightW - rvPadX);
+
+        std::string rowLabel = name + ext;
+        if (ImGui::CalcTextSize(rowLabel.c_str()).x > maxNameW) {
+            std::string clipped = rowLabel;
+            while (!clipped.empty() && ImGui::CalcTextSize((clipped + "...").c_str()).x > maxNameW)
+                clipped.pop_back();
+            rowLabel = clipped + "...";
+        }
+
+        bool isDelConfirm = (expRvDeleteConfirm == i);
+        ImVec2 rowStart = ImGui::GetCursorScreenPos();
+        if (isDelConfirm)
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                rowStart, ImVec2(rowStart.x + fullRowW, rowStart.y + rvRowH),
+                IM_COL32(150, 20, 20, 70), 4.0f);
+
+        ImGui::Selectable("##rvrow", false, ImGuiSelectableFlags_AllowOverlap,
+            ImVec2(fullRowW - btnW * 2 - 6.0f, rvRowH));
+
+        float textY = rowStart.y + (rvRowH - ImGui::GetTextLineHeight()) * 0.5f;
+
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(rowStart.x + rvPadX, textY), theme.getTextU32(), rowLabel.c_str());
+
+        float tagX = rowStart.x + fullRowW - rvPadX - btnW * 2 - 6.0f;
+
+        tagX -= dateW;
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(tagX, textY), theme.getTextSecondaryU32(), dateStr.c_str());
+
+        tagX -= sizeW;
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(tagX, textY), theme.getTextSecondaryU32(), sizeStr.c_str());
+
+        if (!resBadge.empty()) {
+            ImVec2 bts  = ImGui::CalcTextSize(resBadge.c_str());
+            float bPadX = 6.0f, bPadY = 2.0f;
+            float bW    = bts.x + bPadX * 2, bH = bts.y + bPadY * 2;
+            tagX -= bW + 8.0f;
+            float bY = rowStart.y + (rvRowH - bH) * 0.5f;
+            ImVec4 bgCol(badgeColor.x * 0.25f, badgeColor.y * 0.25f, badgeColor.z * 0.25f, 0.85f);
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(tagX, bY), ImVec2(tagX + bW, bY + bH), toU32(bgCol), 999.0f);
+            ImGui::GetWindowDrawList()->AddRect(
+                ImVec2(tagX, bY), ImVec2(tagX + bW, bY + bH), toU32(withAlpha(badgeColor, 0.95f)), 999.0f, 0, 1.0f);
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(tagX + bPadX, bY + bPadY), toU32(withAlpha(badgeColor, 0.98f)), resBadge.c_str());
+        }
+
+        // Open button
+        ImGui::SameLine(fullRowW - btnW * 2 - 4.0f);
+        ImGui::InvisibleButton("##rvopen", ImVec2(btnW, rvRowH));
+        {
+            bool hov = ImGui::IsItemHovered();
+            bool act = ImGui::IsItemClicked();
+            ImVec2 bMin = ImGui::GetItemRectMin(), bMax = ImGui::GetItemRectMax();
+            if (hov)
+                ImGui::GetWindowDrawList()->AddRectFilled(bMin, bMax, IM_COL32(80, 200, 120, 40), 4.0f);
+            ImU32 openCol = hov ? IM_COL32(120, 230, 140, 255) : IM_COL32(100, 200, 110, 180);
+            ImVec2 sym = ImGui::CalcTextSize(">");
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(bMin.x + (btnW - sym.x) * 0.5f, bMin.y + (rvRowH - sym.y) * 0.5f),
+                openCol, ">");
+            if (act) {
+                expRvDeleteConfirm = -1;
+#ifdef _WIN32
+                ShellExecuteW(nullptr, L"open", entry.path().wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+            }
+            if (hov) ImGui::SetTooltip("Open");
+        }
+
+        // Delete button
+        ImGui::SameLine(fullRowW - btnW);
+        ImGui::InvisibleButton("##rvdel", ImVec2(btnW, rvRowH));
+        {
+            bool hov = ImGui::IsItemHovered();
+            bool act = ImGui::IsItemClicked();
+            ImVec2 bMin = ImGui::GetItemRectMin(), bMax = ImGui::GetItemRectMax();
+            if (isDelConfirm)
+                ImGui::GetWindowDrawList()->AddRectFilled(bMin, bMax, IM_COL32(180, 30, 30, 120), 4.0f);
+            else if (hov)
+                ImGui::GetWindowDrawList()->AddRectFilled(bMin, bMax, IM_COL32(200, 60, 60, 40), 4.0f);
+            ImU32 delCol = isDelConfirm ? IM_COL32(255, 100, 100, 255)
+                         : hov          ? IM_COL32(230, 80, 80, 255)
+                                        : IM_COL32(180, 60, 60, 180);
+            ImVec2 sym = ImGui::CalcTextSize("x");
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(bMin.x + (btnW - sym.x) * 0.5f, bMin.y + (rvRowH - sym.y) * 0.5f),
+                delCol, "x");
+            if (act) {
+                if (isDelConfirm) {
+                    std::error_code ec;
+                    std::filesystem::remove(entry.path(), ec);
+                    expRvDeleteConfirm = -1;
+                } else {
+                    expRvDeleteConfirm = i;
+                }
+            }
+            if (hov) ImGui::SetTooltip(isDelConfirm ? "Click again to confirm" : "Delete");
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    ImGui::Dummy(ImVec2(0, 6));
+    if (Widgets::StyledButton("Open Folder", ImVec2(-1, 32), theme, anim)) {
+        if (!std::filesystem::exists(renderFolder))
+            std::filesystem::create_directories(renderFolder);
+        geode::utils::file::openFolder(renderFolder);
+    }
+}
+
 void MenuInterface::loadSettings() {
     auto* mod = Mod::get();
     auto* eng = ReplayEngine::get();
+    eng->useNewRenderer = mod->getSavedValue<bool>("experimental_new_renderer", false);
     OnlineClient::get()->load();
 
     ImVec4 accentDefault(0.15f, 0.80f, 0.75f, 1.0f);
@@ -4855,23 +5731,41 @@ void MenuInterface::initialize() {
     ImFontGlyphRangesBuilder glyphBuilder;
     glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesDefault());
     glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+    glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesVietnamese());
     ImVector<ImWchar> glyphRanges;
     glyphBuilder.BuildRanges(&glyphRanges);
 
+    auto cjkPath = Mod::get()->getResourcesDir() / "cjk.ttf";
+    bool hasCjk = std::filesystem::exists(cjkPath);
+    auto cjkUtf8 = toasty::pathToUtf8(cjkPath);
+    const char* cjkFont = hasCjk ? cjkUtf8.c_str() : nullptr;
+
+    if (cjkFont)
+        io.Fonts->TexDesiredWidth = 4096;
+    const ImWchar* cjkRanges = cjkFont ? io.Fonts->GetGlyphRangesChineseFull() : nullptr;
+
     if (bodyFont) {
-        fontBody = io.Fonts->AddFontFromFileTTF(bodyFont, 17.0f, nullptr, glyphRanges.Data);
-        fontSmall = io.Fonts->AddFontFromFileTTF(bodyFont, 14.0f, nullptr, glyphRanges.Data);
+        fontBody = io.Fonts->AddFontFromFileTTF(bodyFont, 19.0f, nullptr, glyphRanges.Data);
+        if (cjkFont) {
+            ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.PixelSnapH = true;
+            io.Fonts->AddFontFromFileTTF(cjkFont, 19.0f, &cjkCfg, cjkRanges);
+        }
+        fontSmall = io.Fonts->AddFontFromFileTTF(bodyFont, 16.0f, nullptr, glyphRanges.Data);
+        if (cjkFont) {
+            ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.PixelSnapH = true;
+            io.Fonts->AddFontFromFileTTF(cjkFont, 16.0f, &cjkCfg, cjkRanges);
+        }
     } else {
-        fontBody = io.Fonts->AddFontDefault();
+        fontBody  = io.Fonts->AddFontDefault();
         fontSmall = io.Fonts->AddFontDefault();
     }
 
     if (headFont) {
-        fontHeading = io.Fonts->AddFontFromFileTTF(headFont, 22.0f, nullptr, glyphRanges.Data);
-        fontTitle = io.Fonts->AddFontFromFileTTF(headFont, 30.0f, nullptr, glyphRanges.Data);
+        fontHeading = io.Fonts->AddFontFromFileTTF(headFont, 24.0f, nullptr, glyphRanges.Data);
+        fontTitle   = io.Fonts->AddFontFromFileTTF(headFont, 32.0f, nullptr, glyphRanges.Data);
     } else {
         fontHeading = io.Fonts->AddFontDefault();
-        fontTitle = io.Fonts->AddFontDefault();
+        fontTitle   = io.Fonts->AddFontDefault();
     }
 
     io.Fonts->Build();
