@@ -78,6 +78,8 @@ jobs:
         run: |
           Remove-Item -LiteralPath "my-epic-geode-cli" -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath "my-epic-geode-cli.zip" -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "cli-profile" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "geode-sdk-clone" -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Stop lingering sccache server
         shell: bash
