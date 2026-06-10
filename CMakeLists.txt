@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(ToastyReplay VERSION 2.1.0 LANGUAGES CXX)
+project(ToastyReplay VERSION 2.1.1 LANGUAGES CXX)
 
 set(TOASTYREPLAY_SOURCES
     src/ttr_format.cpp
@@ -29,7 +29,6 @@ set(TOASTYREPLAY_SOURCES
     src/trajectory/trajectory_physics.cpp
     src/render/renderer.cpp
     src/render/watermark.cpp
-    src/render/watermark_dll_loader.cpp
     src/audio/clicksounds.cpp
     src/audio/playsound.cpp
     src/lang/localization.cpp
@@ -354,21 +353,28 @@ if (TARGET zlibstatic)
     list(APPEND TOASTYREPLAY_LINK_LIBRARIES zlibstatic)
 endif()
 
-set(TOASTYREPLAY_WATERMARK_DLL_SHA256 "" CACHE STRING "SHA-256 hex hash of toasty_watermark.dll for integrity verification")
-if (NOT TOASTYREPLAY_WATERMARK_DLL_SHA256 AND DEFINED ENV{TOASTYREPLAY_WATERMARK_DLL_SHA256})
-    set(TOASTYREPLAY_WATERMARK_DLL_SHA256 "$ENV{TOASTYREPLAY_WATERMARK_DLL_SHA256}" CACHE STRING "SHA-256 hex hash of toasty_watermark.dll" FORCE)
+set(TOASTYREPLAY_WATERMARK_ROOT "" CACHE PATH "Private ToastyReplay watermark artifact root")
+if (NOT TOASTYREPLAY_WATERMARK_ROOT AND DEFINED ENV{TOASTYREPLAY_WATERMARK_ROOT})
+    set(TOASTYREPLAY_WATERMARK_ROOT "$ENV{TOASTYREPLAY_WATERMARK_ROOT}" CACHE PATH "Private ToastyReplay watermark artifact root" FORCE)
 endif()
 
-if (TOASTYREPLAY_WATERMARK_DLL_SHA256)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-        "TOASTYREPLAY_WATERMARK_DLL_SHA256=\"${TOASTYREPLAY_WATERMARK_DLL_SHA256}\""
-    )
-    message(STATUS "Watermark DLL SHA-256 embedded: ${TOASTYREPLAY_WATERMARK_DLL_SHA256}")
+if (WIN32 AND TOASTYREPLAY_WATERMARK_ROOT)
+    set(_toastyreplay_watermark_include "${TOASTYREPLAY_WATERMARK_ROOT}/include")
+    set(_toastyreplay_watermark_lib "${TOASTYREPLAY_WATERMARK_ROOT}/lib/win/x64/toasty_watermark.lib")
+    if (NOT EXISTS "${_toastyreplay_watermark_include}/toasty_watermark.hpp")
+        message(FATAL_ERROR "Missing private watermark header at ${_toastyreplay_watermark_include}/toasty_watermark.hpp")
+    endif()
+    if (NOT EXISTS "${_toastyreplay_watermark_lib}")
+        message(FATAL_ERROR "Missing private watermark library at ${_toastyreplay_watermark_lib}")
+    endif()
+    target_include_directories(${PROJECT_NAME} PRIVATE "${_toastyreplay_watermark_include}")
+    list(APPEND TOASTYREPLAY_LINK_LIBRARIES "${_toastyreplay_watermark_lib}")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE TOASTYREPLAY_HAS_PRIVATE_WATERMARK)
+    message(STATUS "Private static watermark library enabled: ${_toastyreplay_watermark_lib}")
 else()
-    message(STATUS "No watermark DLL SHA-256 provided. Debug builds will use stub; Release builds will refuse to render.")
+    message(STATUS "Private static watermark library not configured. Debug builds use the local fallback; Release builds skip live playback watermark drawing.")
 endif()
 
-# Debug builds get the fallback stub watermark renderer
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     "$<$<CONFIG:Debug>:TOASTYREPLAY_ALLOW_WATERMARK_STUB>"
 )

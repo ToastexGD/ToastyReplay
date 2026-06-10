@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.1.1
+
+### What's fixed?
+
+- Replaced the runtime-loaded watermark DLL with a private static watermark library for Index builds.
+- Removed the bundled watermark DLL package path from the public Free build.
+
 ## v2.1.0
 
 ### What's New?

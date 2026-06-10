@@ -10,7 +10,7 @@ Record, playback, edit, convert, and render frame-perfect macros with 100% accur
 
 [![Geode](https://img.shields.io/badge/Geode-v5.7.1-blue?style=flat-square)](https://geode-sdk.org)
 [![GD](https://img.shields.io/badge/GD-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
-[![Version](https://img.shields.io/badge/version-v2.1.0-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
+[![Version](https://img.shields.io/badge/version-v2.1.1-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
 
 </div>
@@ -127,7 +127,7 @@ Record, playback, edit, convert, and render frame-perfect macros with 100% accur
 
 ### Engine & Tooling
 - Geode SDK **v5.7.1**
-- Watermark module runs as a runtime-loaded DLL with SHA-256 integrity check (bundled inside the .geode, no extra install)
+- Private watermark module is statically linked into Index builds, with no runtime DLL loading
 - Fixed timestep accumulator for TPS control, stable up to a million TPS
 
 </td>
@@ -469,7 +469,7 @@ FFmpeg API video export. Uses the FFmpeg API mod when available, falls back to p
 
 Click sounds are pre added at the render's sample rate and mixed in at the exact frame they should play. The renderer handles song file detection for both custom and built-in level music.
 
-The watermark module is a runtime-loaded DLL bundled inside the .geode. On launch it gets SHA-256 verified against an embedded hash, so a tampered build refuses to render instead of quietly producing dodgy output.
+The Index build statically links the private watermark module into the mod binary, so the release package does not runtime-load a watermark DLL.
 
 </details>
 

@@ -6,6 +6,9 @@ on:
     branches:
       - "main"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Windows
@@ -16,11 +19,98 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: Build the mod
+      - name: Validate private watermark repository token
+        shell: pwsh
+        env:
+          TOASTYREPLAY_WATERMARK_REPO_PAT: ${{ secrets.TOASTYREPLAY_WATERMARK_REPO_PAT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TOASTYREPLAY_WATERMARK_REPO_PAT)) {
+            throw "Missing GitHub secret TOASTYREPLAY_WATERMARK_REPO_PAT. Use a fine-grained, read-only token with Contents read access to ToastexGD/toastyreplay-watermark."
+          }
+
+      - name: Checkout private watermark source
+        uses: actions/checkout@v4
+        with:
+          repository: ToastexGD/toastyreplay-watermark
+          ref: main
+          token: ${{ secrets.TOASTYREPLAY_WATERMARK_REPO_PAT }}
+          path: .private/watermark-src
+          persist-credentials: false
+
+      - name: Prepare public build dependencies
         uses: geode-sdk/build-geode-mod@main
         with:
           cli: "latest"
           sdk: "5.7.1"
+          ccache-variant: ""
+
+      - name: Build private static watermark library
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath "output" -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path "build" -Filter "*.geode" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+
+          $watermarkSource = ".private/watermark-src"
+          $watermarkBuild = ".private/watermark-build"
+          cmake -S $watermarkSource -B $watermarkBuild -A x64 `
+            -DTOASTYREPLAY_PUBLIC_ROOT="${{ github.workspace }}" `
+            -DTOASTYREPLAY_GEODE_SDK="$env:GEODE_SDK"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to configure private watermark library."
+          }
+
+          cmake --build $watermarkBuild --config Release --target toasty_watermark --parallel
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to build private watermark library."
+          }
+
+          $sourceLib = Join-Path $watermarkSource "artifact/lib/win/x64/toasty_watermark.lib"
+          $sourceHeader = Join-Path $watermarkSource "artifact/include/toasty_watermark.hpp"
+          if (!(Test-Path -LiteralPath $sourceLib)) {
+            throw "Private watermark build did not produce artifact/lib/win/x64/toasty_watermark.lib."
+          }
+          if (!(Test-Path -LiteralPath $sourceHeader)) {
+            throw "Private watermark build did not produce artifact/include/toasty_watermark.hpp."
+          }
+
+      - name: Stop lingering sccache server
+        shell: bash
+        run: sccache --stop-server 2>/dev/null || true
+
+      - name: Clean up ninja from first build step
+        shell: bash
+        run: rm -rf ninja ninja.zip
+
+      - name: Build the mod with static watermark library
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          cli: "latest"
+          sdk: "5.7.1"
+          configure-args: "-DTOASTYREPLAY_WATERMARK_ROOT=${{ github.workspace }}/.private/watermark-src/artifact"
+          ccache-variant: sccache
+
+      - name: Verify package has no runtime watermark DLL
+        shell: pwsh
+        run: |
+          $geode = Get-ChildItem -Path "build" -Filter "*.geode" -Recurse | Select-Object -First 1
+          if (-not $geode) {
+            throw "No .geode file produced by the Geode build step."
+          }
+          Write-Host "Inspecting: $($geode.FullName)"
+
+          $tmp = Join-Path $env:RUNNER_TEMP "geode-verify"
+          if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+          New-Item -ItemType Directory -Path $tmp | Out-Null
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($geode.FullName, $tmp)
+
+          $bundledDll = Get-ChildItem -Path $tmp -Filter "toasty_watermark.dll" -Recurse | Select-Object -First 1
+          if ($bundledDll) {
+            throw "toasty_watermark.dll is still bundled inside the .geode file. The Index build must statically link the watermark instead of runtime-loading a DLL."
+          }
+
+          Write-Host "OK: no runtime watermark DLL is bundled in the .geode package."
 
       - uses: actions/upload-artifact@v4
         with:
