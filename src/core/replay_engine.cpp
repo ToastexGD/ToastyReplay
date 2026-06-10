@@ -369,6 +369,38 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         return player2 && keepSecondPlayerSlot(this);
     }
 
+    bool shouldUseInputOnlyTTRPlayback() {
+        auto* engine = ReplayEngine::get();
+
+        return engine &&
+            engine->engineMode == MODE_EXECUTE &&
+            engine->ttrMode &&
+            engine->activeTTR &&
+            !engine->activeTTR->inputs.empty() &&
+            engine->activeTTR->anchors.empty() &&
+            ReplayEngine::runtimeAccuracyModeFor(engine->activeTTR->accuracyMode) != AccuracyMode::CBS;
+    }
+
+    bool shouldUseInputOnlyGDRPlayback() {
+        auto* engine = ReplayEngine::get();
+        return engine &&
+            engine->engineMode == MODE_EXECUTE &&
+            !engine->ttrMode &&                     
+            engine->activeMacro &&
+            !engine->activeMacro->inputs.empty() &&
+            engine->activeMacro->anchors.empty() &&
+            ReplayEngine::runtimeAccuracyModeFor(engine->activeMacro->accuracyMode) != AccuracyMode::CBS;
+    }
+
+    void processInputOnly(bool shouldUse, std::function<void(int)> dispatch) {
+        if (!shouldUse) return;
+        int progress = static_cast<int>(m_gameState.m_currentProgress / 2);
+        bool prev = m_fields->macroInput;
+        m_fields->macroInput = true;
+        dispatch(progress);
+        m_fields->macroInput = prev;
+    }
+
     void dispatchImmediatePlaybackAction(int tick, int button, bool down, bool player2) {
         auto* engine = ReplayEngine::get();
         if (tick == engine->respawnTickIndex) {
@@ -731,6 +763,40 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
     }
 
+    void dispatchInputOnlyTTRInputs(int progress) {
+        auto* engine = ReplayEngine::get();
+        auto* inputListPtr = engine->activeTTRInputs();
+        if (!inputListPtr) {
+            return;
+        }
+
+        auto& inputList = *inputListPtr;
+
+        while (engine->executeIndex < inputList.size()) {
+            auto const& input = inputList[engine->executeIndex];
+            if (input.tick > progress) {
+                break;
+            }
+
+            bool player2 = input.isPlayer2();
+            dispatchImmediatePlaybackAction(input.tick, input.actionType, input.isPressed(), player2);
+            ++engine->executeIndex;
+        }
+    }
+
+    void dispatchGDRInputsOnly(int progress) {
+        auto* engine = ReplayEngine::get();
+        auto& inputList = engine->activeMacro->inputs;
+
+        while (engine->executeIndex < inputList.size()) {
+            auto const& input = inputList[engine->executeIndex];
+            int inputTick = static_cast<int>(input.frame);
+            if (inputTick > progress) break;
+            dispatchImmediatePlaybackAction(inputTick, input.button, input.down, input.player2);
+            ++engine->executeIndex;
+        }
+    }
+
     void dispatchGDRInputs(int tick, int effectiveTick, int stepDelta) {
         auto* engine = ReplayEngine::get();
         auto& inputList = engine->activeMacro->inputs;
@@ -789,7 +855,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         int effectiveTick = tick + engine->tickOffset;
         AccuracyMode playbackAccuracy = ReplayEngine::runtimeAccuracyModeFor(engine->activeMacroAccuracyMode());
 
-        if (playbackAccuracy != AccuracyMode::CBS) {
+        if (playbackAccuracy != AccuracyMode::CBS && !shouldUseInputOnlyTTRPlayback() && !shouldUseInputOnlyGDRPlayback()) {
             m_fields->macroInput = true;
             if (engine->ttrMode && engine->activeTTR) {
                 dispatchTTRInputs(tick, effectiveTick, stepDelta);
@@ -867,6 +933,10 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
             (executingCBS && engine->manualInputIgnoredActive() && !queuedSnapshot.empty());
         engine->cbsPlaybackProcessingQueue = executingCBS;
         GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
+
+        processInputOnly(shouldUseInputOnlyTTRPlayback(), [&](int p) { dispatchInputOnlyTTRInputs(p); });
+        processInputOnly(shouldUseInputOnlyGDRPlayback(), [&](int p) { dispatchGDRInputsOnly(p); });
+
         m_fields->macroInput = previousMacroInput;
         engine->cbsPlaybackProcessingQueue = previousCbsPlaybackProcessingQueue;
         engine->cbsCaptureProcessingQueue = false;
