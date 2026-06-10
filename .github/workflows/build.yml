@@ -73,6 +73,12 @@ jobs:
             throw "Private watermark build did not produce artifact/include/toasty_watermark.hpp."
           }
 
+      - name: Reset geode cli before final build
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath "my-epic-geode-cli" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath "my-epic-geode-cli.zip" -Force -ErrorAction SilentlyContinue
+
       - name: Stop lingering sccache server
         shell: bash
         run: sccache --stop-server 2>/dev/null || true
