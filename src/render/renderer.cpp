@@ -1586,6 +1586,17 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         };
 
         double totalTime = lastFrame_t;
+
+        if (totalTime <= 0.0 || !pathExists(path)) {
+            Loader::get()->queueInMainThread([] {
+                auto title = trString("Error");
+                auto msg   = trString("No frames were captured. The render produced no output.");
+                auto ok    = trString("Ok");
+                FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+            });
+            return;
+        }
+
         bool audioMuxed = false;
         bool apiMuxed   = false;
 
