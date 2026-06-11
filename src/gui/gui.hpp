@@ -174,6 +174,8 @@ public:
     bool renderBufsInit = false;
     bool advancedWarningAccepted = false;
     bool showAdvancedWarning = false;
+    bool showMkvWarning = false;
+    bool mkvWarningIsExp = false;
 
     // Experimental render tab state
     RenderConfig expConfig;
