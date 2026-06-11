@@ -778,25 +778,24 @@ void Renderer::changeRes(bool og) {
 
 bool Renderer::shouldUseAPI() {
 #ifdef GEODE_IS_WINDOWS
-    bool foundApi = Loader::get()->isModLoaded("eclipse.ffmpeg-api");
-    return foundApi;
+    auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
+    if (!resolveUsableFfmpegExecutable(exePath).empty()) return false;
+    return Loader::get()->isModLoaded("eclipse.ffmpeg-api");
 #else
     return true;
 #endif
 }
 
 bool Renderer::resolveEncoder() {
-    bool foundApi = Loader::get()->isModLoaded("eclipse.ffmpeg-api");
-    if (foundApi) return true;
 #ifdef GEODE_IS_WINDOWS
-    std::filesystem::path exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
-    std::filesystem::path resolved = resolveUsableFfmpegExecutable(exePath);
-    if (!resolved.empty()) {
-        ffmpegPath = resolved;
-        return true;
-    }
-#endif
+    auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
+    auto resolved = resolveUsableFfmpegExecutable(exePath);
+    if (!resolved.empty()) { ffmpegPath = resolved; return true; }
+    if (Loader::get()->isModLoaded("eclipse.ffmpeg-api")) return true;
     return false;
+#else
+    return true;
+#endif
 }
 
 bool Renderer::toggle() {
@@ -877,32 +876,71 @@ void Renderer::startFromPending() {
     }
 }
 
+#ifdef GEODE_IS_WINDOWS
+static bool isValidCodecName(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') return false;
+    return true;
+}
+
+static bool testCodec(const std::filesystem::path& exe, const std::string& codec) {
+    if (!isValidCodecName(codec)) return false;
+    auto cmd = fmt::format(
+        "\"{}\" -nostdin -f lavfi -i color=black:size=256x256:rate=1 -frames:v 1 -c:v {} -f null NUL",
+        toasty::pathToUtf8(exe), codec
+    );
+    int len = MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, nullptr, 0);
+    if (len <= 0) return false;
+    std::wstring wcmd(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, wcmd.data(), len);
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE hNull = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               &sa, OPEN_EXISTING, 0, nullptr);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput  = hNull;
+    si.hStdOutput = hNull;
+    si.hStdError  = hNull;
+
+    PROCESS_INFORMATION pi{};
+    BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (hNull != INVALID_HANDLE_VALUE) CloseHandle(hNull);
+    if (!ok) return false;
+    WaitForSingleObject(pi.hProcess, 5000);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return code == 0;
+}
+#endif
+
 void Renderer::start(const RenderConfig& config) {
     m_resolvedParams = resolve(config);
 
-    fps             = config.fps;
-    width           = config.width;
-    height          = config.height;
-    sfxVolume       = config.sfxVol;
-    musicVolume     = config.musicVol;
-    stopAfter       = config.secondsAfter;
+    fps               = config.fps;
+    width             = config.width;
+    height            = config.height;
+    sfxVolume         = config.sfxVol;
+    musicVolume       = config.musicVol;
+    stopAfter         = config.secondsAfter;
     includeClickSounds = config.includeClicks;
-    audioMode       = config.includeAudio ? AUDIO_SONG : AUDIO_OFF;
-    hideEndscreen   = config.hideEndscreen;
+    audioMode         = config.includeAudio ? AUDIO_SONG : AUDIO_OFF;
+    hideEndscreen     = config.hideEndscreen;
     hideLevelComplete = config.hideLevelComplete;
-    codec           = m_resolvedParams->codec;
-    extraArgs       = m_resolvedParams->extraArgs;
-    videoArgs       = m_resolvedParams->videoArgs;
-    extraAudioArgs  = m_resolvedParams->audioArgs;
-    audioCodec      = m_resolvedParams->audioCodec;
-    m_extOverride   = m_resolvedParams->ext;
 
     if (config.tier == RenderQualityTier::Lossless ||
         config.codecFamily == RenderCodecFamily::AV1) {
 #ifdef GEODE_IS_WINDOWS
-        // the API mod lacks libsvtav1/libx264rgb, so these tiers need the exe.
-        // resolveEncoder() short-circuits on the API mod without resolving the
-        // exe, so probe for it here before deciding its unavailable.
         if (ffmpegPath.empty()) {
             auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
             ffmpegPath = resolveUsableFfmpegExecutable(exePath);
@@ -920,6 +958,52 @@ void Renderer::start(const RenderConfig& config) {
 #endif
         usingApi = false;
     }
+
+#ifdef GEODE_IS_WINDOWS
+    if (!usingApi && !ffmpegPath.empty()) {
+        const std::string gpuCodec = m_resolvedParams->codec;
+        bool isGpuCodec = gpuCodec.find("nvenc") != std::string::npos
+                       || gpuCodec.find("amf")   != std::string::npos
+                       || gpuCodec.find("qsv")   != std::string::npos;
+        if (isGpuCodec && !testCodec(ffmpegPath, gpuCodec)) {
+            RenderConfig cpuCfg = config;
+            cpuCfg.useGpu = false;
+            cpuCfg.gpuEncoder.clear();
+            m_resolvedParams = resolve(cpuCfg);
+            const std::string cpuCodec = m_resolvedParams->codec;
+            if (!testCodec(ffmpegPath, cpuCodec)) {
+                m_resolvedParams.reset();
+                Loader::get()->queueInMainThread([cpuCodec] {
+                    auto title = trString("Error");
+                    auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", cpuCodec);
+                    auto ok = trString("Ok");
+                    FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+                });
+                return;
+            }
+            Loader::get()->queueInMainThread([gpuCodec, cpuCodec] {
+                auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
+                Notification::create(msg, NotificationIcon::Warning)->show();
+            });
+        } else if (!isGpuCodec && !testCodec(ffmpegPath, gpuCodec)) {
+            m_resolvedParams.reset();
+            Loader::get()->queueInMainThread([gpuCodec] {
+                auto title = trString("Error");
+                auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", gpuCodec);
+                auto ok = trString("Ok");
+                FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+            });
+            return;
+        }
+    }
+#endif
+
+    codec           = m_resolvedParams->codec;
+    extraArgs       = m_resolvedParams->extraArgs;
+    videoArgs       = m_resolvedParams->videoArgs;
+    extraAudioArgs  = m_resolvedParams->audioArgs;
+    audioCodec      = m_resolvedParams->audioCodec;
+    m_extOverride   = m_resolvedParams->ext;
 
     start();
 }
@@ -1184,7 +1268,8 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         }
 
         if (m_resolvedParams.has_value()) {
-            settings.m_codec   = m_resolvedParams->codec;
+            if (!usingApi)
+                settings.m_codec = m_resolvedParams->codec;
             settings.m_bitrate = m_resolvedParams->apiBitrate;
         }
 
@@ -1239,11 +1324,17 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 bool isQsv   = rp.codec.find("qsv")   != std::string::npos;
                 std::string qualitySection;
                 if (isNvenc)
-                    qualitySection = fmt::format("-cq {}", rp.crf);
+                    qualitySection = fmt::format("-rc vbr -cq {} -b:v 0 -maxrate {}k -bufsize {}k",
+                        rp.crf, rp.apiBitrate / 1000, rp.apiBitrate / 500);
                 else if (isAmf)
-                    qualitySection = fmt::format("-rc cqp -qp_i {} -qp_p {}", rp.crf, rp.crf);
-                else if (isQsv)
-                    qualitySection = fmt::format("-global_quality {}", rp.crf);
+                    qualitySection = fmt::format("-rc vbr_latency -qvbr_quality_level {} -b:v 0 -maxrate {}k -bufsize {}k",
+                        rp.crf, rp.apiBitrate / 1000, rp.apiBitrate / 500);
+                else if (isQsv) {
+                    bool isAv1Qsv = rp.codec.find("av1") != std::string::npos;
+                    int qsvQ = isAv1Qsv ? std::max(1, (rp.crf * 51 + 32) / 63) : rp.crf;
+                    qualitySection = fmt::format("-global_quality {} -b:v 0 -maxrate {}k -bufsize {}k",
+                        qsvQ, rp.apiBitrate / 1000, rp.apiBitrate / 500);
+                }
                 else
                     qualitySection = fmt::format("-crf {}", rp.crf);
                 if (!rp.x264Preset.empty())
