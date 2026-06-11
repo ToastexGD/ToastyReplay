@@ -28,6 +28,8 @@ set(TOASTYREPLAY_SOURCES
     src/hacks/hitboxes.cpp
     src/trajectory/trajectory.cpp
     src/trajectory/trajectory_physics.cpp
+    src/render/render_config.cpp
+    src/render/render_preset.cpp
     src/render/renderer.cpp
     src/render/watermark.cpp
     src/render/watermark_dll_loader.cpp
