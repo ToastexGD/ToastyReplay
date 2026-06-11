@@ -897,9 +897,29 @@ void Renderer::start(const RenderConfig& config) {
     audioCodec      = m_resolvedParams->audioCodec;
     m_extOverride   = m_resolvedParams->ext;
 
-    // lossless (libx264rgb + CRF 0) requires the subprocess path
-    if (config.tier == RenderQualityTier::Lossless)
+    if (config.tier == RenderQualityTier::Lossless ||
+        config.codecFamily == RenderCodecFamily::AV1) {
+#ifdef GEODE_IS_WINDOWS
+        // the API mod lacks libsvtav1/libx264rgb, so these tiers need the exe.
+        // resolveEncoder() short-circuits on the API mod without resolving the
+        // exe, so probe for it here before deciding its unavailable.
+        if (ffmpegPath.empty()) {
+            auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
+            ffmpegPath = resolveUsableFfmpegExecutable(exePath);
+        }
+        if (ffmpegPath.empty()) {
+            m_resolvedParams.reset();
+            Loader::get()->queueInMainThread([] {
+                auto title = trString("Error");
+                auto msg = trString("AV1 and Lossless require <cl>ffmpeg.exe</c>. Configure the path in this mod's settings or switch to H264.");
+                auto ok = trString("Ok");
+                FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+            });
+            return;
+        }
+#endif
         usingApi = false;
+    }
 
     start();
 }
@@ -932,6 +952,10 @@ void Renderer::start() {
                 loadSavedValueWithFallback<std::string>(mod, "render_seconds_after", "3", {"render_after_seconds"})
             ).unwrapOr(3.f));
         extension = loadSavedValueWithFallback<std::string>(mod, "render_file_extension", ".mp4", {"render_extension"});
+        if (extension == ".mp4") {
+            for (const char* c : { "libopus", "flac" })
+                if (audioCodec == c) { extension = ".mkv"; break; }
+        }
         audioMode = loadSavedValueWithFallback<bool>(mod, "render_include_audio", true, {"render_record_audio", "render_capture_audio"})
             ? AUDIO_SONG : AUDIO_OFF;
         includeClickSounds = mod->getSavedValue<bool>("render_include_clicks", false);
@@ -1227,12 +1251,15 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 if (!rp.maxBitrate.empty())
                     qualitySection += fmt::format(" -maxrate {} -bufsize {}", rp.maxBitrate, rp.maxBitrate);
 
+                std::string vfArg = rp.videoArgs.empty()
+                    ? "vflip"
+                    : fmt::format("vflip,{}", rp.videoArgs);
                 command = fmt::format(
-                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - -c:v {} {} {} -vf \"vflip,{}\" -an \"{}\"",
+                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - -c:v {} {} {} -vf \"{}\" -an \"{}\"",
                     toasty::pathToUtf8(ffmpegPath),
                     width, height, fps,
                     rp.codec, qualitySection, rp.extraArgs,
-                    rp.videoArgs,
+                    vfArg,
                     toasty::pathToUtf8(path)
                 );
             } else {
@@ -1469,6 +1496,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         double totalTime = lastFrame_t;
         bool audioMuxed = false;
+        bool apiMuxed   = false;
 
         if (!preferExeAudioMux && useApiForEncoding) {
             if (hasRawAudio) {
@@ -1485,7 +1513,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
                 auto rawRes = ffmpeg::events::AudioMixer::mixVideoRaw(path, rawAudio, tempPath);
                 if (rawRes.isOk()) {
-                    audioMuxed = true;
+                    audioMuxed = apiMuxed = true;
                     log::info("Audio mux succeeded via API raw audio");
                 } else {
                     log::error("Audio mux via API raw audio failed: {}", rawRes.unwrapErr());
@@ -1493,7 +1521,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     if (ensureRawAudioFile()) {
                         auto fileRes = ffmpeg::events::AudioMixer::mixVideoAudio(path, rawAudioPath, tempPath);
                         if (fileRes.isOk()) {
-                            audioMuxed = true;
+                            audioMuxed = apiMuxed = true;
                             log::info("Audio mux succeeded via API WAV file fallback");
                         } else {
                             log::error("Audio mux via API WAV fallback failed: {}", fileRes.unwrapErr());
@@ -1503,12 +1531,19 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             } else {
                 auto fileRes = ffmpeg::events::AudioMixer::mixVideoAudio(path, songFile, tempPath);
                 if (fileRes.isOk()) {
-                    audioMuxed = true;
+                    audioMuxed = apiMuxed = true;
                     log::info("Audio mux succeeded via API song file");
                 } else {
                     log::error("Audio mux via API song file failed: {}", fileRes.unwrapErr());
                 }
             }
+        }
+
+        if (apiMuxed && !audioCodec.empty() && audioCodec != "aac") {
+            Loader::get()->queueInMainThread([ac = audioCodec] {
+                auto msg = fmt::format("Audio muxed as AAC — ffmpeg.exe needed for {}", ac);
+                Notification::create(msg, NotificationIcon::Warning)->show();
+            });
         }
 
 #ifdef GEODE_IS_WINDOWS

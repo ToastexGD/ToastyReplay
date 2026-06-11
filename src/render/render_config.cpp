@@ -37,7 +37,7 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         { "libx264",    "slow",      "p7", 16,  50'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
-    // AV1 CRF: 0-63 scale (libsvtav1). Lossless falls back to libx264rgb (AV1 lossless is impractical).
+    // AV1 CRF: 0-63 scale (libsvtav1). Lossless falls back to libx264rgb (AV1 lossless is impractical)
     static constexpr TierParams kAv1Tiers[] = {
         { "libsvtav1",  "10",        "p1", 50,  20'000'000LL },
         { "libsvtav1",  "8",         "p4", 35,  30'000'000LL },
@@ -56,12 +56,17 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     ResolvedEncodeParams r;
     r.codec      = cfg.codec.value_or(useGpu ? cfg.gpuEncoder : td.cpuCodec);
     r.crf        = cfg.crf.value_or(td.crf);
-    r.extraArgs  = cfg.extraArgs.value_or("-pix_fmt yuv420p");
-    r.videoArgs  = cfg.videoArgs.value_or("colorspace=all=bt709:iall=bt470bg:fast=1");
+    r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
+    r.videoArgs  = cfg.videoArgs.value_or(isLossless ? "" : "colorspace=all=bt709:iall=bt470bg:fast=1");
     r.audioArgs  = cfg.audioArgs.value_or("");
     r.audioCodec = cfg.audioCodec.value_or("aac");
-    r.maxBitrate = cfg.maxBitrate.value_or("");
-    r.ext        = cfg.ext.value_or(".mp4");
+    r.maxBitrate = (isAv1 || isLossless) ? "" : cfg.maxBitrate.value_or("");
+
+    r.ext = cfg.ext.value_or(".mp4");
+    if (r.ext == ".mp4") {
+        for (const char* c : { "libopus", "flac" })
+            if (r.audioCodec == c) { r.ext = ".mkv"; break; }
+    }
     r.apiBitrate = td.apiBitrate;
 
     // NVENC uses -preset pN; CPU x264/svtav1 uses -preset name; AMF/QSV have no standard flag

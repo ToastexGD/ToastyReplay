@@ -2931,7 +2931,7 @@ void MenuInterface::drawRenderPresetsSection() {
                     snprintf(expRenderFpsBuf,      sizeof(expRenderFpsBuf),      "%u", expConfig.fps);
                     snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
                     snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
-                    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or("").c_str());
+                    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
                     snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
                     snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
                     snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
@@ -4876,7 +4876,7 @@ void MenuInterface::loadExpRenderSettings() {
 
     snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
     snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
-    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or("").c_str());
+    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
     snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
     snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
     snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
@@ -4915,7 +4915,6 @@ void MenuInterface::drawExpRenderTab() {
 
     float inputW = ImGui::GetContentRegionAvail().x * 0.45f;
 
-    // ── RENDER ──────────────────────────────────────────────────────────────
     Widgets::SectionHeader("Render", theme);
 
     imguiTextTr("Name");
@@ -4961,7 +4960,6 @@ void MenuInterface::drawExpRenderTab() {
 
     drawRenderPresetsSection();
 
-    // ── RESOLUTION ──────────────────────────────────────────────────────────
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Resolution", theme);
 
@@ -4997,7 +4995,6 @@ void MenuInterface::drawExpRenderTab() {
         saveRenderConfig(expConfig);
     }
 
-    // ── ENCODING ────────────────────────────────────────────────────────────
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Encoding", theme);
 
@@ -5067,7 +5064,6 @@ void MenuInterface::drawExpRenderTab() {
     drawRenderAudioSection();
     drawRenderDisplaySection();
 
-    // ── ADVANCED ────────────────────────────────────────────────────────────
     ImGui::Dummy(ImVec2(0, 8));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
     bool headerOpen = ImGui::CollapsingHeader("Advanced##expRender", expAdvancedOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
@@ -5134,7 +5130,6 @@ void MenuInterface::drawExpRenderTab() {
         );
     }
 
-    // ── RENDERED VIDEOS ─────────────────────────────────────────────────────
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Rendered Videos", theme);
 
