@@ -2,8 +2,9 @@
 
 #include <Geode/Geode.hpp>
 
-#include <array>
-#include <unordered_set>
+// uncomment this when you are actually put these libs into use
+// #include <array>
+// #include <unordered_set>
 #include <vector>
 
 using namespace geode::prelude;
