@@ -1206,6 +1206,7 @@ public:
     }
 
     Renderer renderer;
+    bool useNewRenderer = false;
 
     static ReplayEngine* get() {
         static auto* singleton = new ReplayEngine();

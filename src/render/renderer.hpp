@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ffmpeg_events.hpp"
+#include "render_config.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -92,6 +93,8 @@ public:
     bool dontRender = false;
     bool isPlatformer = false;
     bool includeClickSounds = false;
+    bool hideEndscreen = false;
+    bool hideLevelComplete = false;
     int finishFrame = 0;
     int levelStartFrame = 0;
 
@@ -112,6 +115,7 @@ public:
     std::string extraArgs;
     std::string videoArgs;
     std::string extraAudioArgs;
+    std::string audioCodec = "aac";
     std::filesystem::path path;
     std::filesystem::path ffmpegPath;
     std::vector<bool> m_capturedFrameSet;
@@ -128,6 +132,7 @@ public:
     void changeRes(bool original);
 
     void start();
+    void start(const RenderConfig& config);
     void stop(int frame = 0);
     void handleRecording(PlayLayer* playLayer, int frame);
 
@@ -137,10 +142,16 @@ public:
     int getCurrentFrame() const;
     float getTPS() const;
 
+    std::optional<RenderConfig> m_pendingConfig;
+
 private:
     std::thread m_encodeThread;
+    std::optional<ResolvedEncodeParams> m_resolvedParams;
+    std::string m_extOverride;
+
     bool resolveEncoder();
     void restoreAudioVolumes();
     bool isLevelComplete();
+    void startFromPending();
     void runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
 };
