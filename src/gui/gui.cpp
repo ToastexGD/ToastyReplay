@@ -3064,8 +3064,63 @@ void MenuInterface::drawRenderDisplaySection() {
 void MenuInterface::drawRenderTab() {
     if (ReplayEngine::get()->useNewRenderer) {
         drawExpRenderTab();
-        return;
     }
+
+    if (showMkvWarning) {
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(420, 0));
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24, 20));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.96f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(theme.getAccent().x, theme.getAccent().y, theme.getAccent().z, 0.5f));
+
+        ImGui::Begin("##mkvWarning", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+        ImGui::TextUnformatted("Warning: mp4 doesn't support this audio codec");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4));
+        ImGui::TextWrapped("FLAC, Opus, and PCM audio are not supported in the mp4 container. Change the extension to .mkv?");
+        ImGui::Dummy(ImVec2(0, 12));
+
+        float btnW = (ImGui::GetContentRegionAvail().x - 12) * 0.5f;
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.20f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.65f, 0.25f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.45f, 0.16f, 1.0f));
+        if (ImGui::Button("Change to .mkv", ImVec2(btnW, 34))) {
+            showMkvWarning = false;
+            if (mkvWarningIsExp) {
+                snprintf(expAdvExtBuf, sizeof(expAdvExtBuf), "%s", ".mkv");
+                expConfig.ext = ".mkv";
+                saveRenderConfig(expConfig);
+            } else {
+                snprintf(renderExtBuf, sizeof(renderExtBuf), "%s", ".mkv");
+                Mod::get()->setSavedValue("render_file_extension", std::string(renderExtBuf));
+            }
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine(0, 12);
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.15f, 0.15f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.20f, 0.20f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.50f, 0.10f, 0.10f, 1.0f));
+        if (ImGui::Button("Keep .mp4", ImVec2(btnW, 34)))
+            showMkvWarning = false;
+        ImGui::PopStyleColor(3);
+
+        ImGui::End();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+    }
+
+    if (ReplayEngine::get()->useNewRenderer) return;
 
     auto* engine = ReplayEngine::get();
     auto* mod = Mod::get();
@@ -3207,60 +3262,6 @@ void MenuInterface::drawRenderTab() {
             mod->setSavedValue("render_audio_codec", std::string(backupAudioCodecBuf));
             mod->setSavedValue("render_seconds_after", std::string(backupSecondsAfterBuf));
         }
-        ImGui::PopStyleColor(3);
-
-        ImGui::End();
-        ImGui::PopStyleColor(2);
-        ImGui::PopStyleVar(2);
-    }
-
-    if (showMkvWarning) {
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(420, 0));
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24, 20));
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.96f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(theme.getAccent().x, theme.getAccent().y, theme.getAccent().z, 0.5f));
-
-        ImGui::Begin("##mkvWarning", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
-        ImGui::TextUnformatted("Warning: mp4 doesn't support this audio codec");
-        ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0, 4));
-        ImGui::TextWrapped("FLAC, Opus, and PCM audio are not supported in the mp4 container. Change the extension to .mkv?");
-        ImGui::Dummy(ImVec2(0, 12));
-
-        float btnW = (ImGui::GetContentRegionAvail().x - 12) * 0.5f;
-
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.20f, 0.85f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.65f, 0.25f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.45f, 0.16f, 1.0f));
-        if (ImGui::Button("Change to .mkv", ImVec2(btnW, 34))) {
-            showMkvWarning = false;
-            if (mkvWarningIsExp) {
-                snprintf(expAdvExtBuf, sizeof(expAdvExtBuf), "%s", ".mkv");
-                expConfig.ext = ".mkv";
-                saveRenderConfig(expConfig);
-            } else {
-                snprintf(renderExtBuf, sizeof(renderExtBuf), "%s", ".mkv");
-                mod->setSavedValue("render_file_extension", std::string(renderExtBuf));
-            }
-        }
-        ImGui::PopStyleColor(3);
-
-        ImGui::SameLine(0, 12);
-
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.15f, 0.15f, 0.85f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.20f, 0.20f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.50f, 0.10f, 0.10f, 1.0f));
-        if (ImGui::Button("Keep .mp4", ImVec2(btnW, 34)))
-            showMkvWarning = false;
         ImGui::PopStyleColor(3);
 
         ImGui::End();
@@ -4858,10 +4859,12 @@ void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
         preset.audioCodec.empty() ? "aac" : preset.audioCodec.c_str());
     snprintf(renderSecondsAfterBuf, sizeof(renderSecondsAfterBuf), "%g", preset.secondsAfter);
 
-    renderIncludeAudio     = preset.includeAudio;
-    renderIncludeClicks    = preset.includeClicks;
-    renderSfxVol           = preset.sfxVol;
-    renderMusicVol         = preset.musicVol;
+    renderIncludeAudio      = preset.includeAudio;
+    renderIncludeClicks     = preset.includeClicks;
+    renderSfxVol            = preset.sfxVol;
+    renderMusicVol          = preset.musicVol;
+    renderHideEndscreen     = preset.hideEndscreen;
+    renderHideLevelComplete = preset.hideLevelComplete;
 
     mod->setSavedValue("render_width",              (int64_t)preset.width);
     mod->setSavedValue("render_height",             (int64_t)preset.height);
@@ -4878,6 +4881,8 @@ void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
     mod->setSavedValue("render_include_clicks",     preset.includeClicks);
     mod->setSavedValue("render_sfx_volume",         (double)preset.sfxVol);
     mod->setSavedValue("render_music_volume",       (double)preset.musicVol);
+    mod->setSavedValue("render_hide_endscreen",     preset.hideEndscreen);
+    mod->setSavedValue("render_hide_levelcomplete", preset.hideLevelComplete);
 
     struct ResPreset { const char* name; int width; int height; };
     static const ResPreset resPresets[] = {
