@@ -5,6 +5,7 @@
 
 #include <Geode/Geode.hpp>
 
+#include <atomic>
 #include <deque>
 #include <filesystem>
 #include <condition_variable>
@@ -24,10 +25,12 @@ class FrameCaptureService {
 public:
     void configure(size_t bytesPerFrame, size_t maxBufferedFrames = 2);
     void clear();
+    void notifyStop();
     bool hasPendingFrame() const;
-    std::vector<uint8_t> createFrameBuffer() const;
+    std::vector<uint8_t> acquireBuffer();
     bool submit(std::vector<uint8_t>&& frame);
     std::vector<uint8_t> takeFrame();
+    void releaseBuffer(std::vector<uint8_t>&& frame);
 
 private:
     size_t m_bytesPerFrame = 0;
@@ -35,6 +38,7 @@ private:
     mutable std::mutex m_lock;
     std::condition_variable m_pendingChanged;
     std::deque<std::vector<uint8_t>> m_pendingFrames;
+    std::vector<std::vector<uint8_t>> m_freeList;
 };
 
 struct EncodeSession {
@@ -59,6 +63,13 @@ struct AudioCaptureService {
     }
 };
 
+struct RenderSoundEvent {
+    std::string path;
+    float time;
+    float volume;
+    float speed;        // pitch multiplier (1.0 = normal; ignored in mix for now)
+};
+
 class RenderTexture {
 public:
     unsigned width = 0;
@@ -71,6 +82,13 @@ public:
     void begin();
     void end();
     void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr);
+    void flushPbo(FrameCaptureService& frameCapture);
+
+private:
+    GLuint  m_pbos[2]       = {0, 0};
+    int     m_pboIndex      = 0;
+    int     m_pboFrameCount = 0;
+    size_t  m_pboSize       = 0;
 };
 
 class Renderer {
@@ -119,6 +137,7 @@ public:
     std::filesystem::path path;
     std::filesystem::path ffmpegPath;
     std::vector<bool> m_capturedFrameSet;
+    std::vector<RenderSoundEvent> m_capturedSounds;
 
     FMODAudioEngine* fmod = nullptr;
     cocos2d::CCSize ogRes = { 0, 0 };
@@ -146,6 +165,10 @@ public:
 
 private:
     std::thread m_encodeThread;
+    // true from thread launch until runEncodeLoop fully returns (frames drained,
+    // audio muxed). The thread is detached and keeps touching shared render state
+    // after recording=false, so a new render must not start while this is set.
+    std::atomic<bool> m_encodeActive{false};
     std::optional<ResolvedEncodeParams> m_resolvedParams;
     std::string m_extOverride;
 
