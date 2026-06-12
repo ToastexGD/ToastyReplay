@@ -3,6 +3,7 @@
 
 #include <Geode/Geode.hpp>
 #include <algorithm>
+#include <cctype>
 
 using namespace geode::prelude;
 
@@ -30,7 +31,7 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         int         crf;
         int64_t     apiBitrate;
     };
-    // Indexed by RenderQualityTier: Fast=0, Balanced=1, Quality=2, Lossless=3
+    // indexed by RenderQualityTier: Fast=0, Balanced=1, Quality=2, Lossless=3
     static constexpr TierParams kH264Tiers[] = {
         { "libx264",    "veryfast",  "p1", 28,  20'000'000LL },
         { "libx264",    "medium",    "p4", 20,  30'000'000LL },
@@ -57,10 +58,13 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     r.codec      = cfg.codec.value_or(useGpu ? cfg.gpuEncoder : td.cpuCodec);
     r.crf        = cfg.crf.value_or(td.crf);
     r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
-    r.videoArgs  = cfg.videoArgs.value_or(isLossless ? "" : "colorspace=all=bt709:iall=bt470bg:fast=1");
+    r.videoArgs  = cfg.videoArgs.value_or(isLossless ? "" : kDefaultVideoArgs);
     r.audioArgs  = cfg.audioArgs.value_or("");
     r.audioCodec = cfg.audioCodec.value_or("aac");
     r.maxBitrate = (isAv1 || isLossless) ? "" : cfg.maxBitrate.value_or("");
+    if (!r.maxBitrate.empty() && std::all_of(r.maxBitrate.begin(), r.maxBitrate.end(),
+            [](unsigned char c) { return std::isdigit(c); }))
+        r.maxBitrate += "M";
 
     r.ext = cfg.ext.value_or(".mp4");
     if (r.ext == ".mp4") {
@@ -99,7 +103,7 @@ void saveRenderConfig(const RenderConfig& cfg) {
     mod->setSavedValue("exp_render_adv_max_bitrate",    cfg.maxBitrate.value_or(""));
     mod->setSavedValue("exp_render_adv_extra_args",     cfg.extraArgs.value_or(""));
     mod->setSavedValue("exp_render_adv_video_args",     cfg.videoArgs.value_or(""));
-    mod->setSavedValue("exp_render_adv_audio_args",      cfg.audioArgs.value_or(""));
+    mod->setSavedValue("exp_render_adv_audio_args",     cfg.audioArgs.value_or(""));
     mod->setSavedValue("exp_render_adv_audio_codec",    cfg.audioCodec.value_or(""));
     mod->setSavedValue("exp_render_adv_ext",            cfg.ext.value_or(""));
     mod->setSavedValue("exp_render_codec_family",       static_cast<int64_t>(cfg.codecFamily));
@@ -138,7 +142,7 @@ RenderConfig loadRenderConfig() {
     auto advExtraArgs = mod->getSavedValue<std::string>("exp_render_adv_extra_args", "");
     if (!advExtraArgs.empty()) cfg.extraArgs = advExtraArgs;
 
-    auto advVideoArgs = mod->getSavedValue<std::string>("exp_render_adv_video_args", "");
+    auto advVideoArgs = mod->getSavedValue<std::string>("exp_render_adv_video_args", kDefaultVideoArgs);
     if (!advVideoArgs.empty()) cfg.videoArgs = advVideoArgs;
 
     auto advAudioArgs = mod->getSavedValue<std::string>("exp_render_adv_audio_args", "");

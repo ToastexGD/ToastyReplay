@@ -76,14 +76,15 @@ public:
 
     bool isRunning() const { return m_pi.hProcess != nullptr; }
 
-    void writeStdin(const uint8_t* data, size_t size) {
-        if (!m_stdinWrite) return;
+    bool writeStdin(const uint8_t* data, size_t size) {
+        if (!m_stdinWrite) return false;
         size_t offset = 0;
         while (offset < size) {
             DWORD written = 0;
-            if (!WriteFile(m_stdinWrite, data + offset, static_cast<DWORD>(size - offset), &written, nullptr)) break;
+            if (!WriteFile(m_stdinWrite, data + offset, static_cast<DWORD>(size - offset), &written, nullptr)) return false;
             offset += written;
         }
+        return true;
     }
 
     int close() {

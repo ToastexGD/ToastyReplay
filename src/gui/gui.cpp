@@ -2934,19 +2934,19 @@ void MenuInterface::drawRenderPresetsSection() {
                 if (isExp) {
                     expConfig = preset->toRenderConfig();
                     expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
-                    snprintf(expRenderFpsBuf,      sizeof(expRenderFpsBuf),      "%u", expConfig.fps);
-                    snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
-                    snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
-                    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
-                    snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
-                    snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
-                    snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
-                    snprintf(expAdvAudioCodecBuf,  sizeof(expAdvAudioCodecBuf),  "%s", expConfig.audioCodec.value_or("").c_str());
-                    snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
-                    if (expConfig.crf.has_value())
-                        snprintf(expAdvCrfBuf, sizeof(expAdvCrfBuf), "%d", *expConfig.crf);
-                    else
-                        expAdvCrfBuf[0] = '\0';
+                    snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
+                    {
+                        auto rp = resolve(expConfig);
+                        snprintf(expAdvCodecBuf,      sizeof(expAdvCodecBuf),      "%s", expConfig.codec.value_or(rp.codec).c_str());
+                        snprintf(expAdvCrfBuf,        sizeof(expAdvCrfBuf),        "%d", expConfig.crf.value_or(rp.crf));
+                        snprintf(expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf),  "%s", expConfig.extraArgs.value_or(rp.extraArgs).c_str());
+                        snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", expConfig.audioCodec.value_or(rp.audioCodec).c_str());
+                    }
+                    snprintf(expAdvMaxBitrateBuf,    sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
+                    snprintf(expAdvExtBuf,           sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
+                    snprintf(expAdvVideoArgsBuf,     sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or(kDefaultVideoArgs).c_str());
+                    snprintf(expAdvAudioArgsBuf,     sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
+                    snprintf(expAdvSecondsAfterBuf,  sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
                     saveRenderConfig(expConfig);
                 } else {
                     applyRenderPreset(*preset);
@@ -3111,8 +3111,19 @@ void MenuInterface::drawRenderTab() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.15f, 0.15f, 0.85f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.20f, 0.20f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.50f, 0.10f, 0.10f, 1.0f));
-        if (ImGui::Button("Keep .mp4", ImVec2(btnW, 34)))
+        if (ImGui::Button("Keep .mp4", ImVec2(btnW, 34))) {
             showMkvWarning = false;
+            const char* revert = (mkvWarningPrevCodec[0] && !audioCodecNeedsMkv(mkvWarningPrevCodec))
+                ? mkvWarningPrevCodec : "aac";
+            if (mkvWarningIsExp) {
+                snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", revert);
+                expConfig.audioCodec = std::optional<std::string>(revert);
+                saveRenderConfig(expConfig);
+            } else {
+                snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", revert);
+                Mod::get()->setSavedValue("render_audio_codec", std::string(renderAudioCodecBuf));
+            }
+        }
         ImGui::PopStyleColor(3);
 
         ImGui::End();
@@ -3348,6 +3359,8 @@ void MenuInterface::drawRenderTab() {
                 if (ImGui::Selectable(kAudioCodecLabels[i], sel)) {
                     guardAdvancedEdit();
                     if (advancedWarningAccepted) {
+                        char prevCodec[64];
+                        snprintf(prevCodec, sizeof(prevCodec), "%s", renderAudioCodecBuf);
                         if (i < kAudioCodecCustomIdx)
                             snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", kAudioCodecIds[i]);
                         else
@@ -3356,6 +3369,7 @@ void MenuInterface::drawRenderTab() {
                         if (audioCodecNeedsMkv(renderAudioCodecBuf) && std::string(renderExtBuf) == ".mp4") {
                             showMkvWarning = true;
                             mkvWarningIsExp = false;
+                            snprintf(mkvWarningPrevCodec, sizeof(mkvWarningPrevCodec), "%s", prevCodec);
                         }
                     }
                 }
@@ -4943,19 +4957,18 @@ void MenuInterface::loadExpRenderSettings() {
     snprintf(expRenderNameBuf, sizeof(expRenderNameBuf), "%s", renderName.c_str());
     snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
 
-    snprintf(expAdvCodecBuf,       sizeof(expAdvCodecBuf),       "%s", expConfig.codec.value_or("").c_str());
-    snprintf(expAdvMaxBitrateBuf,  sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
-    snprintf(expAdvExtBuf,         sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
-    snprintf(expAdvExtraArgsBuf,   sizeof(expAdvExtraArgsBuf),   "%s", expConfig.extraArgs.value_or("").c_str());
-    snprintf(expAdvVideoArgsBuf,   sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or("").c_str());
-    snprintf(expAdvAudioArgsBuf,   sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
-    snprintf(expAdvAudioCodecBuf,  sizeof(expAdvAudioCodecBuf),  "%s", expConfig.audioCodec.value_or("").c_str());
+    {
+        auto rp = resolve(expConfig);
+        snprintf(expAdvCodecBuf,      sizeof(expAdvCodecBuf),      "%s", expConfig.codec.value_or(rp.codec).c_str());
+        snprintf(expAdvCrfBuf,        sizeof(expAdvCrfBuf),        "%d", expConfig.crf.value_or(rp.crf));
+        snprintf(expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf),  "%s", expConfig.extraArgs.value_or(rp.extraArgs).c_str());
+        snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", expConfig.audioCodec.value_or(rp.audioCodec).c_str());
+    }
+    snprintf(expAdvMaxBitrateBuf,   sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
+    snprintf(expAdvExtBuf,          sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
+    snprintf(expAdvVideoArgsBuf,    sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or(kDefaultVideoArgs).c_str());
+    snprintf(expAdvAudioArgsBuf,    sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
     snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
-
-    if (expConfig.crf.has_value())
-        snprintf(expAdvCrfBuf, sizeof(expAdvCrfBuf), "%d", *expConfig.crf);
-    else
-        expAdvCrfBuf[0] = '\0';
 
     expConfigInit = true;
 }
@@ -5076,11 +5089,19 @@ void MenuInterface::drawExpRenderTab() {
             bool sel = (tierIdx == i);
             if (ImGui::Selectable(kTierLabels[i], sel)) {
                 expConfig.tier = static_cast<RenderQualityTier>(i);
-                // Lossless always CPU, Fast/Balanced default GPU on
                 if (expConfig.tier == RenderQualityTier::Lossless)
                     expConfig.useGpu = false;
                 else if (expConfig.tier == RenderQualityTier::Fast || expConfig.tier == RenderQualityTier::Balanced)
                     expConfig.useGpu = !expConfig.gpuEncoder.empty();
+                expConfig.codec     = std::nullopt;
+                expConfig.crf       = std::nullopt;
+                expConfig.extraArgs = std::nullopt;
+                {
+                    auto rp = resolve(expConfig);
+                    snprintf(expAdvCodecBuf,     sizeof(expAdvCodecBuf),     "%s", rp.codec.c_str());
+                    snprintf(expAdvCrfBuf,       sizeof(expAdvCrfBuf),       "%d", rp.crf);
+                    snprintf(expAdvExtraArgsBuf, sizeof(expAdvExtraArgsBuf), "%s", rp.extraArgs.c_str());
+                }
                 saveRenderConfig(expConfig);
             }
             if (sel) ImGui::SetItemDefaultFocus();
@@ -5107,11 +5128,21 @@ void MenuInterface::drawExpRenderTab() {
     bool av1NeedsExe = isAv1 && !ffmpegAvail;
 
     if (av1NeedsExe) expConfig.useGpu = false;
-    ImGui::BeginDisabled(!gpuAvail || isLossless || av1NeedsExe);
-    if (Widgets::ToggleSwitch("Use GPU", &expConfig.useGpu, theme, anim))
-        saveRenderConfig(expConfig);
-    ImGui::EndDisabled();
+    imguiTextTr("Use GPU");
     ImGui::SameLine(inputW);
+    ImGui::BeginDisabled(!gpuAvail || isLossless || av1NeedsExe);
+    if (Widgets::ToggleSwitch("##gpuToggle", &expConfig.useGpu, theme, anim)) {
+        expConfig.codec = std::nullopt; expConfig.crf = std::nullopt; expConfig.extraArgs = std::nullopt;
+        auto rp = resolve(expConfig);
+        snprintf(expAdvCodecBuf,     sizeof(expAdvCodecBuf),     "%s", rp.codec.c_str());
+        snprintf(expAdvCrfBuf,       sizeof(expAdvCrfBuf),       "%d", rp.crf);
+        snprintf(expAdvExtraArgsBuf, sizeof(expAdvExtraArgsBuf), "%s", rp.extraArgs.c_str());
+        saveRenderConfig(expConfig);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0, 8.0f);
+    float toggleHeight = 22.0f;
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (toggleHeight - ImGui::GetTextLineHeight()) * 0.5f);
     if (isLossless || av1NeedsExe)
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
     else if (gpuAvail)
@@ -5134,11 +5165,19 @@ void MenuInterface::drawExpRenderTab() {
     {
         float pillW = (ImGui::GetContentRegionAvail().x - 4.0f) * 0.5f;
         bool isH264 = expConfig.codecFamily == RenderCodecFamily::H264;
+        auto refreshTierBufs = [&]() {
+            expConfig.codec = std::nullopt; expConfig.crf = std::nullopt; expConfig.extraArgs = std::nullopt;
+            auto rp = resolve(expConfig);
+            snprintf(expAdvCodecBuf,     sizeof(expAdvCodecBuf),     "%s", rp.codec.c_str());
+            snprintf(expAdvCrfBuf,       sizeof(expAdvCrfBuf),       "%d", rp.crf);
+            snprintf(expAdvExtraArgsBuf, sizeof(expAdvExtraArgsBuf), "%s", rp.extraArgs.c_str());
+        };
         if (Widgets::PillButton("H.264", isH264, pillW, theme, anim)) {
             if (!isH264) {
                 expConfig.codecFamily = RenderCodecFamily::H264;
                 expConfig.gpuEncoder  = probeGpuEncoder(RenderCodecFamily::H264);
                 expGpuProbed = false;
+                refreshTierBufs();
                 saveRenderConfig(expConfig);
             }
         }
@@ -5148,6 +5187,7 @@ void MenuInterface::drawExpRenderTab() {
                 expConfig.codecFamily = RenderCodecFamily::AV1;
                 expConfig.gpuEncoder  = probeGpuEncoder(RenderCodecFamily::AV1);
                 expGpuProbed = false;
+                refreshTierBufs();
                 saveRenderConfig(expConfig);
             }
         }
@@ -5181,6 +5221,8 @@ void MenuInterface::drawExpRenderTab() {
         advInput("Extension",    "##expAdvExt",      expAdvExtBuf,        sizeof(expAdvExtBuf));
         advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf));
         advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf));
+        if (ImGui::IsItemDeactivatedAfterEdit() && !expAdvVideoArgsBuf[0])
+            snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s", kDefaultVideoArgs);
         {
             int acodecIdx = audioCodecComboIndex(expAdvAudioCodecBuf);
             imguiTextTr("Audio Codec");
@@ -5190,6 +5232,8 @@ void MenuInterface::drawExpRenderTab() {
                 for (int i = 0; i <= kAudioCodecCustomIdx; ++i) {
                     bool sel = (acodecIdx == i);
                     if (ImGui::Selectable(kAudioCodecLabels[i], sel)) {
+                        char prevCodec[64];
+                        snprintf(prevCodec, sizeof(prevCodec), "%s", expAdvAudioCodecBuf);
                         if (i < kAudioCodecCustomIdx)
                             snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", kAudioCodecIds[i]);
                         else
@@ -5199,6 +5243,7 @@ void MenuInterface::drawExpRenderTab() {
                         if (audioCodecNeedsMkv(expAdvAudioCodecBuf) && std::string(expAdvExtBuf) == ".mp4") {
                             showMkvWarning = true;
                             mkvWarningIsExp = true;
+                            snprintf(mkvWarningPrevCodec, sizeof(mkvWarningPrevCodec), "%s", prevCodec);
                         }
                         saveRenderConfig(expConfig);
                     }

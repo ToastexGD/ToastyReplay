@@ -7,6 +7,8 @@
 enum class RenderCodecFamily { H264, AV1 };
 enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
 
+inline constexpr const char* kDefaultVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
+
 struct RenderConfig {
     RenderQualityTier tier      = RenderQualityTier::Balanced;
     bool              useGpu    = true;

@@ -23,6 +23,7 @@
 #include <fstream>
 #include <cmath>
 #include <string_view>
+#include <unordered_map>
 #include <fmt/format.h>
 
 using namespace geode::prelude;
@@ -561,6 +562,13 @@ static std::vector<float> decodeSongToRaw(std::filesystem::path const& filePath,
     return result;
 }
 
+// decode a short sound effect to stereo interleaved PCM at FMOD's output sample rate
+static std::vector<float> decodeEffectToRaw(const std::string& resolvedPath) {
+    auto p = toasty::stringToPath(resolvedPath);
+    if (!pathExists(p)) return {};
+    return decodeSongToRaw(p, 0.0f, 9999.f, 1.0f);
+}
+
 static bool isPersistenceRender(ReplayEngine const* engine) {
     return engine
         && engine->ttrMode
@@ -605,6 +613,14 @@ void FrameCaptureService::configure(size_t bytesPerFrame, size_t maxBufferedFram
     m_bytesPerFrame = bytesPerFrame;
     m_maxBufferedFrames = std::max<size_t>(1, maxBufferedFrames);
     m_pendingFrames.clear();
+    m_freeList.clear();
+    // queue depth + 2 in-flight buffers (GL fill + encoder write)
+    if (bytesPerFrame > 0) {
+        size_t poolSize = m_maxBufferedFrames + 2;
+        m_freeList.reserve(poolSize);
+        for (size_t i = 0; i < poolSize; ++i)
+            m_freeList.emplace_back(bytesPerFrame);
+    }
     m_pendingChanged.notify_all();
 }
 
@@ -614,16 +630,35 @@ void FrameCaptureService::clear() {
     m_pendingChanged.notify_all();
 }
 
+void FrameCaptureService::notifyStop() {
+    m_pendingChanged.notify_all();
+}
+
 bool FrameCaptureService::hasPendingFrame() const {
     std::lock_guard lock(m_lock);
     return !m_pendingFrames.empty();
 }
 
-std::vector<uint8_t> FrameCaptureService::createFrameBuffer() const {
+std::vector<uint8_t> FrameCaptureService::acquireBuffer() {
+    std::lock_guard lock(m_lock);
     if (m_bytesPerFrame == 0) {
         return {};
     }
-    return std::vector<uint8_t>(m_bytesPerFrame, 0);
+    if (!m_freeList.empty()) {
+        auto buf = std::move(m_freeList.back());
+        m_freeList.pop_back();
+        buf.resize(m_bytesPerFrame);
+        return buf;
+    }
+    return std::vector<uint8_t>(m_bytesPerFrame);
+}
+
+void FrameCaptureService::releaseBuffer(std::vector<uint8_t>&& frame) {
+    if (frame.capacity() == 0) return;
+    std::lock_guard lock(m_lock);
+    // cap the pool so a stalled encoder cant grow it without bound
+    if (m_freeList.size() < m_maxBufferedFrames + 2)
+        m_freeList.push_back(std::move(frame));
 }
 
 bool FrameCaptureService::submit(std::vector<uint8_t>&& frame) {
@@ -648,9 +683,13 @@ bool FrameCaptureService::submit(std::vector<uint8_t>&& frame) {
 
 std::vector<uint8_t> FrameCaptureService::takeFrame() {
     std::unique_lock lock(m_lock);
-    if (m_pendingFrames.empty()) {
-        return {};
-    }
+    m_pendingChanged.wait(lock, [&] {
+        auto* engine = ReplayEngine::get();
+        return !m_pendingFrames.empty()
+            || !engine
+            || !engine->renderer.recording;
+    });
+    if (m_pendingFrames.empty()) return {};
 
     auto frame = std::move(m_pendingFrames.front());
     m_pendingFrames.pop_front();
@@ -698,11 +737,26 @@ void RenderTexture::begin() {
 
     glBindRenderbuffer(GL_RENDERBUFFER, old_rbo);
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
+
+    m_pboSize       = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+    m_pboIndex      = 0;
+    m_pboFrameCount = 0;
+    glGenBuffers(2, m_pbos);
+    for (int i = 0; i < 2; ++i) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(m_pboSize), nullptr, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 #endif
 }
 
 void RenderTexture::end() {
 #ifdef GEODE_IS_WINDOWS
+    if (m_pbos[0]) {
+        glDeleteBuffers(2, m_pbos);
+        m_pbos[0] = m_pbos[1] = 0;
+    }
+    m_pboFrameCount = 0;
     if (fbo) {
         glDeleteFramebuffers(1, &fbo);
         fbo = 0;
@@ -720,23 +774,43 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
     if (!pl || !fbo) return;
 
 #ifdef GEODE_IS_WINDOWS
-    auto frame = frameCapture.createFrameBuffer();
-    if (frame.empty()) return;
-
     glViewport(0, 0, width, height);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
     pl->visit();
-
-    if (overlay) {
-        overlay->visit();
-    }
+    if (overlay) overlay->visit();
 
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, frame.data());
-    if (!frameCapture.submit(std::move(frame))) {
-        log::warn("Render frame capture aborted before frame submission completed");
+
+    if (m_pbos[0]) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[m_pboIndex]);
+        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+
+        // map the previous PBO, GPU has had a full frame to finish the DMA
+        if (m_pboFrameCount > 0) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[1 - m_pboIndex]);
+            if (void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT)) {
+                auto frame = frameCapture.acquireBuffer();
+                if (!frame.empty()) {
+                    std::copy_n(static_cast<const uint8_t*>(ptr), m_pboSize, frame.data());
+                    if (!frameCapture.submit(std::move(frame)))
+                        log::warn("Render frame capture aborted before frame submission completed");
+                }
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+        }
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        m_pboIndex = 1 - m_pboIndex;
+        ++m_pboFrameCount;
+    } else {
+        auto frame = frameCapture.acquireBuffer();
+        if (!frame.empty()) {
+            glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, frame.data());
+            if (!frameCapture.submit(std::move(frame)))
+                log::warn("Render frame capture aborted before frame submission completed");
+        }
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
@@ -749,6 +823,24 @@ void Renderer::captureFrame() {
         return;
     }
     renderTex.capture(frameCapture, watermarkLabel);
+}
+
+void RenderTexture::flushPbo(FrameCaptureService& frameCapture) {
+#ifdef GEODE_IS_WINDOWS
+    if (!m_pbos[0] || m_pboFrameCount == 0) return;
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[1 - m_pboIndex]);
+    if (void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT)) {
+        auto frame = frameCapture.acquireBuffer();
+        if (!frame.empty()) {
+            std::copy_n(static_cast<const uint8_t*>(ptr), m_pboSize, frame.data());
+            if (!frameCapture.submit(std::move(frame)))
+                log::warn("Render frame flush aborted before frame submission completed");
+        }
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    m_pboFrameCount = 0;
+#endif
 }
 
 static cocos2d::CCSize computeRenderResolution(unsigned w, unsigned h) {
@@ -804,6 +896,14 @@ bool Renderer::toggle() {
     if (engine->renderer.recording) {
         engine->renderer.stop(engine->renderer.getCurrentFrame());
         return true;
+    }
+
+    if (engine->renderer.m_encodeActive.load(std::memory_order_acquire)) {
+        Notification::create(
+            trString("The previous render is still finalizing. Wait a moment and try again."),
+            NotificationIcon::Warning
+        )->show();
+        return false;
     }
 
     engine->renderer.usingApi = shouldUseAPI();
@@ -1010,12 +1110,19 @@ void Renderer::start(const RenderConfig& config) {
 
 void Renderer::start() {
     PlayLayer* pl = PlayLayer::get();
-    if (!pl) return;
+    if (!pl || !pl->m_level || !pl->m_levelSettings) return;
 
     auto* engine = ReplayEngine::get();
     engine->clearFrameStepState();
     Mod* mod = Mod::get();
     fmod = FMODAudioEngine::sharedEngine();
+    if (!fmod) {
+        m_resolvedParams.reset();
+        Loader::get()->queueInMainThread([] {
+            Notification::create(trString("Render aborted: audio engine unavailable."), NotificationIcon::Error)->show();
+        });
+        return;
+    }
 
     std::string extension;
 
@@ -1099,6 +1206,7 @@ void Renderer::start() {
     audioCapture.reset();
     frameCapture.configure(static_cast<size_t>(width) * static_cast<size_t>(height) * 3, 8);
     m_capturedFrameSet.clear();
+    m_capturedSounds.clear();
     renderTex.begin();
     changeRes(false);
     resetSimulationTimingState();
@@ -1224,11 +1332,17 @@ void Renderer::start() {
         ClickSoundManager::get()->preDecodeForRender(systemRate);
     }
 
+    m_encodeActive.store(true, std::memory_order_release);
     m_encodeThread = std::thread(&Renderer::runEncodeLoop, this, songFile, songOffset, fadeIn, fadeOut, extension, bitrateApi);
     m_encodeThread.detach();
 }
 
 void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi) {
+        struct EncodeActiveGuard {
+            std::atomic<bool>& flag;
+            ~EncodeActiveGuard() { flag.store(false, std::memory_order_release); }
+        } encodeActiveGuard{ m_encodeActive };
+
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
         settings.m_codec = codec;
@@ -1322,18 +1436,21 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 bool isNvenc = rp.codec.find("nvenc") != std::string::npos;
                 bool isAmf   = rp.codec.find("amf")   != std::string::npos;
                 bool isQsv   = rp.codec.find("qsv")   != std::string::npos;
+                // GPU encoders use constant-quality mode, the per-tier apiBitrate is a
+                // target for the API/library path, not a cap here. Capping CQ with -maxrate
+                // starves high-motion content (NVENC is less efficient than x264), so quality
+                // is driven purely by -cq/-qvbr/-global_quality. An explicit user maxBitrate
+                // override is still appended below. I love when it took me 1h just to fix
+                // this, dont delete this because its a note
                 std::string qualitySection;
                 if (isNvenc)
-                    qualitySection = fmt::format("-rc vbr -cq {} -b:v 0 -maxrate {}k -bufsize {}k",
-                        rp.crf, rp.apiBitrate / 1000, rp.apiBitrate / 500);
+                    qualitySection = fmt::format("-rc vbr -cq {} -b:v 0", rp.crf);
                 else if (isAmf)
-                    qualitySection = fmt::format("-rc vbr_latency -qvbr_quality_level {} -b:v 0 -maxrate {}k -bufsize {}k",
-                        rp.crf, rp.apiBitrate / 1000, rp.apiBitrate / 500);
+                    qualitySection = fmt::format("-rc qvbr -qvbr_quality_level {} -b:v 0", rp.crf);
                 else if (isQsv) {
                     bool isAv1Qsv = rp.codec.find("av1") != std::string::npos;
                     int qsvQ = isAv1Qsv ? std::max(1, (rp.crf * 51 + 32) / 63) : rp.crf;
-                    qualitySection = fmt::format("-global_quality {} -b:v 0 -maxrate {}k -bufsize {}k",
-                        qsvQ, rp.apiBitrate / 1000, rp.apiBitrate / 500);
+                    qualitySection = fmt::format("-global_quality {} -b:v 0", qsvQ);
                 }
                 else
                     qualitySection = fmt::format("-crf {}", rp.crf);
@@ -1394,15 +1511,24 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                         }
                     }
 #ifdef GEODE_IS_WINDOWS
-                    else {
-                        process.writeStdin(data.data(), data.size());
+                    else if (!process.writeStdin(data.data(), data.size())) {
+                        log::error("FFmpeg subprocess stopped accepting frames, aborting render");
+                        Loader::get()->queueInMainThread([this] {
+                            auto errorTitle = trString("Error");
+                            auto errorMessage = trString("The FFmpeg process exited unexpectedly. Check your encoder settings.");
+                            auto okText = trString("Ok");
+                            FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
+                            stop();
+                        });
+                        audioMode = AUDIO_OFF;
+                        recording = false;
+                        return false;
                     }
 #endif
                     return true;
                 };
                 if (!writeFrame(frame)) break;
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                frameCapture.releaseBuffer(std::move(frame));
             }
         }
 
@@ -1532,6 +1658,30 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                                 clickAudio.begin() + rawAudio.size(), clickAudio.end());
                         }
                     }
+                }
+            }
+        }
+
+        if (includeClickSounds && !m_capturedSounds.empty()) {
+            if (rawAudio.empty()) {
+                size_t silentSamples = static_cast<size_t>(lastFrame_t * rawAudioSampleRate) * 2;
+                if (silentSamples > 0)
+                    rawAudio.resize(silentSamples, 0.0f);
+            }
+            if (!rawAudio.empty()) {
+                std::unordered_map<std::string, std::vector<float>> effectCache;
+                for (auto& ev : m_capturedSounds) {
+                    auto it = effectCache.find(ev.path);
+                    if (it == effectCache.end())
+                        it = effectCache.emplace(ev.path, decodeEffectToRaw(ev.path)).first;
+                    const auto& pcm = it->second;
+                    if (pcm.empty()) continue;
+                    size_t offsetSamples = static_cast<size_t>(ev.time * rawAudioSampleRate) * 2;
+                    if (offsetSamples >= rawAudio.size()) continue;
+                    float vol = ev.volume * sfxVolume;
+                    size_t mixLen = std::min(pcm.size(), rawAudio.size() - offsetSamples);
+                    for (size_t i = 0; i < mixLen; i++)
+                        rawAudio[offsetSamples + i] = std::clamp(rawAudio[offsetSamples + i] + pcm[i] * vol, -1.0f, 1.0f);
                 }
             }
         }
@@ -1741,7 +1891,9 @@ bool Renderer::isLevelComplete() {
 void Renderer::stop(int frame) {
     m_capturedFrameSet.clear();
     finishFrame = getCurrentFrame();
+    renderTex.flushPbo(frameCapture);
     recording = false;
+    frameCapture.notifyStop();
     timeAfter = 0.f;
 
     restoreAudioVolumes();
@@ -1886,8 +2038,21 @@ class $modify(RenderEndLayer, EndLevelLayer) {
 class $modify(RenderFMOD, FMODAudioEngine) {
     int playEffect(gd::string path, float speed, float p2, float volume) {
         auto* engine = ReplayEngine::get();
-        if (std::string_view(path) == "explode_11.ogg" && engine->renderer.recording) return 0;
-
+        auto& r = engine->renderer;
+        if (r.recording) {
+            if (r.includeClickSounds) {
+                auto resolved = cocos2d::CCFileUtils::sharedFileUtils()->fullPathForFilename(
+                    std::string(path).c_str(), false
+                );
+                r.m_capturedSounds.push_back({
+                    resolved.empty() ? std::string(path) : resolved,
+                    static_cast<float>(r.lastFrame_t),
+                    volume,
+                    speed
+                });
+            }
+            if (std::string_view(path) == "explode_11.ogg") return 0;
+        }
         return FMODAudioEngine::playEffect(path, speed, p2, volume);
     }
 };

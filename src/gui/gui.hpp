@@ -176,6 +176,7 @@ public:
     bool showAdvancedWarning = false;
     bool showMkvWarning = false;
     bool mkvWarningIsExp = false;
+    char mkvWarningPrevCodec[64] = "aac";
 
     // Experimental render tab state
     RenderConfig expConfig;
