@@ -58,7 +58,27 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     r.codec      = cfg.codec.value_or(useGpu ? cfg.gpuEncoder : td.cpuCodec);
     r.crf        = cfg.crf.value_or(td.crf);
     r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
-    r.videoArgs  = cfg.videoArgs.value_or(isLossless ? "" : kDefaultVideoArgs);
+
+    // colorspace: an explicit non-default videoArgs override always wins. Otherwise
+    // qualityColorspace picks the full conversion filter (accurate, slower) vs.
+    // metadata-only tagging (fast). Lossless never touches color.
+    bool userFilter = cfg.videoArgs.has_value()
+        && !cfg.videoArgs->empty()
+        && *cfg.videoArgs != kDefaultVideoArgs;
+    if (isLossless) {
+        r.videoArgs = cfg.videoArgs.value_or("");
+        r.colorTags = "";
+    } else if (userFilter) {
+        r.videoArgs = *cfg.videoArgs;
+        r.colorTags = "";
+    } else if (cfg.qualityColorspace) {
+        r.videoArgs = kDefaultVideoArgs;
+        r.colorTags = "";
+    } else {
+        r.videoArgs = "";
+        r.colorTags = kFastColorTags;
+    }
+
     r.audioArgs  = cfg.audioArgs.value_or("");
     r.audioCodec = cfg.audioCodec.value_or("aac");
     r.maxBitrate = (isAv1 || isLossless) ? "" : cfg.maxBitrate.value_or("");
@@ -98,6 +118,7 @@ void saveRenderConfig(const RenderConfig& cfg) {
     mod->setSavedValue("exp_render_seconds_after",      static_cast<double>(cfg.secondsAfter));
     mod->setSavedValue("exp_render_hide_endscreen",     cfg.hideEndscreen);
     mod->setSavedValue("exp_render_hide_levelcomplete", cfg.hideLevelComplete);
+    mod->setSavedValue("exp_render_quality_colorspace", cfg.qualityColorspace);
     mod->setSavedValue("exp_render_adv_codec",          cfg.codec.value_or(""));
     mod->setSavedValue("exp_render_adv_crf",            static_cast<int64_t>(cfg.crf.value_or(-1)));
     mod->setSavedValue("exp_render_adv_max_bitrate",    cfg.maxBitrate.value_or(""));
@@ -129,6 +150,7 @@ RenderConfig loadRenderConfig() {
     cfg.secondsAfter    = static_cast<float>(mod->getSavedValue<double>("exp_render_seconds_after", 3.0));
     cfg.hideEndscreen   = mod->getSavedValue<bool>("exp_render_hide_endscreen", false);
     cfg.hideLevelComplete = mod->getSavedValue<bool>("exp_render_hide_levelcomplete", false);
+    cfg.qualityColorspace = mod->getSavedValue<bool>("exp_render_quality_colorspace", true);
 
     auto advCodec = mod->getSavedValue<std::string>("exp_render_adv_codec", "");
     if (!advCodec.empty()) cfg.codec = advCodec;

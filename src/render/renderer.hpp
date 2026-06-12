@@ -85,10 +85,13 @@ public:
     void flushPbo(FrameCaptureService& frameCapture);
 
 private:
-    GLuint  m_pbos[2]       = {0, 0};
-    int     m_pboIndex      = 0;
+    static constexpr int kPboRingDepth = 3;
+    GLuint  m_pbos[kPboRingDepth] = {};
+    int     m_pboCount      = kPboRingDepth;
     int     m_pboFrameCount = 0;
     size_t  m_pboSize       = 0;
+
+    void submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg);
 };
 
 class Renderer {

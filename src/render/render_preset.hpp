@@ -27,10 +27,11 @@ struct RenderPreset {
     bool hideEndscreen = false;
     bool hideLevelComplete = false;
 
-    // Experimental renderer fields — ignored by old render path
+    // experimental renderer fields
     RenderQualityTier tier = RenderQualityTier::Balanced;
     bool useGpu = true;
     RenderCodecFamily codecFamily = RenderCodecFamily::H264;
+    bool qualityColorspace = true;
 
     RenderConfig toRenderConfig() const;
     static RenderPreset fromRenderConfig(const RenderConfig& cfg, std::string name = {});

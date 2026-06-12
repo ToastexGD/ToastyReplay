@@ -16,10 +16,12 @@
 #include <Geode/utils/web.hpp>
 
 #include <thread>
+#include <future>
 #include <algorithm>
 #include <filesystem>
 #include <chrono>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <cmath>
 #include <string_view>
@@ -707,6 +709,13 @@ float Renderer::getTPS() const {
     return static_cast<float>(ReplayEngine::get()->tickRate);
 }
 
+static void copyFlippedRows(uint8_t* dst, const uint8_t* src, unsigned width, unsigned height) {
+    size_t rowBytes = static_cast<size_t>(width) * 3;
+    for (unsigned r = 0; r < height; ++r)
+        std::memcpy(dst + static_cast<size_t>(height - 1 - r) * rowBytes,
+                    src + static_cast<size_t>(r) * rowBytes, rowBytes);
+}
+
 void RenderTexture::begin() {
 #ifdef GEODE_IS_WINDOWS
     end();
@@ -739,10 +748,10 @@ void RenderTexture::begin() {
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
 
     m_pboSize       = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    m_pboIndex      = 0;
+    m_pboCount      = kPboRingDepth;
     m_pboFrameCount = 0;
-    glGenBuffers(2, m_pbos);
-    for (int i = 0; i < 2; ++i) {
+    glGenBuffers(m_pboCount, m_pbos);
+    for (int i = 0; i < m_pboCount; ++i) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[i]);
         glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(m_pboSize), nullptr, GL_STREAM_READ);
     }
@@ -753,8 +762,8 @@ void RenderTexture::begin() {
 void RenderTexture::end() {
 #ifdef GEODE_IS_WINDOWS
     if (m_pbos[0]) {
-        glDeleteBuffers(2, m_pbos);
-        m_pbos[0] = m_pbos[1] = 0;
+        glDeleteBuffers(m_pboCount, m_pbos);
+        for (int i = 0; i < m_pboCount; ++i) m_pbos[i] = 0;
     }
     m_pboFrameCount = 0;
     if (fbo) {
@@ -784,30 +793,31 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
     if (m_pbos[0]) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[m_pboIndex]);
+        int writeIdx = m_pboFrameCount % m_pboCount;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[writeIdx]);
         glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
 
-        // map the previous PBO, GPU has had a full frame to finish the DMA
-        if (m_pboFrameCount > 0) {
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[1 - m_pboIndex]);
-            if (void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT)) {
-                auto frame = frameCapture.acquireBuffer();
-                if (!frame.empty()) {
-                    std::copy_n(static_cast<const uint8_t*>(ptr), m_pboSize, frame.data());
-                    if (!frameCapture.submit(std::move(frame)))
-                        log::warn("Render frame capture aborted before frame submission completed");
-                }
-                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-            }
+        // map the buffer written ring-depth-1 frames ago, its DMA is long done
+        if (m_pboFrameCount >= m_pboCount - 1) {
+            int readIdx = (m_pboFrameCount - (m_pboCount - 1)) % m_pboCount;
+            submitPbo(readIdx, frameCapture, "Render frame capture aborted before frame submission completed");
         }
 
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        m_pboIndex = 1 - m_pboIndex;
         ++m_pboFrameCount;
     } else {
         auto frame = frameCapture.acquireBuffer();
         if (!frame.empty()) {
             glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, frame.data());
+            size_t rowBytes = static_cast<size_t>(width) * 3;
+            std::vector<uint8_t> tmp(rowBytes);
+            for (unsigned r = 0; r < height / 2; ++r) {
+                uint8_t* a = frame.data() + static_cast<size_t>(r) * rowBytes;
+                uint8_t* b = frame.data() + static_cast<size_t>(height - 1 - r) * rowBytes;
+                std::memcpy(tmp.data(), a, rowBytes);
+                std::memcpy(a, b, rowBytes);
+                std::memcpy(b, tmp.data(), rowBytes);
+            }
             if (!frameCapture.submit(std::move(frame)))
                 log::warn("Render frame capture aborted before frame submission completed");
         }
@@ -815,6 +825,21 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
 
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     director->setViewport();
+#endif
+}
+
+void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg) {
+#ifdef GEODE_IS_WINDOWS
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[pboIndex]);
+    if (void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT)) {
+        auto frame = frameCapture.acquireBuffer();
+        if (!frame.empty()) {
+            copyFlippedRows(frame.data(), static_cast<const uint8_t*>(ptr), width, height);
+            if (!frameCapture.submit(std::move(frame)))
+                log::warn("{}", abortMsg);
+        }
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    }
 #endif
 }
 
@@ -828,16 +853,11 @@ void Renderer::captureFrame() {
 void RenderTexture::flushPbo(FrameCaptureService& frameCapture) {
 #ifdef GEODE_IS_WINDOWS
     if (!m_pbos[0] || m_pboFrameCount == 0) return;
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[1 - m_pboIndex]);
-    if (void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT)) {
-        auto frame = frameCapture.acquireBuffer();
-        if (!frame.empty()) {
-            std::copy_n(static_cast<const uint8_t*>(ptr), m_pboSize, frame.data());
-            if (!frameCapture.submit(std::move(frame)))
-                log::warn("Render frame flush aborted before frame submission completed");
-        }
-        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-    }
+    // drain the buffers written but not yet mapped during capture (up to ring depth-1),
+    // oldest first, so no trailing frames are dropped.
+    int readDone = std::max(0, m_pboFrameCount - (m_pboCount - 1));
+    for (int f = readDone; f < m_pboFrameCount; ++f)
+        submitPbo(f % m_pboCount, frameCapture, "Render frame flush aborted before frame submission completed");
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     m_pboFrameCount = 0;
 #endif
@@ -1394,6 +1414,26 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         bool useApiForEncoding = usingApi;
 
+        std::future<std::vector<float>> songDecodeFuture;
+        {
+            auto* eng = ReplayEngine::get();
+            bool persistence = isPersistenceRender(eng);
+            bool preferExe = false;
+#ifdef GEODE_IS_WINDOWS
+            preferExe = pathExists(ffmpegPath);
+#endif
+            float off = std::max(songOffset, 0.0f);
+            bool needRaw = !preferExe || includeClickSounds || musicVolume != 1.0f
+                || off > 0.0f || fadeIn || fadeOut || persistence;
+            if (needRaw && !persistence && audioMode == AUDIO_SONG && pathExists(songFile)) {
+                auto sf = songFile;
+                float vol = musicVolume;
+                songDecodeFuture = std::async(std::launch::async, [sf, off, vol] {
+                    return decodeSongToRaw(sf, off, 9999.f, vol);
+                });
+            }
+        }
+
         {
 #ifdef GEODE_IS_WINDOWS
         Subprocess process;
@@ -1408,7 +1448,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 if (pathExists(ffmpegPath)) {
                     useApiForEncoding = false;
                     Loader::get()->queueInMainThread([] {
-                        Notification::create(trString("FFmpeg API not loaded — falling back to ffmpeg.exe"), NotificationIcon::Warning)->show();
+                        Notification::create(trString("FFmpeg API not loaded - falling back to ffmpeg.exe"), NotificationIcon::Warning)->show();
                     });
                 } else {
 #endif
@@ -1460,14 +1500,15 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     qualitySection += fmt::format(" -maxrate {} -bufsize {}", rp.maxBitrate, rp.maxBitrate);
 
                 std::string vfArg = rp.videoArgs.empty()
-                    ? "vflip"
-                    : fmt::format("vflip,{}", rp.videoArgs);
+                    ? ""
+                    : fmt::format("-vf \"{}\" ", rp.videoArgs);
+                std::string colorTags = rp.colorTags.empty() ? "" : (rp.colorTags + " ");
                 command = fmt::format(
-                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - -c:v {} {} {} -vf \"{}\" -an \"{}\"",
+                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -thread_queue_size 512 -i - -c:v {} {} {} {}{}-an \"{}\"",
                     toasty::pathToUtf8(ffmpegPath),
                     width, height, fps,
                     rp.codec, qualitySection, rp.extraArgs,
-                    vfArg,
+                    vfArg, colorTags,
                     toasty::pathToUtf8(path)
                 );
             } else {
@@ -1477,7 +1518,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 if (localVideoArgs.empty()) localVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
 
                 command = fmt::format(
-                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -i - {}{}{} -vf \"vflip,{}\" -an \"{}\"",
+                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -thread_queue_size 512 -i - {}{}{} -vf \"{}\" -an \"{}\"",
                     toasty::pathToUtf8(ffmpegPath),
                     std::to_string(width), std::to_string(height), std::to_string(fps),
                     localCodec, localBitrate, localExtraArgs,
@@ -1490,9 +1531,14 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             process = Subprocess(command);
 #endif
         }
+        auto encodeWallStart = std::chrono::steady_clock::now();
+        int  framesEncoded = 0;
+        double waitSeconds = 0.0;
 
         while (recording || pause || frameCapture.hasPendingFrame()) {
+            auto waitStart = std::chrono::steady_clock::now();
             auto frame = frameCapture.takeFrame();
+            waitSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
             if (!frame.empty()) {
                 auto writeFrame = [&](std::vector<uint8_t> const& data) {
                     if (useApiForEncoding) {
@@ -1529,7 +1575,18 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 };
                 if (!writeFrame(frame)) break;
                 frameCapture.releaseBuffer(std::move(frame));
+                ++framesEncoded;
             }
+        }
+
+        {
+            double loopSec = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - encodeWallStart).count();
+            double busySec = std::max(0.0, loopSec - waitSeconds);
+            log::info("Encode timing: {} frames in {:.2f}s ({:.1f} fps); "
+                "encoder busy {:.2f}s, starved/waiting on capture {:.2f}s ({:.0f}%)",
+                framesEncoded, loopSec, loopSec > 0 ? framesEncoded / loopSec : 0.0,
+                busySec, waitSeconds, loopSec > 0 ? 100.0 * waitSeconds / loopSec : 0.0);
         }
 
         auto finishEncoder = [&]() -> bool {
@@ -1583,10 +1640,13 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     engine->runtimeTickRate(),
                     musicVolume
                 );
+            } else if (songDecodeFuture.valid()) {
+                rawAudio = songDecodeFuture.get();
             } else {
                 rawAudio = decodeSongToRaw(songFile, nonNegativeSongOffset, lastFrame_t, musicVolume);
             }
         }
+        if (songDecodeFuture.valid()) songDecodeFuture.get();
 
         audioCapture.sampleRate = 44100;
         int& rawAudioSampleRate = audioCapture.sampleRate;
