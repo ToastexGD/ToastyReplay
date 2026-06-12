@@ -87,7 +87,8 @@ static std::string serializePreset(RenderPreset const& p) {
        << "hide_complete=" << (p.hideLevelComplete ? "true" : "false") << "\n"
        << "tier="         << tierToString(p.tier) << "\n"
        << "use_gpu="      << (p.useGpu ? "true" : "false") << "\n"
-       << "codec_family=" << familyToString(p.codecFamily) << "\n";
+       << "codec_family=" << familyToString(p.codecFamily) << "\n"
+       << "quality_cs="   << (p.qualityColorspace ? "true" : "false") << "\n";
     return ss.str();
 }
 
@@ -140,6 +141,7 @@ static std::optional<RenderPreset> parsePreset(std::string_view text) {
         else if (key == "tier")              p.tier        = tierFromString(val);
         else if (key == "use_gpu")           p.useGpu      = (val == "true");
         else if (key == "codec_family")      p.codecFamily = familyFromString(val);
+        else if (key == "quality_cs")        p.qualityColorspace = (val == "true");
     }
 
     if (!hasName || p.name.empty()) return std::nullopt;
@@ -211,6 +213,7 @@ RenderConfig RenderPreset::toRenderConfig() const {
     cfg.tier        = tier;
     cfg.useGpu      = useGpu;
     cfg.codecFamily = codecFamily;
+    cfg.qualityColorspace = qualityColorspace;
     cfg.width  = static_cast<unsigned>(width);
     cfg.height = static_cast<unsigned>(height);
     cfg.fps    = static_cast<unsigned>(fps);
@@ -245,6 +248,7 @@ RenderPreset RenderPreset::fromRenderConfig(const RenderConfig& cfg, std::string
     p.tier        = cfg.tier;
     p.useGpu      = cfg.useGpu;
     p.codecFamily = cfg.codecFamily;
+    p.qualityColorspace = cfg.qualityColorspace;
     p.width  = static_cast<int>(cfg.width);
     p.height = static_cast<int>(cfg.height);
     p.fps    = static_cast<int>(cfg.fps);

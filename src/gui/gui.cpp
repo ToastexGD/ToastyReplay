@@ -2941,10 +2941,10 @@ void MenuInterface::drawRenderPresetsSection() {
                         snprintf(expAdvCrfBuf,        sizeof(expAdvCrfBuf),        "%d", expConfig.crf.value_or(rp.crf));
                         snprintf(expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf),  "%s", expConfig.extraArgs.value_or(rp.extraArgs).c_str());
                         snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", expConfig.audioCodec.value_or(rp.audioCodec).c_str());
+                        snprintf(expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf),  "%s", rp.videoArgs.c_str());
                     }
                     snprintf(expAdvMaxBitrateBuf,    sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
                     snprintf(expAdvExtBuf,           sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
-                    snprintf(expAdvVideoArgsBuf,     sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or(kDefaultVideoArgs).c_str());
                     snprintf(expAdvAudioArgsBuf,     sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
                     snprintf(expAdvSecondsAfterBuf,  sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
                     saveRenderConfig(expConfig);
@@ -4963,10 +4963,10 @@ void MenuInterface::loadExpRenderSettings() {
         snprintf(expAdvCrfBuf,        sizeof(expAdvCrfBuf),        "%d", expConfig.crf.value_or(rp.crf));
         snprintf(expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf),  "%s", expConfig.extraArgs.value_or(rp.extraArgs).c_str());
         snprintf(expAdvAudioCodecBuf, sizeof(expAdvAudioCodecBuf), "%s", expConfig.audioCodec.value_or(rp.audioCodec).c_str());
+        snprintf(expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf),  "%s", rp.videoArgs.c_str());
     }
     snprintf(expAdvMaxBitrateBuf,   sizeof(expAdvMaxBitrateBuf),  "%s", expConfig.maxBitrate.value_or("").c_str());
     snprintf(expAdvExtBuf,          sizeof(expAdvExtBuf),         "%s", expConfig.ext.value_or(".mp4").c_str());
-    snprintf(expAdvVideoArgsBuf,    sizeof(expAdvVideoArgsBuf),   "%s", expConfig.videoArgs.value_or(kDefaultVideoArgs).c_str());
     snprintf(expAdvAudioArgsBuf,    sizeof(expAdvAudioArgsBuf),   "%s", expConfig.audioArgs.value_or("").c_str());
     snprintf(expAdvSecondsAfterBuf, sizeof(expAdvSecondsAfterBuf), "%g", expConfig.secondsAfter);
 
@@ -5192,6 +5192,33 @@ void MenuInterface::drawExpRenderTab() {
             }
         }
     }
+    
+    {
+        bool customVideoFilter = expAdvVideoArgsBuf[0]
+            && strcmp(expAdvVideoArgsBuf, kDefaultVideoArgs) != 0;
+        bool overridden = customVideoFilter || isLossless;
+        imguiTextTr("Quality Colorspace");
+        ImGui::SameLine(inputW);
+        ImGui::BeginDisabled(overridden);
+        if (Widgets::ToggleSwitch("##qualityCsToggle", &expConfig.qualityColorspace, theme, anim)) {
+            snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s",
+                     expConfig.qualityColorspace ? kDefaultVideoArgs : "");
+            expConfig.videoArgs = expConfig.qualityColorspace
+                ? std::optional<std::string>(kDefaultVideoArgs) : std::nullopt;
+            saveRenderConfig(expConfig);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, 8.0f);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (22.0f - ImGui::GetTextLineHeight()) * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+        if (isLossless)
+            ImGui::TextUnformatted("[lossless]");
+        else if (customVideoFilter)
+            ImGui::TextUnformatted("[overridden by Video Filter]");
+        else
+            ImGui::TextUnformatted(expConfig.qualityColorspace ? "[accurate]" : "[fast]");
+        ImGui::PopStyleColor();
+    }
 
     drawRenderAudioSection();
     drawRenderDisplaySection();
@@ -5221,7 +5248,8 @@ void MenuInterface::drawExpRenderTab() {
         advInput("Extension",    "##expAdvExt",      expAdvExtBuf,        sizeof(expAdvExtBuf));
         advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf));
         advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf));
-        if (ImGui::IsItemDeactivatedAfterEdit() && !expAdvVideoArgsBuf[0])
+
+        if (ImGui::IsItemDeactivatedAfterEdit() && !expAdvVideoArgsBuf[0] && expConfig.qualityColorspace)
             snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s", kDefaultVideoArgs);
         {
             int acodecIdx = audioCodecComboIndex(expAdvAudioCodecBuf);
