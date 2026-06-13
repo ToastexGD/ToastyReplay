@@ -472,7 +472,7 @@ static bool tryMuxAudioWithExe(
         toasty::pathToUtf8(outputPath)
     );
 
-    log::info("Executing (Audio): {}", command);
+    //log::info("Executing (Audio): {}", command);
     auto proc = Subprocess(command);
     int exitCode = proc.close();
     if (exitCode != 0) {
@@ -558,13 +558,12 @@ static std::vector<float> decodeSongToRaw(std::filesystem::path const& filePath,
 
     for (auto& s : result) s *= volume;
 
-    log::info("Decoded song: {}Hz {}ch fmt={} offset={:.2f}s dur={:.2f}s -> {} samples (sysRate={})",
-        sampleRate, channels, static_cast<int>(format), offsetSec, durationSec, result.size(), systemRate);
+    //log::info("Decoded song: {}Hz {}ch fmt={} offset={:.2f}s dur={:.2f}s -> {} samples (sysRate={})",
+    //    sampleRate, channels, static_cast<int>(format), offsetSec, durationSec, result.size(), systemRate);
 
     return result;
 }
 
-// decode a short sound effect to stereo interleaved PCM at FMOD's output sample rate
 static std::vector<float> decodeEffectToRaw(const std::string& resolvedPath) {
     auto p = toasty::stringToPath(resolvedPath);
     if (!pathExists(p)) return {};
@@ -658,7 +657,6 @@ std::vector<uint8_t> FrameCaptureService::acquireBuffer() {
 void FrameCaptureService::releaseBuffer(std::vector<uint8_t>&& frame) {
     if (frame.capacity() == 0) return;
     std::lock_guard lock(m_lock);
-    // cap the pool so a stalled encoder cant grow it without bound
     if (m_freeList.size() < m_maxBufferedFrames + 2)
         m_freeList.push_back(std::move(frame));
 }
@@ -716,7 +714,194 @@ static void copyFlippedRows(uint8_t* dst, const uint8_t* src, unsigned width, un
                     src + static_cast<size_t>(r) * rowBytes, rowBytes);
 }
 
-void RenderTexture::begin() {
+#ifdef GEODE_IS_WINDOWS
+// fullscreen pass converting the captured RGB frame to NV12 planes on the GPU.
+// The V flip is folded into the texture coordinate so readback rows come out
+// top-down, and the matrix is BT.709 limited range applied to the gamma-encoded
+// values, which is exactly what video YCbCr expects
+static const char* kNv12VertSrc = R"(
+attribute vec2 aPos;
+varying vec2 vUV;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+    vUV = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+}
+)";
+
+static const char* kYPlaneFragSrc = R"(
+uniform sampler2D tex;
+varying vec2 vUV;
+void main() {
+    vec3 c = texture2D(tex, vUV).rgb;
+    float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    gl_FragColor = vec4(vec3(0.0627451 + 0.8588235 * y), 1.0);
+}
+)";
+
+// rendered at half resolution, bilinear sampling at the texel corners makes
+// each fragment the exact 2x2 average the 4:2:0 chroma plane needs
+static const char* kUVPlaneFragSrc = R"(
+uniform sampler2D tex;
+varying vec2 vUV;
+void main() {
+    vec3 c = texture2D(tex, vUV).rgb;
+    float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    float u = 0.5019608 + 0.4733945 * (c.b - y);
+    float v = 0.5019608 + 0.5578170 * (c.r - y);
+    gl_FragColor = vec4(u, v, 0.0, 1.0);
+}
+)";
+
+static GLuint compileNv12Shader(GLenum type, const char* src) {
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, nullptr);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char buf[512] = {};
+        glGetShaderInfoLog(sh, sizeof(buf), nullptr, buf);
+        log::warn("NV12 shader compile failed: {}", buf);
+        glDeleteShader(sh);
+        return 0;
+    }
+    return sh;
+}
+
+static GLuint linkNv12Program(const char* fragSrc) {
+    GLuint vs = compileNv12Shader(GL_VERTEX_SHADER, kNv12VertSrc);
+    GLuint fs = compileNv12Shader(GL_FRAGMENT_SHADER, fragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return 0;
+    }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glBindAttribLocation(prog, 0, "aPos");
+    glLinkProgram(prog);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char buf[512] = {};
+        glGetProgramInfoLog(prog, sizeof(buf), nullptr, buf);
+        log::warn("NV12 program link failed: {}", buf);
+        glDeleteProgram(prog);
+        return 0;
+    }
+    return prog;
+}
+#endif
+
+bool RenderTexture::initNv12Pass() {
+#ifdef GEODE_IS_WINDOWS
+    if (!glBindVertexArray || width < 2 || height < 2) return false;
+    while (glGetError() != GL_NO_ERROR) {}
+
+    m_prog[0] = linkNv12Program(kYPlaneFragSrc);
+    m_prog[1] = linkNv12Program(kUVPlaneFragSrc);
+    if (!m_prog[0] || !m_prog[1]) { destroyNv12Pass(); return false; }
+
+    GLint prevProg = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    for (GLuint prog : m_prog) {
+        glUseProgram(prog);
+        glUniform1i(glGetUniformLocation(prog, "tex"), 0);
+    }
+    glUseProgram(static_cast<GLuint>(prevProg));
+
+    const GLint    internalFmt[2] = { GL_R8, GL_RG8 };
+    const GLenum   fmt[2]         = { GL_RED, GL_RG };
+    const unsigned planeW[2]      = { width, width / 2 };
+    const unsigned planeH[2]      = { height, height / 2 };
+    glGenTextures(2, m_planeTex);
+    glGenFramebuffers(2, m_planeFbo);
+    for (int p = 0; p < 2; ++p) {
+        glBindTexture(GL_TEXTURE_2D, m_planeTex[p]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFmt[p], planeW[p], planeH[p], 0,
+                     fmt[p], GL_UNSIGNED_BYTE, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_planeFbo[p]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_planeTex[p], 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glBindTexture(GL_TEXTURE_2D, 0);
+            destroyNv12Pass();
+            return false;
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (glGetError() != GL_NO_ERROR) { destroyNv12Pass(); return false; }
+    return true;
+#else
+    return false;
+#endif
+}
+
+void RenderTexture::destroyNv12Pass() {
+#ifdef GEODE_IS_WINDOWS
+    for (GLuint& p : m_prog)     { if (p) glDeleteProgram(p); p = 0; }
+    for (GLuint& f : m_planeFbo) { if (f) glDeleteFramebuffers(1, &f); f = 0; }
+    for (GLuint& t : m_planeTex) { if (t) glDeleteTextures(1, &t); t = 0; }
+#endif
+}
+
+void RenderTexture::runNv12Pass() {
+#ifdef GEODE_IS_WINDOWS
+    GLint prevProg = 0, prevArrayBuf = 0, prevActiveTex = 0, prevTex0 = 0, prevVao = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevArrayBuf);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTex);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex0);
+    GLboolean blendOn   = glIsEnabled(GL_BLEND);
+    GLboolean scissorOn = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean depthOn   = glIsEnabled(GL_DEPTH_TEST);
+    GLint attrib0On = 0;
+    glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &attrib0On);
+
+    if (prevVao) glBindVertexArray(0);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, texture->getName());
+    if (!attrib0On) glEnableVertexAttribArray(0);
+
+    static const GLfloat kFullscreenTri[] = { -1.f, -1.f, 3.f, -1.f, -1.f, 3.f };
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, kFullscreenTri);
+    for (int p = 0; p < 2; ++p) {
+        glUseProgram(m_prog[p]);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_planeFbo[p]);
+        glViewport(0, 0, p ? width / 2 : width, p ? height / 2 : height);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    if (!attrib0On) glDisableVertexAttribArray(0);
+    glUseProgram(static_cast<GLuint>(prevProg));
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(prevArrayBuf));
+    if (prevVao) glBindVertexArray(static_cast<GLuint>(prevVao));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex0));
+    glActiveTexture(static_cast<GLenum>(prevActiveTex));
+    if (blendOn)   glEnable(GL_BLEND);
+    if (scissorOn) glEnable(GL_SCISSOR_TEST);
+    if (depthOn)   glEnable(GL_DEPTH_TEST);
+
+    // We drove GL directly above, cocos still believes its own cached program,
+    // texture, blend and attrib bindings are current. Drop that cache so the
+    // next onscreen draw re-establishes them instead of rendering with stale
+    // state (otherwise the live scene desaturates mid-render)
+    ccGLInvalidateStateCache();
+#endif
+}
+
+void RenderTexture::begin(bool wantNv12, FrameCaptureService& frameCapture) {
 #ifdef GEODE_IS_WINDOWS
     end();
 
@@ -744,28 +929,119 @@ void RenderTexture::begin() {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture->getName(), 0);
 
+    nv12 = wantNv12 && initNv12Pass();
+    if (wantNv12 && !nv12)
+        log::warn("GPU NV12 capture unavailable, falling back to rgb24");
+    if (nv12) {
+        // linear filtering: exact texel values for the Y pass (samples land on
+        // texel centers), 2x2 averages for the half-res UV pass
+        glBindTexture(GL_TEXTURE_2D, texture->getName());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     glBindRenderbuffer(GL_RENDERBUFFER, old_rbo);
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
 
-    m_pboSize       = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+    m_pboSize       = static_cast<size_t>(width) * static_cast<size_t>(height) * (nv12 ? 3 : 6) / 2;
     m_pboCount      = kPboRingDepth;
     m_pboFrameCount = 0;
+    m_dbgVisitSec = m_dbgMapSec = m_dbgCopySec = 0.0;
+    m_dbgFrames = 0;
     glGenBuffers(m_pboCount, m_pbos);
     for (int i = 0; i < m_pboCount; ++i) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[i]);
         glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(m_pboSize), nullptr, GL_STREAM_READ);
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (m_pbos[0]) startCopyWorker(frameCapture);
+#endif
+}
+
+void RenderTexture::startCopyWorker(FrameCaptureService& frameCapture) {
+#ifdef GEODE_IS_WINDOWS
+    m_copyTarget   = &frameCapture;
+    m_copyStop     = false;
+    m_copyInFlight = 0;
+    for (int i = 0; i < m_pboCount; ++i) { m_pboCopyBusy[i] = false; m_pboMapped[i] = false; }
+    m_copyThread = std::thread([this] {
+        for (;;) {
+            CopyJob job;
+            {
+                std::unique_lock<std::mutex> lk(m_copyMutex);
+                m_copyCv.wait(lk, [this] { return !m_copyJobs.empty() || m_copyStop; });
+                if (m_copyJobs.empty()) return;  // only when stop requested and drained
+                job = m_copyJobs.front();
+                m_copyJobs.pop_front();
+            }
+            auto frame = m_copyTarget->acquireBuffer();
+            auto copyStart = std::chrono::steady_clock::now();
+            if (!frame.empty()) {
+                if (job.nv12)
+                    std::memcpy(frame.data(), job.src, job.size);
+                else
+                    copyFlippedRows(frame.data(), job.src, job.w, job.h);
+            }
+            double copySec = std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
+            {
+                std::lock_guard<std::mutex> lk(m_copyMutex);
+                m_pboCopyBusy[job.pboIndex] = false;
+                m_dbgCopySec += copySec;
+            }
+            m_copyCv.notify_all();
+            if (!frame.empty()) m_copyTarget->submit(std::move(frame));
+            {
+                std::lock_guard<std::mutex> lk(m_copyMutex);
+                --m_copyInFlight;
+            }
+            m_copyCv.notify_all();
+        }
+    });
+#endif
+}
+
+void RenderTexture::stopCopyWorker() {
+#ifdef GEODE_IS_WINDOWS
+    if (!m_copyThread.joinable()) return;
+    { std::lock_guard<std::mutex> lk(m_copyMutex); m_copyStop = true; }
+    m_copyCv.notify_all();
+    m_copyThread.join();
+    m_copyJobs.clear();
+    m_copyTarget = nullptr;
+#endif
+}
+
+void RenderTexture::releasePbo(int idx) {
+#ifdef GEODE_IS_WINDOWS
+    if (!m_pboMapped[idx]) return;
+    {
+        std::unique_lock<std::mutex> lk(m_copyMutex);
+        m_copyCv.wait(lk, [this, idx] { return !m_pboCopyBusy[idx]; });
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[idx]);
+    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    m_pboMapped[idx] = false;
 #endif
 }
 
 void RenderTexture::end() {
 #ifdef GEODE_IS_WINDOWS
+    stopCopyWorker();
+    for (int i = 0; i < m_pboCount; ++i) {
+        if (m_pboMapped[i] && m_pbos[i]) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[i]);
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            m_pboMapped[i] = false;
+        }
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     if (m_pbos[0]) {
         glDeleteBuffers(m_pboCount, m_pbos);
         for (int i = 0; i < m_pboCount; ++i) m_pbos[i] = 0;
     }
     m_pboFrameCount = 0;
+    destroyNv12Pass();
     if (fbo) {
         glDeleteFramebuffers(1, &fbo);
         fbo = 0;
@@ -787,15 +1063,29 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
+    auto visitStart = std::chrono::steady_clock::now();
     pl->visit();
     if (overlay) overlay->visit();
+
+    if (nv12) runNv12Pass();
+    m_dbgVisitSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - visitStart).count();
+    ++m_dbgFrames;
 
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
     if (m_pbos[0]) {
         int writeIdx = m_pboFrameCount % m_pboCount;
+        releasePbo(writeIdx);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[writeIdx]);
-        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        if (nv12) {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_planeFbo[0]);
+            glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_planeFbo[1]);
+            glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE,
+                reinterpret_cast<void*>(static_cast<size_t>(width) * height));
+        } else {
+            glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        }
 
         // map the buffer written ring-depth-1 frames ago, its DMA is long done
         if (m_pboFrameCount >= m_pboCount - 1) {
@@ -808,15 +1098,23 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
     } else {
         auto frame = frameCapture.acquireBuffer();
         if (!frame.empty()) {
-            glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, frame.data());
-            size_t rowBytes = static_cast<size_t>(width) * 3;
-            std::vector<uint8_t> tmp(rowBytes);
-            for (unsigned r = 0; r < height / 2; ++r) {
-                uint8_t* a = frame.data() + static_cast<size_t>(r) * rowBytes;
-                uint8_t* b = frame.data() + static_cast<size_t>(height - 1 - r) * rowBytes;
-                std::memcpy(tmp.data(), a, rowBytes);
-                std::memcpy(a, b, rowBytes);
-                std::memcpy(b, tmp.data(), rowBytes);
+            if (nv12) {
+                glBindFramebuffer(GL_FRAMEBUFFER, m_planeFbo[0]);
+                glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, frame.data());
+                glBindFramebuffer(GL_FRAMEBUFFER, m_planeFbo[1]);
+                glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE,
+                    frame.data() + static_cast<size_t>(width) * height);
+            } else {
+                glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, frame.data());
+                size_t rowBytes = static_cast<size_t>(width) * 3;
+                std::vector<uint8_t> tmp(rowBytes);
+                for (unsigned r = 0; r < height / 2; ++r) {
+                    uint8_t* a = frame.data() + static_cast<size_t>(r) * rowBytes;
+                    uint8_t* b = frame.data() + static_cast<size_t>(height - 1 - r) * rowBytes;
+                    std::memcpy(tmp.data(), a, rowBytes);
+                    std::memcpy(a, b, rowBytes);
+                    std::memcpy(b, tmp.data(), rowBytes);
+                }
             }
             if (!frameCapture.submit(std::move(frame)))
                 log::warn("Render frame capture aborted before frame submission completed");
@@ -831,15 +1129,34 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
 void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg) {
 #ifdef GEODE_IS_WINDOWS
     glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[pboIndex]);
-    if (void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT)) {
-        auto frame = frameCapture.acquireBuffer();
-        if (!frame.empty()) {
-            copyFlippedRows(frame.data(), static_cast<const uint8_t*>(ptr), width, height);
-            if (!frameCapture.submit(std::move(frame)))
-                log::warn("{}", abortMsg);
+    auto mapStart = std::chrono::steady_clock::now();
+    void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(m_pboSize), GL_MAP_READ_BIT);
+    m_dbgMapSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - mapStart).count();
+    if (!ptr) return;
+
+    if (m_copyThread.joinable()) {
+        {
+            std::lock_guard<std::mutex> lk(m_copyMutex);
+            m_pboCopyBusy[pboIndex] = true;
+            ++m_copyInFlight;
+            m_copyJobs.push_back({ static_cast<const uint8_t*>(ptr), pboIndex, nv12, width, height, m_pboSize });
         }
-        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        m_pboMapped[pboIndex] = true;
+        m_copyCv.notify_all();
+        return;
     }
+    auto frame = frameCapture.acquireBuffer();
+    if (!frame.empty()) {
+        auto copyStart = std::chrono::steady_clock::now();
+        if (nv12)
+            std::memcpy(frame.data(), ptr, m_pboSize);
+        else
+            copyFlippedRows(frame.data(), static_cast<const uint8_t*>(ptr), width, height);
+        m_dbgCopySec += std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
+        if (!frameCapture.submit(std::move(frame)))
+            log::warn("{}", abortMsg);
+    }
+    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
 #endif
 }
 
@@ -853,13 +1170,28 @@ void Renderer::captureFrame() {
 void RenderTexture::flushPbo(FrameCaptureService& frameCapture) {
 #ifdef GEODE_IS_WINDOWS
     if (!m_pbos[0] || m_pboFrameCount == 0) return;
-    // drain the buffers written but not yet mapped during capture (up to ring depth-1),
+    // drain the buffers written but not yet mapped during capture (up to ring depth 1),
     // oldest first, so no trailing frames are dropped.
     int readDone = std::max(0, m_pboFrameCount - (m_pboCount - 1));
     for (int f = readDone; f < m_pboFrameCount; ++f)
         submitPbo(f % m_pboCount, frameCapture, "Render frame flush aborted before frame submission completed");
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+    {
+        std::unique_lock<std::mutex> lk(m_copyMutex);
+        m_copyCv.wait(lk, [this] { return m_copyInFlight == 0; });
+    }
+    for (int i = 0; i < m_pboCount; ++i) releasePbo(i);
     m_pboFrameCount = 0;
+
+    //if (m_dbgFrames > 0) {
+    //    log::info("Capture timing ({}x{}, {} frames): scene-render avg {:.2f}ms, "
+    //        "readback-stall avg {:.2f}ms, copy(off-thread) avg {:.2f}ms",
+    //        width, height, m_dbgFrames,
+    //        1000.0 * m_dbgVisitSec / m_dbgFrames,
+    //        1000.0 * m_dbgMapSec / m_dbgFrames,
+    //        1000.0 * m_dbgCopySec / m_dbgFrames);
+    //}
 #endif
 }
 
@@ -1004,11 +1336,37 @@ static bool isValidCodecName(const std::string& s) {
     return true;
 }
 
-static bool testCodec(const std::filesystem::path& exe, const std::string& codec) {
+// builds the rate-control / quality flags for a resolved encode. NVENC uses -cq, 
+// AMF uses CQP (-qp_i/p/b; AMF has no -cq and -b:v 0 doesn't mean "pure CQ" to it),
+// QSV uses -global_quality. Tuff fix.
+static std::string buildQualitySection(const ResolvedEncodeParams& rp) {
+    bool isNvenc = rp.codec.find("nvenc") != std::string::npos;
+    bool isAmf   = rp.codec.find("amf")   != std::string::npos;
+    bool isQsv   = rp.codec.find("qsv")   != std::string::npos;
+    std::string q;
+    if (isNvenc)
+        q = fmt::format("-rc vbr -cq {} -b:v 0", rp.crf);
+    else if (isAmf)
+        q = fmt::format("-rc cqp -qp_i {} -qp_p {} -qp_b {}", rp.crf, rp.crf, rp.crf);
+    else if (isQsv) {
+        bool isAv1Qsv = rp.codec.find("av1") != std::string::npos;
+        int qsvQ = isAv1Qsv ? std::max(1, (rp.crf * 51 + 32) / 63) : rp.crf;
+        q = fmt::format("-global_quality {} -b:v 0", qsvQ);
+    } else
+        q = fmt::format("-crf {}", rp.crf);
+    if (!rp.x264Preset.empty())
+        q += fmt::format(" -preset {}", rp.x264Preset);
+    if (!rp.maxBitrate.empty())
+        q += fmt::format(" -maxrate {} -bufsize {}", rp.maxBitrate, rp.maxBitrate);
+    return q;
+}
+
+static bool testCodec(const std::filesystem::path& exe, const std::string& codec,
+                      const std::string& qualityArgs = "") {
     if (!isValidCodecName(codec)) return false;
     auto cmd = fmt::format(
-        "\"{}\" -nostdin -f lavfi -i color=black:size=256x256:rate=1 -frames:v 1 -c:v {} -f null NUL",
-        toasty::pathToUtf8(exe), codec
+        "\"{}\" -nostdin -f lavfi -i color=black:size=256x256:rate=1 -frames:v 1 -c:v {} {} -f null NUL",
+        toasty::pathToUtf8(exe), codec, qualityArgs
     );
     int len = MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, nullptr, 0);
     if (len <= 0) return false;
@@ -1085,13 +1443,13 @@ void Renderer::start(const RenderConfig& config) {
         bool isGpuCodec = gpuCodec.find("nvenc") != std::string::npos
                        || gpuCodec.find("amf")   != std::string::npos
                        || gpuCodec.find("qsv")   != std::string::npos;
-        if (isGpuCodec && !testCodec(ffmpegPath, gpuCodec)) {
+        if (isGpuCodec && !testCodec(ffmpegPath, gpuCodec, buildQualitySection(*m_resolvedParams))) {
             RenderConfig cpuCfg = config;
             cpuCfg.useGpu = false;
             cpuCfg.gpuEncoder.clear();
             m_resolvedParams = resolve(cpuCfg);
             const std::string cpuCodec = m_resolvedParams->codec;
-            if (!testCodec(ffmpegPath, cpuCodec)) {
+            if (!testCodec(ffmpegPath, cpuCodec, buildQualitySection(*m_resolvedParams))) {
                 m_resolvedParams.reset();
                 Loader::get()->queueInMainThread([cpuCodec] {
                     auto title = trString("Error");
@@ -1105,7 +1463,7 @@ void Renderer::start(const RenderConfig& config) {
                 auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
                 Notification::create(msg, NotificationIcon::Warning)->show();
             });
-        } else if (!isGpuCodec && !testCodec(ffmpegPath, gpuCodec)) {
+        } else if (!isGpuCodec && !testCodec(ffmpegPath, gpuCodec, buildQualitySection(*m_resolvedParams))) {
             m_resolvedParams.reset();
             Loader::get()->queueInMainThread([gpuCodec] {
                 auto title = trString("Error");
@@ -1179,8 +1537,11 @@ void Renderer::start() {
         m_extOverride.clear();
     }
 
-    log::info("Render audio: musicVolume={:.3f}, clickVolume={:.3f}, includeAudio={}, includeClicks={}",
-        musicVolume, sfxVolume, audioMode == AUDIO_SONG, includeClickSounds);
+    //log::info("Render audio: musicVolume={:.3f}, clickVolume={:.3f}, includeAudio={}, includeClicks={}",
+    //    musicVolume, sfxVolume, audioMode == AUDIO_SONG, includeClickSounds);
+    cadenceLogFrames = 0;
+    //log::info("Render cadence config: tps={:.2f}, fps={}, ratio={:.3f} ticks/output-frame",
+    //    getTPS(), fps, fps > 0 ? getTPS() / static_cast<double>(fps) : 0.0);
 
     std::string customName = mod->getSavedValue<std::string>("render_name", "");
     std::string baseName = customName.empty()
@@ -1220,14 +1581,20 @@ void Renderer::start() {
     finishFrame = 0;
     levelStartFrame = 0;
     lastFrame_t = extra_t = 0;
+    clockPrimed = false;
+    leadInSeconds = 0.0;
     s_renderClock.reset();
 
     encodeSession.reset();
     audioCapture.reset();
-    frameCapture.configure(static_cast<size_t>(width) * static_cast<size_t>(height) * 3, 8);
     m_capturedFrameSet.clear();
     m_capturedSounds.clear();
-    renderTex.begin();
+    // rgb codecs (lossless libx264rgb) must not go through 4:2:0
+    bool wantNv12 = m_resolvedParams.has_value() && !usingApi
+        && m_resolvedParams->codec.find("rgb") == std::string::npos;
+    renderTex.begin(wantNv12, frameCapture);
+    frameCapture.configure(
+        static_cast<size_t>(width) * static_cast<size_t>(height) * (renderTex.nv12 ? 3 : 6) / 2, 8);
     changeRes(false);
     resetSimulationTimingState();
 
@@ -1335,12 +1702,22 @@ void Renderer::start() {
         }
     }
 
-    log::info("Song file: {} (exists: {})", toasty::pathToUtf8(songFile), pathExists(songFile));
+    //log::info("Song file: {} (exists: {})", toasty::pathToUtf8(songFile), pathExists(songFile));
 
     float songOffset = pl->m_levelSettings->m_songOffset +
         (static_cast<float>(levelStartFrame) / getTPS());
     bool fadeIn = pl->m_levelSettings->m_fadeIn;
     bool fadeOut = pl->m_levelSettings->m_fadeOut;
+
+    bool preferExe = false;
+#ifdef GEODE_IS_WINDOWS
+    preferExe = pathExists(ffmpegPath);
+#endif
+    bool willMixRawAudio = audioMode == AUDIO_SONG
+        && (!preferExe || includeClickSounds || musicVolume != 1.0f
+            || std::max(songOffset, 0.0f) > 0.0f || fadeIn || fadeOut
+            || isPersistenceRender(ReplayEngine::get()));
+    leadInFixEligible = !willMixRawAudio;
     int64_t bitrateApi = m_resolvedParams.has_value()
         ? m_resolvedParams->apiBitrate
         : geode::utils::numFromString<int64_t>(
@@ -1374,14 +1751,14 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         encodeSession.outputFile = path;
         settings.m_colorspaceFilters = "";
 
-        log::info("Render settings: codec={}, bitrate={}, {}x{} @{}fps, output={}",
-            settings.m_codec, settings.m_bitrate, settings.m_width, settings.m_height, settings.m_fps,
-            toasty::pathToUtf8(settings.m_outputFile));
+        //log::info("Render settings: codec={}, bitrate={}, {}x{} @{}fps, output={}",
+        //    settings.m_codec, settings.m_bitrate, settings.m_width, settings.m_height, settings.m_fps,
+        //    toasty::pathToUtf8(settings.m_outputFile));
 
         auto availableCodecs = ffmpeg::events::Recorder::getAvailableCodecs();
-        std::string codecList;
-        for (auto& c : availableCodecs) codecList += c + ", ";
-        log::info("Available codecs ({}): {}", availableCodecs.size(), codecList);
+        //std::string codecList;
+        //for (auto& c : availableCodecs) codecList += c + ", ";
+        //log::info("Available codecs ({}): {}", availableCodecs.size(), codecList);
 
         if (!availableCodecs.empty() && std::find(availableCodecs.begin(), availableCodecs.end(), settings.m_codec) == availableCodecs.end()) {
             log::warn("Codec '{}' not found in available codecs, trying fallbacks...", settings.m_codec);
@@ -1389,7 +1766,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             bool found = false;
             for (auto& fb : fallbacks) {
                 if (std::find(availableCodecs.begin(), availableCodecs.end(), fb) != availableCodecs.end()) {
-                    log::info("Using fallback codec: {}", fb);
+                    //log::info("Using fallback codec: {}", fb);
                     settings.m_codec = fb;
                     found = true;
                     break;
@@ -1397,7 +1774,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             }
             if (!found && !availableCodecs.empty()) {
                 settings.m_codec = availableCodecs[0];
-                log::info("Using first available codec: {}", settings.m_codec);
+                //log::info("Using first available codec: {}", settings.m_codec);
             }
         }
 
@@ -1473,42 +1850,37 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             std::string command;
             if (m_resolvedParams.has_value()) {
                 auto const& rp = *m_resolvedParams;
-                bool isNvenc = rp.codec.find("nvenc") != std::string::npos;
-                bool isAmf   = rp.codec.find("amf")   != std::string::npos;
-                bool isQsv   = rp.codec.find("qsv")   != std::string::npos;
                 // GPU encoders use constant-quality mode, the per-tier apiBitrate is a
                 // target for the API/library path, not a cap here. Capping CQ with -maxrate
                 // starves high-motion content (NVENC is less efficient than x264), so quality
-                // is driven purely by -cq/-qvbr/-global_quality. An explicit user maxBitrate
-                // override is still appended below. I love when it took me 1h just to fix
-                // this, dont delete this because its a note
-                std::string qualitySection;
-                if (isNvenc)
-                    qualitySection = fmt::format("-rc vbr -cq {} -b:v 0", rp.crf);
-                else if (isAmf)
-                    qualitySection = fmt::format("-rc qvbr -qvbr_quality_level {} -b:v 0", rp.crf);
-                else if (isQsv) {
-                    bool isAv1Qsv = rp.codec.find("av1") != std::string::npos;
-                    int qsvQ = isAv1Qsv ? std::max(1, (rp.crf * 51 + 32) / 63) : rp.crf;
-                    qualitySection = fmt::format("-global_quality {} -b:v 0", qsvQ);
-                }
-                else
-                    qualitySection = fmt::format("-crf {}", rp.crf);
-                if (!rp.x264Preset.empty())
-                    qualitySection += fmt::format(" -preset {}", rp.x264Preset);
-                if (!rp.maxBitrate.empty())
-                    qualitySection += fmt::format(" -maxrate {} -bufsize {}", rp.maxBitrate, rp.maxBitrate);
+                // is driven purely by the per-family CQ idiom. An explicit user maxBitrate
+                // override is still appended (see buildQualitySection). I love when it took me
+                // 1h just to fix this, dont delete this because its a note
+                std::string qualitySection = buildQualitySection(rp);
 
-                std::string vfArg = rp.videoArgs.empty()
-                    ? ""
-                    : fmt::format("-vf \"{}\" ", rp.videoArgs);
-                std::string colorTags = rp.colorTags.empty() ? "" : (rp.colorTags + " ");
+                bool nv12Pipe = renderTex.nv12;
+                std::string vfArg;
+                std::string colorTags;
+                if (nv12Pipe) {
+                    // capture already delivers BT.709 NV12: drop the conversion
+                    // filter, keep a user-custom one, and always tag the stream
+                    bool userFilter = !rp.videoArgs.empty() && rp.videoArgs != kDefaultVideoArgs;
+                    if (userFilter) vfArg = fmt::format("-vf \"{}\" ", rp.videoArgs);
+                    colorTags = userFilter
+                        ? (rp.colorTags.empty() ? "" : rp.colorTags + " ")
+                        : std::string(kFastColorTags) + " ";
+                } else {
+                    if (!rp.videoArgs.empty()) vfArg = fmt::format("-vf \"{}\" ", rp.videoArgs);
+                    if (!rp.colorTags.empty()) colorTags = rp.colorTags + " ";
+                }
                 command = fmt::format(
-                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -thread_queue_size 512 -i - -c:v {} {} {} {}{}-an \"{}\"",
+                    "\"{}\" -y -f rawvideo -pix_fmt {} -s {}x{} -r {} -thread_queue_size 512 -i - -c:v {} {} {} {}{}-an -r {} \"{}\"",
                     toasty::pathToUtf8(ffmpegPath),
+                    nv12Pipe ? "nv12" : "rgb24",
                     width, height, fps,
                     rp.codec, qualitySection, rp.extraArgs,
                     vfArg, colorTags,
+                    fps,
                     toasty::pathToUtf8(path)
                 );
             } else {
@@ -1518,17 +1890,19 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 if (localVideoArgs.empty()) localVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
 
                 command = fmt::format(
-                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -thread_queue_size 512 -i - {}{}{} -vf \"{}\" -an \"{}\"",
+                    "\"{}\" -y -f rawvideo -pix_fmt rgb24 -s {}x{} -r {} -thread_queue_size 512 -i - {}{}{} -vf \"{}\" -an -r {} \"{}\"",
                     toasty::pathToUtf8(ffmpegPath),
                     std::to_string(width), std::to_string(height), std::to_string(fps),
                     localCodec, localBitrate, localExtraArgs,
                     localVideoArgs,
+                    fps,
                     toasty::pathToUtf8(path)
                 );
             }
 
-            log::info("Executing: {}", command);
-            process = Subprocess(command);
+            //log::info("Executing: {}", command);
+            auto stderrLogPath = (Mod::get()->getSaveDir() / "last_render_ffmpeg.log").wstring();
+            process = Subprocess(command, stderrLogPath);
 #endif
         }
         auto encodeWallStart = std::chrono::steady_clock::now();
@@ -1579,15 +1953,15 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             }
         }
 
-        {
-            double loopSec = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - encodeWallStart).count();
-            double busySec = std::max(0.0, loopSec - waitSeconds);
-            log::info("Encode timing: {} frames in {:.2f}s ({:.1f} fps); "
-                "encoder busy {:.2f}s, starved/waiting on capture {:.2f}s ({:.0f}%)",
-                framesEncoded, loopSec, loopSec > 0 ? framesEncoded / loopSec : 0.0,
-                busySec, waitSeconds, loopSec > 0 ? 100.0 * waitSeconds / loopSec : 0.0);
-        }
+        //{
+        //    double loopSec = std::chrono::duration<double>(
+        //        std::chrono::steady_clock::now() - encodeWallStart).count();
+        //    double busySec = std::max(0.0, loopSec - waitSeconds);
+        //    log::info("Encode timing: {} frames in {:.2f}s ({:.1f} fps); "
+        //        "encoder busy {:.2f}s, starved/waiting on capture {:.2f}s ({:.0f}%)",
+        //        framesEncoded, loopSec, loopSec > 0 ? framesEncoded / loopSec : 0.0,
+        //        busySec, waitSeconds, loopSec > 0 ? 100.0 * waitSeconds / loopSec : 0.0);
+        //}
 
         auto finishEncoder = [&]() -> bool {
             if (useApiForEncoding) {
@@ -1595,7 +1969,9 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 return true;
             }
 #ifdef GEODE_IS_WINDOWS
-            if (process.close()) {
+            if (int exitCode = process.close()) {
+                log::error("FFmpeg exited with code {}; see {}", exitCode,
+                    toasty::pathToUtf8(Mod::get()->getSaveDir() / "last_render_ffmpeg.log"));
                 Loader::get()->queueInMainThread([] {
                     auto errorTitle = trString("Error");
                     auto errorMessage = trString("Saving the rendered video failed.");
@@ -1686,10 +2062,10 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 }
 
                 auto& inputs = *inputsPtr;
-                log::info("Click render: engineTPS={:.1f}, macroFramerate={:.1f}, lastFrame_t={:.3f}, sampleRate={}, "
-                    "levelStartFrame={}, inputCount={}, firstFrame={}, lastFrame={}",
-                    engine->tickRate, macroFramerate, lastFrame_t, rawAudioSampleRate,
-                    levelStartFrame, inputs.size(), inputs.front().frame, inputs.back().frame);
+                //log::info("Click render: engineTPS={:.1f}, macroFramerate={:.1f}, lastFrame_t={:.3f}, sampleRate={}, "
+                //    "levelStartFrame={}, inputCount={}, firstFrame={}, lastFrame={}",
+                //    engine->tickRate, macroFramerate, lastFrame_t, rawAudioSampleRate,
+                //    levelStartFrame, inputs.size(), inputs.front().frame, inputs.back().frame);
                 auto clickAudio = csm->generateClickAudio(
                     inputs,
                     macroTickRate,
@@ -1759,8 +2135,8 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         bool hasRawAudio = !rawAudio.empty();
         bool hasAudio = hasRawAudio || (!persistenceRender && audioMode == AUDIO_SONG && (musicVolume > 0.f && pathExists(songFile)));
-        log::info("Audio mux: hasRawAudio={}, rawAudio.size={}, hasAudio={}, musicVolume={:.3f}, useApi={}",
-            hasRawAudio, rawAudio.size(), hasAudio, musicVolume, useApiForEncoding);
+        //log::info("Audio mux: hasRawAudio={}, rawAudio.size={}, hasAudio={}, musicVolume={:.3f}, useApi={}",
+        //    hasRawAudio, rawAudio.size(), hasAudio, musicVolume, useApiForEncoding);
         if (audioMode == AUDIO_SONG && !hasRawAudio && !pathExists(songFile) && !includeClickSounds) {
             log::error("Song file not found and no raw audio captured: {}", toasty::pathToUtf8(songFile));
         }
@@ -1795,7 +2171,9 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             return true;
         };
 
-        double totalTime = lastFrame_t;
+        // lastFrame_t is the game-time of the final captured frame; the video starts at
+        // leadInSeconds (lead-in trimmed), so its real duration is the difference
+        double totalTime = std::max(0.0, lastFrame_t - leadInSeconds);
 
         if (totalTime <= 0.0 || !pathExists(path)) {
             Loader::get()->queueInMainThread([] {
@@ -1813,11 +2191,11 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         if (!preferExeAudioMux && useApiForEncoding) {
             if (hasRawAudio) {
                 if (rawAudioSampleRate != kApiMixSampleRate) {
-                    log::info(
-                        "Resampling raw render audio for API mux: {}Hz -> {}Hz",
-                        rawAudioSampleRate,
-                        kApiMixSampleRate
-                    );
+                    //log::info(
+                    //    "Resampling raw render audio for API mux: {}Hz -> {}Hz",
+                    //    rawAudioSampleRate,
+                    //    kApiMixSampleRate
+                    //);
                     rawAudio = resampleInterleavedAudio(rawAudio, 2, rawAudioSampleRate, kApiMixSampleRate);
                     rawAudioSampleRate = kApiMixSampleRate;
                     fitAudioToDuration(rawAudio, totalTime, rawAudioSampleRate);
@@ -1826,7 +2204,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 auto rawRes = ffmpeg::events::AudioMixer::mixVideoRaw(path, rawAudio, tempPath);
                 if (rawRes.isOk()) {
                     audioMuxed = apiMuxed = true;
-                    log::info("Audio mux succeeded via API raw audio");
+                    //log::info("Audio mux succeeded via API raw audio");
                 } else {
                     log::error("Audio mux via API raw audio failed: {}", rawRes.unwrapErr());
 
@@ -1834,7 +2212,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                         auto fileRes = ffmpeg::events::AudioMixer::mixVideoAudio(path, rawAudioPath, tempPath);
                         if (fileRes.isOk()) {
                             audioMuxed = apiMuxed = true;
-                            log::info("Audio mux succeeded via API WAV file fallback");
+                            //log::info("Audio mux succeeded via API WAV file fallback");
                         } else {
                             log::error("Audio mux via API WAV fallback failed: {}", fileRes.unwrapErr());
                         }
@@ -1844,7 +2222,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 auto fileRes = ffmpeg::events::AudioMixer::mixVideoAudio(path, songFile, tempPath);
                 if (fileRes.isOk()) {
                     audioMuxed = apiMuxed = true;
-                    log::info("Audio mux succeeded via API song file");
+                    //log::info("Audio mux succeeded via API song file");
                 } else {
                     log::error("Audio mux via API song file failed: {}", fileRes.unwrapErr());
                 }
@@ -1877,7 +2255,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 audioInput = rawAudioPath;
             } else {
                 audioInput = songFile;
-                audioOffset = nonNegativeSongOffset;
+                audioOffset = nonNegativeSongOffset + static_cast<float>(leadInSeconds);
                 audioVolume = musicVolume;
             }
 
@@ -1918,7 +2296,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             ec.clear();
             std::filesystem::rename(tempPath, path, ec);
             if (ec) log::warn("Failed to rename temp render file: {}", ec.message());
-            else log::info("Render with audio saved to: {}", toasty::pathToUtf8(path));
+            //else log::info("Render with audio saved to: {}", toasty::pathToUtf8(path));
         }
 
         if (!ec) {
@@ -1998,7 +2376,7 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
         && engine->isPersistencePlaybackFailureAttempt()
         && engine->persistencePlaybackDeathPending;
     if (!pl->m_player1 || (pl->m_player1->m_isDead && !expectedPersistenceDeath)) {
-        log::info("Stopping render because the player died at frame {}", frame);
+        //log::info("Stopping render because the player died at frame {}", frame);
         stop(frame);
         return;
     }
@@ -2019,6 +2397,19 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
 
         double renderTime = static_cast<double>(std::max(0, frame)) / static_cast<double>(getTPS());
         s_renderClock.frameDelta = 1.0 / static_cast<double>(fps);
+        if (!clockPrimed) {
+            // First frame we actually capture: the level lead-in already elapsed
+            // (frame is well past 0). Baseline the clock here so the next line emits
+            // exactly one frame instead of a burst of duplicates backfilling that
+            // lead-in. Record the skipped span so the audio can be trimmed to match.
+            clockPrimed = true;
+            if (leadInFixEligible) {
+                leadInSeconds = renderTime;
+                lastFrame_t = renderTime - s_renderClock.frameDelta;
+                extra_t = 0.0;
+                //log::info("Render clock primed at tick {} (lead-in {:.3f}s skipped)", frame, leadInSeconds);
+            }
+        }
         double time = renderTime + extra_t - lastFrame_t;
         if (time >= s_renderClock.frameDelta) {
             int localFrame = engine ? engine->renderLocalTick() : frame;
@@ -2034,6 +2425,10 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
             while (time >= s_renderClock.frameDelta) {
                 captureFrame();
                 time -= s_renderClock.frameDelta;
+                //if (fps > 0 && ++cadenceLogFrames % static_cast<int>(fps) == 0)
+                //    log::info("Cadence: outSec={} tick={} tps={:.1f} accum={:.4f}",
+                //        cadenceLogFrames / static_cast<int>(fps), frame, getTPS(),
+                //        engine ? engine->tickAccumulator : 0.f);
             }
             extra_t = time;
             lastFrame_t = renderTime;

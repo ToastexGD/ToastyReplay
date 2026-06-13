@@ -221,7 +221,7 @@ namespace toasty::lang {
             case UiLanguage::Spanish:    return "Espa" "\xC3\xB1" "ol";
             case UiLanguage::French:     return "Fran" "\xC3\xA7" "ais";
             case UiLanguage::Vietnamese: return "Tieng Viet";
-            case UiLanguage::Chinese:    return "Chinese (Traditional)";
+            case UiLanguage::Chinese:    return "Chinese (Simplified)";
             case UiLanguage::Auto:
             default: return "Auto (System)";
         }

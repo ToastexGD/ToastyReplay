@@ -18,7 +18,7 @@ struct RenderPreset {
     std::string extraArgs = "-pix_fmt yuv420p";
     std::string videoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
     std::string audioArgs;
-    std::string audioCodec;  // empty = "aac"
+    std::string audioCodec;  // nullopt = "aac"
     float secondsAfter = 3.0f;
     bool includeAudio = true;
     bool includeClicks = false;

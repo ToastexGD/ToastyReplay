@@ -77,9 +77,10 @@ public:
     int old_fbo = 0;
     int old_rbo = 0;
     unsigned fbo = 0;
+    bool nv12 = false;
     cocos2d::CCTexture2D* texture = nullptr;
 
-    void begin();
+    void begin(bool wantNv12, FrameCaptureService& frameCapture);
     void end();
     void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr);
     void flushPbo(FrameCaptureService& frameCapture);
@@ -90,7 +91,37 @@ private:
     int     m_pboCount      = kPboRingDepth;
     int     m_pboFrameCount = 0;
     size_t  m_pboSize       = 0;
+    // NV12 pass: [0] = Y plane (R8, w×h), [1] = UV plane (RG8, w/2×h/2)
+    GLuint  m_prog[2]     = {};
+    GLuint  m_planeFbo[2] = {};
+    GLuint  m_planeTex[2] = {};
+    // diagnostic: per-phase capture cost, to see where 4K time goes
+    double  m_dbgVisitSec = 0.0;
+    double  m_dbgMapSec   = 0.0;
+    double  m_dbgCopySec  = 0.0;
+    int     m_dbgFrames   = 0;
 
+    // Async copy worker: the per-frame PBO->buffer memcpy is the only capture cost
+    // that grows with resolution, so at 4K it stalls the render thread. The worker
+    // does that copy (and the encode-queue submit) while the render thread keeps going;
+    // each PBO is unmapped on the render thread only after its copy finishes.
+    struct CopyJob { const uint8_t* src; int pboIndex; bool nv12; unsigned w, h; size_t size; };
+    std::thread             m_copyThread;
+    std::mutex              m_copyMutex;
+    std::condition_variable m_copyCv;
+    std::deque<CopyJob>     m_copyJobs;
+    bool                    m_copyStop      = false;
+    int                     m_copyInFlight  = 0;
+    bool                    m_pboCopyBusy[kPboRingDepth] = {};  // guarded by m_copyMutex
+    bool                    m_pboMapped[kPboRingDepth]   = {};  // render thread only
+    FrameCaptureService*    m_copyTarget    = nullptr;
+
+    bool initNv12Pass();
+    void destroyNv12Pass();
+    void runNv12Pass();
+    void startCopyWorker(FrameCaptureService& frameCapture);
+    void stopCopyWorker();
+    void releasePbo(int idx);
     void submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg);
 };
 
@@ -118,6 +149,10 @@ public:
     bool hideLevelComplete = false;
     int finishFrame = 0;
     int levelStartFrame = 0;
+    int cadenceLogFrames = 0;  // diagnostic: output frames emitted, for cadence logging
+    bool clockPrimed = false;
+    bool leadInFixEligible = false;
+    double leadInSeconds = 0.0;
 
     float stopAfter = 3.f;
     float timeAfter = 0.f;
