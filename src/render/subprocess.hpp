@@ -11,13 +11,13 @@ class Subprocess {
     struct AttributeList {
         LPPROC_THREAD_ATTRIBUTE_LIST list = nullptr;
 
-        bool init(HANDLE inheritHandle) {
+        bool init(HANDLE* inheritHandles, DWORD count) {
             SIZE_T bytes = 0;
             InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes);
             list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(HeapAlloc(GetProcessHeap(), 0, bytes));
             if (!list) return false;
             if (!InitializeProcThreadAttributeList(list, 1, 0, &bytes)) { release(); return false; }
-            if (!UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inheritHandle, sizeof(HANDLE), nullptr, nullptr)) { release(); return false; }
+            if (!UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inheritHandles, count * sizeof(HANDLE), nullptr, nullptr)) { release(); return false; }
             return true;
         }
 
@@ -35,11 +35,11 @@ class Subprocess {
 public:
     Subprocess() = default;
 
-    Subprocess(const std::string& command) {
+    Subprocess(const std::string& command, const std::wstring& stderrLogPath = L"") {
         if (!initPipe()) return;
         std::wstring cmd = widenCommand(command);
         if (cmd.empty()) return;
-        if (!spawnChild(cmd)) return;
+        if (!spawnChild(cmd, stderrLogPath)) return;
         attachToJob();
     }
 
@@ -128,16 +128,34 @@ private:
         return true;
     }
 
-    bool spawnChild(std::wstring& command) {
+    bool spawnChild(std::wstring& command, const std::wstring& stderrLogPath) {
+        HANDLE stderrFile = INVALID_HANDLE_VALUE;
+        if (!stderrLogPath.empty()) {
+            SECURITY_ATTRIBUTES fsa{};
+            fsa.nLength = sizeof(fsa);
+            fsa.bInheritHandle = TRUE;
+            stderrFile = CreateFileW(stderrLogPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                                     &fsa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+
+        HANDLE inheritHandles[2];
+        DWORD inheritCount = 0;
+        inheritHandles[inheritCount++] = m_stdinRead;
+        if (stderrFile != INVALID_HANDLE_VALUE) inheritHandles[inheritCount++] = stderrFile;
+
         AttributeList attrs;
-        if (!attrs.init(m_stdinRead)) return false;
+        if (!attrs.init(inheritHandles, inheritCount)) {
+            if (stderrFile != INVALID_HANDLE_VALUE) CloseHandle(stderrFile);
+            return false;
+        }
 
         STARTUPINFOEXW siex{};
         siex.StartupInfo.cb = sizeof(siex);
         siex.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
         siex.StartupInfo.hStdInput = m_stdinRead;
         siex.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        siex.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        siex.StartupInfo.hStdError = (stderrFile != INVALID_HANDLE_VALUE)
+            ? stderrFile : GetStdHandle(STD_ERROR_HANDLE);
         siex.StartupInfo.wShowWindow = SW_HIDE;
         siex.lpAttributeList = attrs.list;
 
@@ -149,6 +167,7 @@ private:
 
         CloseHandle(m_stdinRead);
         m_stdinRead = nullptr;
+        if (stderrFile != INVALID_HANDLE_VALUE) CloseHandle(stderrFile);
 
         return ok != FALSE;
     }

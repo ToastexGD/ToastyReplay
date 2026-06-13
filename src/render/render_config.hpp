@@ -9,11 +9,10 @@ enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
 
 inline constexpr const char* kDefaultVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
 inline constexpr const char* kFastColorTags = "-colorspace bt709 -color_primaries bt709 -color_trc bt709";
-
 struct RenderConfig {
     RenderQualityTier tier      = RenderQualityTier::Balanced;
     bool              useGpu    = true;
-    std::string       gpuEncoder;  // "h264_nvenc", "h264_amf", "h264_qsv", or ""
+    std::string       gpuEncoder;  // "h264_nvenc", "h264_amf", "h264_qsv", or "" (apply same with av1)
     RenderCodecFamily codecFamily = RenderCodecFamily::H264;
 
     unsigned width          = 1920;
@@ -46,16 +45,15 @@ struct ResolvedEncodeParams {
     std::string x264Preset;
     std::string extraArgs;
     std::string videoArgs;   // -vf filter chain (no vflip; flip is done in capture)
-    std::string colorTags;   // output color-metadata flags for fast colorspace mode
+    std::string colorTags;
     std::string audioArgs;
-    std::string audioCodec;  // resolved value, always "aac" or user-specified
+    std::string audioCodec;  // nullopt = "aac"
     std::string ext;
     std::string maxBitrate;  // empty = no cap
     int64_t     apiBitrate;  // bps for API path
 };
 
-// Probes available codecs and returns the first detected GPU encoder, or "".
 std::string          probeGpuEncoder(RenderCodecFamily family = RenderCodecFamily::H264);
 ResolvedEncodeParams resolve(const RenderConfig&);
-void                 saveRenderConfig(const RenderConfig&);  // writes exp_render_* keys
+void                 saveRenderConfig(const RenderConfig&);
 RenderConfig         loadRenderConfig();
