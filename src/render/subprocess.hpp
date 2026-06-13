@@ -136,6 +136,7 @@ private:
             fsa.bInheritHandle = TRUE;
             stderrFile = CreateFileW(stderrLogPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                                      &fsa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (stderrFile == INVALID_HANDLE_VALUE) return false;
         }
 
         HANDLE inheritHandles[2];

@@ -4,6 +4,10 @@
 #include <Geode/Geode.hpp>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
+#ifdef GEODE_IS_WINDOWS
+#include <windows.h>
+#endif
 
 using namespace geode::prelude;
 
@@ -21,6 +25,70 @@ std::string probeGpuEncoder(RenderCodecFamily family) {
             return candidate;
     }
     return {};
+}
+
+std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe) {
+#ifdef GEODE_IS_WINDOWS
+    if (ffmpegExe.empty()) return {};
+
+    std::wstring cmd = L"\"" + ffmpegExe.wstring() + L"\" -hide_banner -encoders";
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hRead = nullptr, hWrite = nullptr;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return {};
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE hNull = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_WRITE,
+                               &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    STARTUPINFOW si{};
+    si.cb        = sizeof(si);
+    si.dwFlags   = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput   = hNull != INVALID_HANDLE_VALUE ? hNull : GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput  = hWrite;
+    si.hStdError   = hNull != INVALID_HANDLE_VALUE ? hNull : GetStdHandle(STD_ERROR_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(hWrite);
+    if (hNull != INVALID_HANDLE_VALUE) CloseHandle(hNull);
+    if (!ok) { CloseHandle(hRead); return {}; }
+
+    std::string output;
+    char buf[4096];
+    DWORD n;
+    while (ReadFile(hRead, buf, sizeof(buf) - 1, &n, nullptr) && n > 0) {
+        buf[n] = '\0';
+        output += buf;
+    }
+    CloseHandle(hRead);
+    WaitForSingleObject(pi.hProcess, 5000);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    // Parse audio encoder lines: " A..... name   description"
+    // Lines with line[0]==' ', line[1]=='A', and codec name starting with lowercase at ~col 8
+    std::vector<std::string> result;
+    std::istringstream ss(output);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() < 8 || line[0] != ' ' || line[1] != 'A') continue;
+        size_t pos = 8;
+        while (pos < line.size() && line[pos] == ' ') ++pos;
+        if (pos >= line.size() || !std::islower(static_cast<unsigned char>(line[pos]))) continue;
+        size_t end = pos;
+        while (end < line.size() && line[end] != ' ') ++end;
+        result.emplace_back(line.substr(pos, end - pos));
+    }
+    return result;
+#else
+    return {};
+#endif
 }
 
 ResolvedEncodeParams resolve(const RenderConfig& cfg) {
@@ -47,9 +115,10 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     };
 
     bool isAv1 = cfg.codecFamily == RenderCodecFamily::AV1;
-    auto const& td = isAv1
-        ? kAv1Tiers[static_cast<size_t>(cfg.tier)]
-        : kH264Tiers[static_cast<size_t>(cfg.tier)];
+    auto const& tierArray = isAv1 ? kAv1Tiers : kH264Tiers;
+    auto tierIdx = static_cast<size_t>(std::clamp(static_cast<int>(cfg.tier), 0,
+                                                   static_cast<int>(RenderQualityTier::Lossless)));
+    auto const& td = tierArray[tierIdx];
 
     bool isLossless = cfg.tier == RenderQualityTier::Lossless;
     bool useGpu     = cfg.useGpu && !cfg.gpuEncoder.empty() && !isLossless;

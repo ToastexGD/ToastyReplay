@@ -1463,15 +1463,20 @@ void Renderer::start(const RenderConfig& config) {
                 auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
                 Notification::create(msg, NotificationIcon::Warning)->show();
             });
-        } else if (!isGpuCodec && !testCodec(ffmpegPath, gpuCodec, buildQualitySection(*m_resolvedParams))) {
-            m_resolvedParams.reset();
-            Loader::get()->queueInMainThread([gpuCodec] {
-                auto title = trString("Error");
-                auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", gpuCodec);
-                auto ok = trString("Ok");
-                FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
-            });
-            return;
+        } else if (!isGpuCodec) {
+            RenderConfig cpuCfg = config;
+            cpuCfg.useGpu = false;
+            cpuCfg.gpuEncoder.clear();
+            if (!testCodec(ffmpegPath, gpuCodec, buildQualitySection(resolve(cpuCfg)))) {
+                m_resolvedParams.reset();
+                Loader::get()->queueInMainThread([gpuCodec] {
+                    auto title = trString("Error");
+                    auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", gpuCodec);
+                    auto ok = trString("Ok");
+                    FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+                });
+                return;
+            }
         }
     }
 #endif

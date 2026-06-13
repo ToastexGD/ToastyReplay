@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 enum class RenderCodecFamily { H264, AV1 };
 enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
@@ -53,7 +55,8 @@ struct ResolvedEncodeParams {
     int64_t     apiBitrate;  // bps for API path
 };
 
-std::string          probeGpuEncoder(RenderCodecFamily family = RenderCodecFamily::H264);
-ResolvedEncodeParams resolve(const RenderConfig&);
-void                 saveRenderConfig(const RenderConfig&);
-RenderConfig         loadRenderConfig();
+std::string              probeGpuEncoder(RenderCodecFamily family = RenderCodecFamily::H264);
+std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe);
+ResolvedEncodeParams     resolve(const RenderConfig&);
+void                     saveRenderConfig(const RenderConfig&);
+RenderConfig             loadRenderConfig();

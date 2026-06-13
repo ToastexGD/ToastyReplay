@@ -27,12 +27,17 @@ static bool presetCompress(std::string const& input, std::vector<uint8_t>& outpu
 }
 
 static bool presetDecompress(uint8_t const* data, size_t length, std::vector<uint8_t>& output) {
-    output.resize(kMaxPayloadSize);
-    uLongf destLen = kMaxPayloadSize;
-    int r = uncompress(output.data(), &destLen, data, static_cast<uLong>(length));
-    if (r != Z_OK) { output.clear(); return false; }
-    output.resize(destLen);
-    return true;
+    size_t cap = kMaxPayloadSize;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        output.resize(cap);
+        uLongf destLen = static_cast<uLongf>(cap);
+        int r = uncompress(output.data(), &destLen, data, static_cast<uLong>(length));
+        if (r == Z_OK) { output.resize(destLen); return true; }
+        if (r != Z_BUF_ERROR) { output.clear(); return false; }
+        cap *= 2;
+    }
+    output.clear();
+    return false;
 }
 
 static bool parseFloat(std::string_view text, float& out) {
@@ -121,9 +126,9 @@ static std::optional<RenderPreset> parsePreset(std::string_view text) {
             if (x != std::string_view::npos) {
                 auto w = toasty::parseInteger<int>(val.substr(0, x));
                 auto h = toasty::parseInteger<int>(val.substr(x + 1));
-                if (w && h) { p.width = *w; p.height = *h; }
+                if (w && h && *w > 0 && *h > 0) { p.width = *w; p.height = *h; }
             }
-        } else if (key == "fps")            { auto v = toasty::parseInteger<int>(val); if (v) p.fps = *v; }
+        } else if (key == "fps")            { auto v = toasty::parseInteger<int>(val); if (v && *v > 0) p.fps = *v; }
         else if (key == "codec")             p.codec      = std::string(val);
         else if (key == "bitrate")           p.bitrate    = std::string(val);
         else if (key == "ext")               p.ext        = std::string(val);
@@ -152,7 +157,11 @@ std::filesystem::path RenderPresetIO::pathForName(
     std::filesystem::path const& presetsDir, std::string const& name)
 {
     std::string filename = name;
-    std::replace(filename.begin(), filename.end(), ' ', '_');
+    for (char& c : filename) {
+        if (c == ' ' || c == '/' || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<'  || c == '>' || c == '|' || c == '\0')
+            c = '_';
+    }
     return presetsDir / (filename + ".ttrp");
 }
 

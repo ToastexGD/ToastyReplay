@@ -101,10 +101,6 @@ private:
     double  m_dbgCopySec  = 0.0;
     int     m_dbgFrames   = 0;
 
-    // Async copy worker: the per-frame PBO->buffer memcpy is the only capture cost
-    // that grows with resolution, so at 4K it stalls the render thread. The worker
-    // does that copy (and the encode-queue submit) while the render thread keeps going;
-    // each PBO is unmapped on the render thread only after its copy finishes.
     struct CopyJob { const uint8_t* src; int pboIndex; bool nv12; unsigned w, h; size_t size; };
     std::thread             m_copyThread;
     std::mutex              m_copyMutex;

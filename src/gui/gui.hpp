@@ -194,6 +194,9 @@ public:
     char expAdvVideoArgsBuf[256] = "";
     char expAdvAudioArgsBuf[256] = "";
     char expAdvAudioCodecBuf[64] = "";
+    char expAudioCodecFilterBuf[64] = "";
+    std::vector<std::string> expProbedAudioCodecs;
+    bool expAudioCodecsProbed = false;
     char expAdvSecondsAfterBuf[16] = "3";
     int expRvDeleteConfirm = -1;
     char backupCodecBuf[64] = "";
@@ -279,6 +282,7 @@ private:
     void drawRenderPresetsSection();
     void drawRenderAudioSection();
     void drawRenderDisplaySection();
+    void drawExpAudioCodecPicker(bool ffmpegExeAvail);
     void markReplayListDirty(bool queueRefresh = true);
     void refreshReplayListIfNeeded(bool force);
     bool hasReplayDirectoryChanged() const;
