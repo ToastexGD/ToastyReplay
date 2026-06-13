@@ -32,6 +32,7 @@ struct RenderPreset {
     bool useGpu = true;
     RenderCodecFamily codecFamily = RenderCodecFamily::H264;
     bool qualityColorspace = true;
+    bool preferSpeed = false;
 
     RenderConfig toRenderConfig() const;
     static RenderPreset fromRenderConfig(const RenderConfig& cfg, std::string name = {});

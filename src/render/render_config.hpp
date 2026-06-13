@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-enum class RenderCodecFamily { H264, AV1 };
+enum class RenderCodecFamily { H264, AV1, H265 };
 enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
 
 inline constexpr const char* kDefaultVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
@@ -29,6 +29,7 @@ struct RenderConfig {
     bool  hideEndscreen     = false;
     bool  hideLevelComplete = false;
     bool  qualityColorspace = true;
+    bool  preferSpeed       = false;  // CPU only: bump the encoder preset one step faster at the same CRF
 
     // nullopt = use tier defaults
     std::optional<std::string> codec;
@@ -46,6 +47,7 @@ struct ResolvedEncodeParams {
     int         crf;
     std::string x264Preset;
     std::string extraArgs;
+    std::string tuning;
     std::string videoArgs;   // -vf filter chain (no vflip; flip is done in capture)
     std::string colorTags;
     std::string audioArgs;
@@ -57,6 +59,7 @@ struct ResolvedEncodeParams {
 
 std::string              probeGpuEncoder(RenderCodecFamily family = RenderCodecFamily::H264);
 std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe);
+std::vector<std::string> probeVideoCodecs(const std::filesystem::path& ffmpegExe);
 ResolvedEncodeParams     resolve(const RenderConfig&);
 void                     saveRenderConfig(const RenderConfig&);
 RenderConfig             loadRenderConfig();

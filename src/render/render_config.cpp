@@ -4,6 +4,7 @@
 #include <Geode/Geode.hpp>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <sstream>
 #ifdef GEODE_IS_WINDOWS
 #include <windows.h>
@@ -20,6 +21,13 @@ std::string probeGpuEncoder(RenderCodecFamily family) {
         }
         return {};
     }
+    if (family == RenderCodecFamily::H265) {
+        for (const char* candidate : { "hevc_nvenc", "hevc_amf", "hevc_qsv" }) {
+            if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
+                return candidate;
+        }
+        return {};
+    }
     for (const char* candidate : { "h264_nvenc", "h264_amf", "h264_qsv" }) {
         if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
             return candidate;
@@ -27,10 +35,9 @@ std::string probeGpuEncoder(RenderCodecFamily family) {
     return {};
 }
 
-std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe) {
+static std::vector<std::string> probeEncodersByType(const std::filesystem::path& ffmpegExe, char type) {
 #ifdef GEODE_IS_WINDOWS
     if (ffmpegExe.empty()) return {};
-
     std::wstring cmd = L"\"" + ffmpegExe.wstring() + L"\" -hide_banner -encoders";
 
     SECURITY_ATTRIBUTES sa{};
@@ -44,8 +51,8 @@ std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe
     HANDLE hNull = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_WRITE,
                                &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     STARTUPINFOW si{};
-    si.cb        = sizeof(si);
-    si.dwFlags   = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.cb          = sizeof(si);
+    si.dwFlags     = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     si.hStdInput   = hNull != INVALID_HANDLE_VALUE ? hNull : GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput  = hWrite;
@@ -70,14 +77,12 @@ std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    // Parse audio encoder lines: " A..... name   description"
-    // Lines with line[0]==' ', line[1]=='A', and codec name starting with lowercase at ~col 8
     std::vector<std::string> result;
     std::istringstream ss(output);
     std::string line;
     while (std::getline(ss, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.size() < 8 || line[0] != ' ' || line[1] != 'A') continue;
+        if (line.size() < 8 || line[0] != ' ' || line[1] != type) continue;
         size_t pos = 8;
         while (pos < line.size() && line[pos] == ' ') ++pos;
         if (pos >= line.size() || !std::islower(static_cast<unsigned char>(line[pos]))) continue;
@@ -87,8 +92,54 @@ std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe
     }
     return result;
 #else
+    (void)type;
     return {};
 #endif
+}
+
+std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe) {
+    return probeEncodersByType(ffmpegExe, 'A');
+}
+
+std::vector<std::string> probeVideoCodecs(const std::filesystem::path& ffmpegExe) {
+    return probeEncodersByType(ffmpegExe, 'V');
+}
+
+static std::string buildEncoderTuning(const std::string& codec, RenderQualityTier tier) {
+    int t = static_cast<int>(tier);
+    if (codec.find("nvenc") != std::string::npos) {
+        if (t <= 0) return "";
+        if (t == 1) return "-rc-lookahead 20 -spatial_aq 1";
+        return "-rc-lookahead 32 -spatial_aq 1 -temporal_aq 1 -multipass fullres";
+    }
+    if (codec.find("amf") != std::string::npos) {
+        if (t <= 0) return "-quality speed";
+        if (t == 1) return "-quality balanced";
+        return "-quality quality -preanalysis 1";
+    }
+    if (codec.find("qsv") != std::string::npos) {
+        if (t <= 0) return "-preset veryfast";
+        if (t == 1) return "-preset medium";
+        return "-preset veryslow";
+    }
+    return "";
+}
+
+static std::string fasterPreset(RenderCodecFamily family, const std::string& preset) {
+    if (family == RenderCodecFamily::AV1) {
+        int p = 0;
+        auto res = std::from_chars(preset.data(), preset.data() + preset.size(), p);
+        if (res.ec != std::errc{}) return preset;
+        return std::to_string(std::min(p + 2, 12));
+    }
+    static constexpr const char* ladder[] = {
+        "ultrafast", "superfast", "veryfast", "faster", "fast",
+        "medium", "slow", "slower", "veryslow",
+    };
+    for (size_t i = 0; i < std::size(ladder); ++i)
+        if (preset == ladder[i])
+            return ladder[i == 0 ? 0 : i - 1];
+    return preset;
 }
 
 ResolvedEncodeParams resolve(const RenderConfig& cfg) {
@@ -113,9 +164,21 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         { "libsvtav1",  "5",         "p7", 22,  50'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
+    // H.265/HEVC: libx265 shares x264 preset names; CRF scale ~0-51 (default 28).
+    // Slightly higher CRF than the H.264 tiers because HEVC is more efficient, so files
+    // stay reasonable at equivalent quality. Lossless falls back to libx264rgb.
+    static constexpr TierParams kH265Tiers[] = {
+        { "libx265",    "veryfast",  "p1", 28,  15'000'000LL },
+        { "libx265",    "medium",    "p4", 23,  22'000'000LL },
+        { "libx265",    "slow",      "p7", 19,  40'000'000LL },
+        { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
+    };
 
     bool isAv1 = cfg.codecFamily == RenderCodecFamily::AV1;
-    auto const& tierArray = isAv1 ? kAv1Tiers : kH264Tiers;
+    const TierParams* tierArray =
+        cfg.codecFamily == RenderCodecFamily::AV1  ? kAv1Tiers  :
+        cfg.codecFamily == RenderCodecFamily::H265 ? kH265Tiers :
+                                                     kH264Tiers;
     auto tierIdx = static_cast<size_t>(std::clamp(static_cast<int>(cfg.tier), 0,
                                                    static_cast<int>(RenderQualityTier::Lossless)));
     auto const& td = tierArray[tierIdx];
@@ -125,6 +188,7 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
 
     ResolvedEncodeParams r;
     r.codec      = cfg.codec.value_or(useGpu ? cfg.gpuEncoder : td.cpuCodec);
+    r.tuning     = buildEncoderTuning(r.codec, cfg.tier);
     r.crf        = cfg.crf.value_or(td.crf);
     r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
 
@@ -166,8 +230,11 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     bool isNvenc = useGpu && cfg.gpuEncoder.find("nvenc") != std::string::npos;
     if (isNvenc)
         r.x264Preset = td.nvencPreset;
-    else if (!useGpu)
+    else if (!useGpu) {
         r.x264Preset = td.cpuPreset;
+        if (cfg.preferSpeed && !isLossless)
+            r.x264Preset = fasterPreset(cfg.codecFamily, r.x264Preset);
+    }
 
     return r;
 }
@@ -188,6 +255,7 @@ void saveRenderConfig(const RenderConfig& cfg) {
     mod->setSavedValue("exp_render_hide_endscreen",     cfg.hideEndscreen);
     mod->setSavedValue("exp_render_hide_levelcomplete", cfg.hideLevelComplete);
     mod->setSavedValue("exp_render_quality_colorspace", cfg.qualityColorspace);
+    mod->setSavedValue("exp_render_prefer_speed",       cfg.preferSpeed);
     mod->setSavedValue("exp_render_adv_codec",          cfg.codec.value_or(""));
     mod->setSavedValue("exp_render_adv_crf",            static_cast<int64_t>(cfg.crf.value_or(-1)));
     mod->setSavedValue("exp_render_adv_max_bitrate",    cfg.maxBitrate.value_or(""));
@@ -208,7 +276,9 @@ RenderConfig loadRenderConfig() {
     cfg.useGpu    = mod->getSavedValue<bool>("exp_render_use_gpu", true);
     cfg.gpuEncoder = mod->getSavedValue<std::string>("exp_render_gpu_encoder", "");
     int family = static_cast<int>(mod->getSavedValue<int64_t>("exp_render_codec_family", 0));
-    cfg.codecFamily = (family == 1) ? RenderCodecFamily::AV1 : RenderCodecFamily::H264;
+    cfg.codecFamily = (family == 1) ? RenderCodecFamily::AV1
+                    : (family == 2) ? RenderCodecFamily::H265
+                                    : RenderCodecFamily::H264;
     cfg.width     = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_width", 1920));
     cfg.height    = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_height", 1080));
     cfg.fps       = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_fps", 60));
@@ -220,6 +290,7 @@ RenderConfig loadRenderConfig() {
     cfg.hideEndscreen   = mod->getSavedValue<bool>("exp_render_hide_endscreen", false);
     cfg.hideLevelComplete = mod->getSavedValue<bool>("exp_render_hide_levelcomplete", false);
     cfg.qualityColorspace = mod->getSavedValue<bool>("exp_render_quality_colorspace", true);
+    cfg.preferSpeed       = mod->getSavedValue<bool>("exp_render_prefer_speed", false);
 
     auto advCodec = mod->getSavedValue<std::string>("exp_render_adv_codec", "");
     if (!advCodec.empty()) cfg.codec = advCodec;

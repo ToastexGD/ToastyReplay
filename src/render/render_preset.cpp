@@ -47,11 +47,17 @@ static bool parseFloat(std::string_view text, float& out) {
 }
 
 static const char* familyToString(RenderCodecFamily f) {
-    return (f == RenderCodecFamily::AV1) ? "AV1" : "H264";
+    switch (f) {
+        case RenderCodecFamily::AV1:  return "AV1";
+        case RenderCodecFamily::H265: return "H265";
+        default:                      return "H264";
+    }
 }
 
 static RenderCodecFamily familyFromString(std::string_view s) {
-    return (s == "AV1") ? RenderCodecFamily::AV1 : RenderCodecFamily::H264;
+    if (s == "AV1")  return RenderCodecFamily::AV1;
+    if (s == "H265") return RenderCodecFamily::H265;
+    return RenderCodecFamily::H264;
 }
 
 static const char* tierToString(RenderQualityTier t) {
@@ -93,7 +99,8 @@ static std::string serializePreset(RenderPreset const& p) {
        << "tier="         << tierToString(p.tier) << "\n"
        << "use_gpu="      << (p.useGpu ? "true" : "false") << "\n"
        << "codec_family=" << familyToString(p.codecFamily) << "\n"
-       << "quality_cs="   << (p.qualityColorspace ? "true" : "false") << "\n";
+       << "quality_cs="   << (p.qualityColorspace ? "true" : "false") << "\n"
+       << "prefer_speed=" << (p.preferSpeed ? "true" : "false") << "\n";
     return ss.str();
 }
 
@@ -147,6 +154,7 @@ static std::optional<RenderPreset> parsePreset(std::string_view text) {
         else if (key == "use_gpu")           p.useGpu      = (val == "true");
         else if (key == "codec_family")      p.codecFamily = familyFromString(val);
         else if (key == "quality_cs")        p.qualityColorspace = (val == "true");
+        else if (key == "prefer_speed")      p.preferSpeed = (val == "true");
     }
 
     if (!hasName || p.name.empty()) return std::nullopt;
@@ -223,6 +231,7 @@ RenderConfig RenderPreset::toRenderConfig() const {
     cfg.useGpu      = useGpu;
     cfg.codecFamily = codecFamily;
     cfg.qualityColorspace = qualityColorspace;
+    cfg.preferSpeed = preferSpeed;
     cfg.width  = static_cast<unsigned>(width);
     cfg.height = static_cast<unsigned>(height);
     cfg.fps    = static_cast<unsigned>(fps);
@@ -258,6 +267,7 @@ RenderPreset RenderPreset::fromRenderConfig(const RenderConfig& cfg, std::string
     p.useGpu      = cfg.useGpu;
     p.codecFamily = cfg.codecFamily;
     p.qualityColorspace = cfg.qualityColorspace;
+    p.preferSpeed = cfg.preferSpeed;
     p.width  = static_cast<int>(cfg.width);
     p.height = static_cast<int>(cfg.height);
     p.fps    = static_cast<int>(cfg.fps);

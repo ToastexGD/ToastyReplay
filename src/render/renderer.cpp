@@ -1443,40 +1443,51 @@ void Renderer::start(const RenderConfig& config) {
         bool isGpuCodec = gpuCodec.find("nvenc") != std::string::npos
                        || gpuCodec.find("amf")   != std::string::npos
                        || gpuCodec.find("qsv")   != std::string::npos;
-        if (isGpuCodec && !testCodec(ffmpegPath, gpuCodec, buildQualitySection(*m_resolvedParams))) {
-            RenderConfig cpuCfg = config;
-            cpuCfg.useGpu = false;
-            cpuCfg.gpuEncoder.clear();
-            m_resolvedParams = resolve(cpuCfg);
-            const std::string cpuCodec = m_resolvedParams->codec;
-            if (!testCodec(ffmpegPath, cpuCodec, buildQualitySection(*m_resolvedParams))) {
-                m_resolvedParams.reset();
-                Loader::get()->queueInMainThread([cpuCodec] {
-                    auto title = trString("Error");
-                    auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", cpuCodec);
-                    auto ok = trString("Ok");
-                    FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
-                });
-                return;
+        auto withTuning = [](const ResolvedEncodeParams& p) {
+            auto q = buildQualitySection(p);
+            if (!p.tuning.empty()) q += " " + p.tuning;
+            return q;
+        };
+
+        if (isGpuCodec) {
+            if (!testCodec(ffmpegPath, gpuCodec, withTuning(*m_resolvedParams))) {
+                if (!m_resolvedParams->tuning.empty()
+                    && testCodec(ffmpegPath, gpuCodec, buildQualitySection(*m_resolvedParams))) {
+                    m_resolvedParams->tuning.clear();
+                    Loader::get()->queueInMainThread([] {
+                        Notification::create(trString("Encoder tuning unsupported - using standard GPU settings"), NotificationIcon::Warning)->show();
+                    });
+                } else {
+                    RenderConfig cpuCfg = config;
+                    cpuCfg.useGpu = false;
+                    cpuCfg.gpuEncoder.clear();
+                    m_resolvedParams = resolve(cpuCfg);
+                    const std::string cpuCodec = m_resolvedParams->codec;
+                    if (!testCodec(ffmpegPath, cpuCodec, withTuning(*m_resolvedParams))) {
+                        m_resolvedParams.reset();
+                        Loader::get()->queueInMainThread([cpuCodec] {
+                            auto title = trString("Error");
+                            auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", cpuCodec);
+                            auto ok = trString("Ok");
+                            FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+                        });
+                        return;
+                    }
+                    Loader::get()->queueInMainThread([gpuCodec, cpuCodec] {
+                        auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
+                        Notification::create(msg, NotificationIcon::Warning)->show();
+                    });
+                }
             }
-            Loader::get()->queueInMainThread([gpuCodec, cpuCodec] {
-                auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
-                Notification::create(msg, NotificationIcon::Warning)->show();
+        } else if (!testCodec(ffmpegPath, gpuCodec, withTuning(*m_resolvedParams))) {
+            m_resolvedParams.reset();
+            Loader::get()->queueInMainThread([gpuCodec] {
+                auto title = trString("Error");
+                auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", gpuCodec);
+                auto ok = trString("Ok");
+                FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
             });
-        } else if (!isGpuCodec) {
-            RenderConfig cpuCfg = config;
-            cpuCfg.useGpu = false;
-            cpuCfg.gpuEncoder.clear();
-            if (!testCodec(ffmpegPath, gpuCodec, buildQualitySection(resolve(cpuCfg)))) {
-                m_resolvedParams.reset();
-                Loader::get()->queueInMainThread([gpuCodec] {
-                    auto title = trString("Error");
-                    auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", gpuCodec);
-                    auto ok = trString("Ok");
-                    FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
-                });
-                return;
-            }
+            return;
         }
     }
 #endif
@@ -1487,6 +1498,9 @@ void Renderer::start(const RenderConfig& config) {
     extraAudioArgs  = m_resolvedParams->audioArgs;
     audioCodec      = m_resolvedParams->audioCodec;
     m_extOverride   = m_resolvedParams->ext;
+
+    if (config.codecFamily == RenderCodecFamily::H265 && usingApi)
+        m_extOverride = ".mkv";
 
     start();
 }
@@ -1767,7 +1781,13 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         if (!availableCodecs.empty() && std::find(availableCodecs.begin(), availableCodecs.end(), settings.m_codec) == availableCodecs.end()) {
             log::warn("Codec '{}' not found in available codecs, trying fallbacks...", settings.m_codec);
-            std::vector<std::string> fallbacks = {"libx264", "h264", "libx264rgb", "mpeg4", "libvpx-vp9"};
+            std::vector<std::string> fallbacks;
+            bool wantHevc = settings.m_codec.find("hevc") != std::string::npos
+                         || settings.m_codec.find("265")  != std::string::npos;
+            if (wantHevc)
+                fallbacks = {"hevc_nvenc", "hevc_amf", "hevc_qsv", "libx265"};
+            for (const char* fb : {"libx264", "h264", "libx264rgb", "mpeg4", "libvpx-vp9"})
+                fallbacks.emplace_back(fb);
             bool found = false;
             for (auto& fb : fallbacks) {
                 if (std::find(availableCodecs.begin(), availableCodecs.end(), fb) != availableCodecs.end()) {
@@ -1862,6 +1882,13 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 // override is still appended (see buildQualitySection). I love when it took me
                 // 1h just to fix this, dont delete this because its a note
                 std::string qualitySection = buildQualitySection(rp);
+                if (!rp.tuning.empty()) qualitySection += " " + rp.tuning;
+                {
+                    bool isHevc = rp.codec.find("hevc") != std::string::npos
+                               || rp.codec.find("265")  != std::string::npos;
+                    if (isHevc && (rp.ext == ".mp4" || rp.ext == ".mov" || rp.ext == ".m4v"))
+                        qualitySection += " -tag:v hvc1";
+                }
 
                 bool nv12Pipe = renderTex.nv12;
                 std::string vfArg;
