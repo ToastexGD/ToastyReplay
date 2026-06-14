@@ -2557,7 +2557,7 @@ void MenuInterface::drawReplayTab() {
             }
             if (convertClicked && canStartConversion) {
                 auto sourcePath = selectedForeign->path;
-                auto target = replayConvertTargetTTR ? toasty::conversion::ConversionTarget::TTR : toasty::conversion::ConversionTarget::GDR;
+                auto target = replayConvertTargetTTR ? toasty::conversion::ConversionTarget::TTR3 : toasty::conversion::ConversionTarget::GDR;
                 std::string requestedName = replayConvertNameBuffer;
                 std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
                 auto outputDirectory = getReplayDirectoryPath();
