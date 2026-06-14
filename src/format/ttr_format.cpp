@@ -1,4 +1,6 @@
 #include "ttr_format.hpp"
+#include "ttr3_format.hpp"
+#include "core/replay_timing.hpp"
 #include "utils.hpp"
 
 #include <algorithm>
@@ -296,6 +298,7 @@ static void writeAnchorPlayer(std::vector<uint8_t>& payload, PlayerStateBundle c
     if (state.flags.dead) stateFlags |= 1 << 4;
     if (state.environment.dualContext) stateFlags |= 1 << 5;
     if (state.environment.twoPlayerContext) stateFlags |= 1 << 6;
+    if (includeExtended && state.environment.extendedState) stateFlags |= 1 << 7;
     writeLE<uint8_t>(payload, stateFlags);
     writeLE<uint8_t>(payload, packHoldMask(state.flags.buttonHolds));
 
@@ -346,6 +349,7 @@ static PlayerStateBundle readAnchorPlayer(TTRReadContext& ctx, bool includeExten
     state.flags.dead = (stateFlags & (1 << 4)) != 0;
     state.environment.dualContext = (stateFlags & (1 << 5)) != 0;
     state.environment.twoPlayerContext = (stateFlags & (1 << 6)) != 0;
+    bool extendedFlagSet = (stateFlags & (1 << 7)) != 0;
     state.flags.buttonHolds = unpackHoldMask(readLE<uint8_t>(ctx));
 
     if (includeExtended && !ctx.failed) {
@@ -372,7 +376,16 @@ static PlayerStateBundle readAnchorPlayer(TTRReadContext& ctx, bool includeExten
         state.environment.stateDartSlide = readLE<int32_t>(ctx);
         state.environment.stateFlipGravity = readLE<int32_t>(ctx);
         state.environment.stateForce = readLE<int32_t>(ctx);
-        state.environment.extendedState = !ctx.failed;
+        if (ctx.failed) {
+            state.environment.extendedState = false;
+        } else if (extendedFlagSet) {
+            state.environment.extendedState = true;
+        } else {
+            bool looksRealNative = state.environment.vehicleSize > 0.0f
+                || state.environment.playerSpeed > 0.0f
+                || state.environment.gravityMod > 0.0f;
+            state.environment.extendedState = looksRealNative;
+        }
     }
     return state;
 }
@@ -428,54 +441,6 @@ static PlayerStateBundle convertLegacySnapshot(LegacyTTRPlayerSnapshot const& sn
     return state;
 }
 
-static void writeHeader(std::vector<uint8_t>& buffer, TTRMacro const& macro) {
-    buffer.push_back('T');
-    buffer.push_back('T');
-    buffer.push_back('R');
-    buffer.push_back('2');
-
-    writeLE<uint16_t>(buffer, TTR2_FORMAT_VERSION);
-
-    uint32_t flags = 0;
-    AccuracyMode storedAccuracyMode = writableAccuracyMode(macro.accuracyMode);
-    bool hasExactCbsTiming = macro.exactCbsTiming || std::any_of(macro.inputs.begin(), macro.inputs.end(), [](TTRInput const& input) {
-        return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
-    });
-    if (!hasExactCbsTiming) {
-        hasExactCbsTiming = std::any_of(macro.persistenceAttempts.begin(), macro.persistenceAttempts.end(), [](TTRAttemptSegment const& attempt) {
-            return std::any_of(attempt.inputs.begin(), attempt.inputs.end(), [](TTRInput const& input) {
-                return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
-            });
-        });
-    }
-    if (storedAccuracyMode == AccuracyMode::CBS) flags |= TTR_FLAG_ACCURACY_CBS;
-    if (storedAccuracyMode == AccuracyMode::CBS && hasExactCbsTiming) flags |= TTR_FLAG_EXACT_CBS_TIMING;
-    if (macro.recordedFromStartPos) flags |= TTR_FLAG_FROM_START_POS;
-    if (macro.platformerMode) flags |= TTR_FLAG_PLATFORMER;
-    if (macro.twoPlayerMode) flags |= TTR_FLAG_TWO_PLAYER;
-    if (macro.rngLocked) flags |= TTR_FLAG_RNG_LOCKED;
-    if (!macro.persistenceAttempts.empty()) flags |= TTR_FLAG_PERSISTENCE;
-    writeLE<uint32_t>(buffer, flags);
-
-    size_t headerSizePosition = buffer.size();
-    writeLE<uint32_t>(buffer, 0);
-
-    writeString(buffer, macro.author);
-    writeString(buffer, macro.name);
-    writeString(buffer, macro.levelName);
-    writeLE<int32_t>(buffer, macro.levelId);
-    writeLE<double>(buffer, macro.framerate);
-    writeLE<double>(buffer, macro.duration);
-    writeLE<uint32_t>(buffer, macro.gameVersion);
-    writeLE<float>(buffer, macro.startPosX);
-    writeLE<float>(buffer, macro.startPosY);
-    writeLE<uint32_t>(buffer, macro.rngSeed);
-    writeLE<int64_t>(buffer, macro.recordTimestamp);
-
-    uint32_t headerSize = static_cast<uint32_t>(buffer.size());
-    std::memcpy(buffer.data() + headerSizePosition, &headerSize, sizeof(uint32_t));
-}
-
 void TTRMacro::recordAction(std::vector<TTRInput>& target, int tick, int button, bool player2, bool pressed, float offset, double cbsTimeOffset) {
     TTRInput input;
     input.tick = tick;
@@ -483,6 +448,15 @@ void TTRMacro::recordAction(std::vector<TTRInput>& target, int tick, int button,
     input.setPlayer2(player2);
     input.setPressed(pressed);
     input.stepOffset = offset;
+
+    double safeFramerate = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
+    input.timeSeconds = static_cast<double>(std::max(0, tick)) / safeFramerate;
+    if (std::isfinite(cbsTimeOffset) && cbsTimeOffset >= 0.0) {
+        input.timeSeconds += cbsTimeOffset;
+    } else if (std::isfinite(offset) && offset > 0.0f) {
+        input.timeSeconds += static_cast<double>(offset) / safeFramerate;
+    }
+
     if (std::isfinite(cbsTimeOffset) && cbsTimeOffset >= 0.0f) {
         input.cbsTimeOffset = cbsTimeOffset;
         exactCbsTiming = true;
@@ -497,6 +471,8 @@ void TTRMacro::recordAction(int tick, int button, bool player2, bool pressed, fl
 void TTRMacro::recordAnchor(std::vector<PlaybackAnchor>& target, int tick, PlayerObject* p1, PlayerObject* p2, bool isPlatformer, bool isDual) {
     PlaybackAnchor anchor;
     anchor.tick = tick;
+    double safeFramerate = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
+    anchor.timeSeconds = static_cast<double>(std::max(0, tick)) / safeFramerate;
     anchor.hasPlayer2 = isDual;
     anchor.player1 = capturePlayerState(p1, isPlatformer, isDual, twoPlayerMode);
     anchor.player1LatchMask = packHoldMask(anchor.player1.flags.buttonHolds);
@@ -530,79 +506,12 @@ void TTRMacro::truncateAfter(int tick) {
     }
 }
 
-static void writeTTR2Inputs(std::vector<uint8_t>& payload, std::vector<TTRInput> const& inputList, bool storeExactCbsTiming) {
-    writeLE<uint32_t>(payload, static_cast<uint32_t>(inputList.size()));
-    int32_t previousInputTick = 0;
-    for (auto const& input : inputList) {
-        writeVarint(payload, static_cast<uint32_t>(input.tick - previousInputTick));
-        previousInputTick = input.tick;
-        writeLE<uint8_t>(payload, input.actionType);
-        writeLE<uint8_t>(payload, input.flags);
-        if (storeExactCbsTiming) {
-            writeLE<double>(payload, input.cbsTimeOffset);
-        }
-    }
-}
-
-static void writeTTR2Anchors(std::vector<uint8_t>& payload, std::vector<PlaybackAnchor> const& anchorList) {
-    writeLE<uint32_t>(payload, static_cast<uint32_t>(anchorList.size()));
-    int32_t previousAnchorTick = 0;
-    for (auto const& anchor : anchorList) {
-        writeVarint(payload, static_cast<uint32_t>(anchor.tick - previousAnchorTick));
-        previousAnchorTick = anchor.tick;
-
-        uint8_t anchorFlags = 0;
-        if (anchor.hasPlayer2) anchorFlags |= 1 << 0;
-        if (anchor.rng.fastRandState != 0) anchorFlags |= 1 << 1;
-        writeLE<uint8_t>(payload, anchorFlags);
-        writeAnchorPlayer(payload, anchor.player1, true);
-        writeLE<uint8_t>(payload, anchor.player1LatchMask);
-        if (anchor.hasPlayer2) {
-            writeAnchorPlayer(payload, anchor.player2, true);
-            writeLE<uint8_t>(payload, anchor.player2LatchMask);
-        }
-        if ((anchorFlags & (1 << 1)) != 0) {
-            writeLE<uint64_t>(payload, static_cast<uint64_t>(anchor.rng.fastRandState));
-        }
-    }
-}
-
 std::vector<uint8_t> TTRMacro::serialize() const {
-    std::vector<uint8_t> output;
-    output.reserve(256);
-    writeHeader(output, *this);
-    AccuracyMode storedAccuracyMode = writableAccuracyMode(accuracyMode);
-    bool storeExactCbsTiming = storedAccuracyMode == AccuracyMode::CBS;
+    return serializeTTR3();
+}
 
-    std::vector<uint8_t> payload;
-    payload.reserve(inputs.size() * (storeExactCbsTiming ? 11 : 3) + anchors.size() * 180 + checkpoints.size() * 16 + persistenceAttempts.size() * 32 + 16);
-
-    writeTTR2Inputs(payload, inputs, storeExactCbsTiming);
-    writeTTR2Anchors(payload, anchors);
-
-    writeLE<uint32_t>(payload, static_cast<uint32_t>(checkpoints.size()));
-    for (auto const& checkpoint : checkpoints) {
-        writeLE<int32_t>(payload, checkpoint.tick);
-        writeLE<uint64_t>(payload, checkpoint.rngState);
-        writeLE<int32_t>(payload, checkpoint.priorTick);
-    }
-
-    writeLE<uint32_t>(payload, static_cast<uint32_t>(persistenceAttempts.size()));
-    for (auto const& attempt : persistenceAttempts) {
-        writeLE<int32_t>(payload, attempt.deathTick);
-        writeLE<uint8_t>(payload, attempt.deathPlayer2 ? 1 : 0);
-        writeTTR2Inputs(payload, attempt.inputs, storeExactCbsTiming);
-        writeTTR2Anchors(payload, attempt.anchors);
-    }
-
-    std::vector<uint8_t> compressedPayload;
-    if (!zlibCompress(payload, compressedPayload)) {
-        log::warn("[TTR] Failed to compress macro payload");
-        return {};
-    }
-    writeLE<uint32_t>(output, static_cast<uint32_t>(payload.size()));
-    output.insert(output.end(), compressedPayload.begin(), compressedPayload.end());
-    return output;
+std::vector<uint8_t> TTRMacro::serializeTTR3() const {
+    return toasty::ttr3::serialize(toasty::ttr3::fromTTRMacro(*this));
 }
 
 static bool readSharedMetadata(
@@ -915,7 +824,7 @@ static TTRMacro* deserializeTTR2CompressedPayload(
     }
 
     TTRReadContext payloadCtx { payload, 0 };
-    bool hasCbsTiming = macro->accuracyMode == AccuracyMode::CBS;
+    bool hasCbsTiming = usesTimedAccuracy(macro->accuracyMode);
     readTTR2Inputs(payloadCtx, macro, macro->inputs, hasCbsTiming);
     readTTR2Anchors(payloadCtx, macro, macro->anchors);
 
@@ -955,13 +864,23 @@ static TTRMacro* deserializeTTR2CompressedPayload(
         return nullptr;
     }
 
-    macro->exactCbsTiming = macro->accuracyMode == AccuracyMode::CBS && std::any_of(macro->inputs.begin(), macro->inputs.end(), [](TTRInput const& input) {
+    macro->exactCbsTiming = usesTimedAccuracy(macro->accuracyMode) && std::any_of(macro->inputs.begin(), macro->inputs.end(), [](TTRInput const& input) {
         return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0;
     });
     return macro;
 }
 
 TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
+    if (data.size() >= 4 && data[0] == 'T' && data[1] == 'T' && data[2] == 'R' && data[3] == '3') {
+        std::string error;
+        auto macro = toasty::ttr3::deserialize(data, &error);
+        if (!macro) {
+            log::error("[TR-FMT][E006] TTR3 strict deserialize rejected file: {}", error);
+            return nullptr;
+        }
+        return new TTRMacro(toasty::ttr3::toTTRMacro(*macro));
+    }
+
     if (data.size() < 14) {
         return nullptr;
     }
@@ -979,7 +898,8 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
     }
     uint16_t supportedVersion = isTTR2 ? TTR2_FORMAT_VERSION : TTR_FORMAT_VERSION;
     if (version > supportedVersion) {
-        log::warn("[TTR] Format version {} is newer than supported ({})", version, supportedVersion);
+        log::error("[TR-FMT][E008] TTR format version {} is newer than max supported ({}); refusing to load",
+            version, supportedVersion);
         return nullptr;
     }
 
@@ -991,13 +911,15 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
 
     auto* macro = new TTRMacro();
     macro->fileFormat = isTTR2 ? TTRFileFormat::TTR2 : TTRFileFormat::LegacyTTR;
-    if ((flags & TTR_FLAG_ACCURACY_CBS) != 0) {
+    if ((flags & TTR_FLAG_ACCURACY_CBF) != 0) {
+        macro->accuracyMode = AccuracyMode::CBF;
+    } else if ((flags & TTR_FLAG_ACCURACY_CBS) != 0) {
         macro->accuracyMode = AccuracyMode::CBS;
     } else {
         macro->accuracyMode = AccuracyMode::Vanilla;
     }
     macro->exactCbsTiming = isTTR2
-        ? ((flags & TTR_FLAG_EXACT_CBS_TIMING) != 0 && macro->accuracyMode == AccuracyMode::CBS)
+        ? ((flags & TTR_FLAG_EXACT_CBS_TIMING) != 0 && usesTimedAccuracy(macro->accuracyMode))
         : ((flags & TTR_FLAG_EXACT_CBS_TIMING) != 0 && version >= 6);
     macro->recordedFromStartPos = (flags & TTR_FLAG_FROM_START_POS) != 0;
     macro->platformerMode = (flags & TTR_FLAG_PLATFORMER) != 0;
@@ -1016,12 +938,53 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
 }
 
 void TTRMacro::persist() {
+    persistToDirectory(ReplayStorage::getReplayDirectoryPath());
+}
+
+double TTRMacro::maxSourceTps() const {
+    double result = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
+    for (auto const& event : tpsEvents) {
+        if (std::isfinite(event.tps) && event.tps > result) {
+            result = event.tps;
+        }
+    }
+    return result;
+}
+
+void TTRMacro::materializeTTR3RuntimeTicks(double runtimeTps) {
+    auto applyToInputs = [&](std::vector<TTRInput>& target) {
+        for (auto& input : target) {
+            if (input.hasAbsoluteTime()) {
+                input.tick = toasty::replay_timing::materializeTickFromTime(input.timeSeconds, runtimeTps);
+            }
+        }
+    };
+    auto applyToAnchors = [&](std::vector<PlaybackAnchor>& target) {
+        for (auto& anchor : target) {
+            if (anchor.hasAbsoluteTime()) {
+                anchor.tick = toasty::replay_timing::materializeTickFromTime(anchor.timeSeconds, runtimeTps);
+            }
+        }
+    };
+
+    applyToInputs(inputs);
+    applyToAnchors(anchors);
+
+    for (auto& attempt : persistenceAttempts) {
+        applyToInputs(attempt.inputs);
+        applyToAnchors(attempt.anchors);
+    }
+}
+
+void TTRMacro::persistToDirectory(std::filesystem::path const& directory) {
     author = GJAccountManager::get()->m_username;
     duration = 0.0;
     double safeFramerate = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
     for (auto const& input : inputs) {
-        double inputTime = static_cast<double>(std::max(0, input.tick)) / safeFramerate;
-        if (std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0) {
+        double inputTime = input.hasAbsoluteTime()
+            ? input.timeSeconds
+            : static_cast<double>(std::max(0, input.tick)) / safeFramerate;
+        if (!input.hasAbsoluteTime() && std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0) {
             inputTime += input.cbsTimeOffset;
         }
         duration = std::max(duration, inputTime);
@@ -1040,8 +1003,6 @@ void TTRMacro::persist() {
             stripTimedOffsets(attempt.inputs);
         }
         exactCbsTiming = false;
-    } else if (accuracyMode != AccuracyMode::CBS) {
-        exactCbsTiming = false;
     } else {
         exactCbsTiming = std::any_of(inputs.begin(), inputs.end(), [](TTRInput const& input) {
             return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
@@ -1055,33 +1016,95 @@ void TTRMacro::persist() {
         }
     }
 
-    auto directory = ReplayStorage::getReplayDirectoryPath();
     if (!std::filesystem::exists(directory)) {
-        std::filesystem::create_directory(directory);
+        std::filesystem::create_directories(directory);
     }
 
     std::string excludedName = loadedFromLegacyFormat() ? "" : persistedName;
-    name = ReplayStorage::makeUniqueReplayName(name, excludedName);
+    name = ReplayStorage::makeUniqueReplayNameInDirectory(directory, name, excludedName);
     persistedName = name;
+
+    fileFormat = TTRFileFormat::TTR3;
+    auto outputPath = directory / (name + ".ttr3");
+    if (!saveToPath(outputPath)) {
+        return;
+    }
+}
+
+bool TTRMacro::saveToPath(std::filesystem::path const& path) {
+    if (auto parent = path.parent_path(); !parent.empty() && !std::filesystem::exists(parent)) {
+        std::filesystem::create_directories(parent);
+    }
 
     auto bytes = serialize();
     if (bytes.empty()) {
-        log::warn("[TTR2] Failed to save macro {}", name);
-        return;
+        log::error("[TR-FMT][E009] serialize returned empty bytes for macro '{}' (engine bug)", name);
+        return false;
     }
-    auto outputPath = directory / (name + ".ttr2");
-    std::ofstream output(outputPath, std::ios::binary);
+
+    std::ofstream output(path, std::ios::binary);
+    if (!output.is_open()) {
+        log::error("[TR-FMT][E002] failed to open replay file for write: {}",
+            toasty::pathToUtf8(path));
+        return false;
+    }
     output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
     output.close();
-    fileFormat = TTRFileFormat::TTR2;
+    if (!output) {
+        log::error("[TR-FMT][E010] write of {} bytes failed for {}", bytes.size(),
+            toasty::pathToUtf8(path));
+        return false;
+    }
 
+    char const* tag = "I003";
+    char const* fmt = "TTR3";
+    if (fileFormat == TTRFileFormat::TTR2) { tag = "I002"; fmt = "TTR2"; }
+    else if (fileFormat == TTRFileFormat::LegacyTTR) { tag = "I001"; fmt = "TTR"; }
     log::info(
-        "[TTR2] Saved macro to {} ({} bytes, {} inputs, {} anchors)",
-        toasty::pathToUtf8(outputPath),
+        "[TR-FMT][{}] saved {} macro {} ({} bytes, {} inputs, {} anchors)",
+        tag,
+        fmt,
+        toasty::pathToUtf8(path),
         bytes.size(),
         inputs.size(),
         anchors.size()
     );
+    return true;
+}
+
+TTRMacro* TTRMacro::loadFromPath(std::filesystem::path const& path) {
+    auto bytes = ReplayStorage::readReplayBytes(path);
+    if (!bytes) {
+        return nullptr;
+    }
+
+    auto* macro = deserialize(*bytes);
+    if (!macro) {
+        log::error("[TR-FMT][E011] deserialize returned null for {}", toasty::pathToUtf8(path));
+        return nullptr;
+    }
+
+    auto stem = toasty::pathToUtf8(path.stem());
+    macro->name = stem;
+    macro->persistedName = stem;
+    auto extension = toasty::pathToUtf8(path.extension());
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (extension == ".ttr" && !macro->loadedFromTTR3()) {
+        macro->fileFormat = TTRFileFormat::LegacyTTR;
+    } else if (extension == ".ttr2" && !macro->loadedFromTTR3()) {
+        macro->fileFormat = TTRFileFormat::TTR2;
+    } else if (extension == ".ttr3" && macro->loadedFromTTR3()) {
+        macro->fileFormat = TTRFileFormat::TTR3;
+    }
+    char const* loadTag = "I010";
+    char const* loadFmt = "TTR";
+    if (macro->fileFormat == TTRFileFormat::TTR2) { loadTag = "I011"; loadFmt = "TTR2"; }
+    else if (macro->fileFormat == TTRFileFormat::TTR3) { loadTag = "I012"; loadFmt = "TTR3"; }
+    log::info("[TR-FMT][{}] loaded {} macro {} ({} inputs, {} anchors)", loadTag, loadFmt, stem,
+        macro->inputs.size(), macro->anchors.size());
+    return macro;
 }
 
 TTRMacro* TTRMacro::loadFromDisk(std::string const& filename) {
@@ -1096,9 +1119,10 @@ TTRMacro* TTRMacro::loadFromDisk(std::string const& filename) {
     std::transform(requestedExtension.begin(), requestedExtension.end(), requestedExtension.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
-    if (requestedExtension == ".ttr2" || requestedExtension == ".ttr") {
+    if (requestedExtension == ".ttr3" || requestedExtension == ".ttr2" || requestedExtension == ".ttr") {
         candidates.push_back(directory / requested);
     } else {
+        candidates.push_back(directory / (filename + ".ttr3"));
         candidates.push_back(directory / (filename + ".ttr2"));
         candidates.push_back(directory / (filename + ".ttr"));
         candidates.push_back(directory / filename);
@@ -1115,41 +1139,23 @@ TTRMacro* TTRMacro::loadFromDisk(std::string const& filename) {
         return nullptr;
     }
 
-    auto bytes = ReplayStorage::readReplayBytes(path);
-    if (!bytes) {
-        return nullptr;
-    }
-
-    auto* result = deserialize(*bytes);
-    if (result) {
-        auto stem = toasty::pathToUtf8(path.stem());
-        result->name = stem;
-        result->persistedName = stem;
-        auto extension = toasty::pathToUtf8(path.extension());
-        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        if (extension == ".ttr") {
-            result->fileFormat = TTRFileFormat::LegacyTTR;
-        }
-        log::info("[TTR] Loaded macro: {} ({} inputs, {} anchors)", stem, result->inputs.size(), result->anchors.size());
-    } else {
-        log::warn("[TTR] Failed to load macro {}", toasty::pathToUtf8(path));
-    }
-    return result;
+    return loadFromPath(path);
 }
 
 std::vector<MacroAction> TTRMacro::toMacroActions() const {
     std::vector<MacroAction> actions;
     actions.reserve(inputs.size());
     for (auto const& input : inputs) {
-        actions.emplace_back(
+        MacroAction action(
             input.tick,
             static_cast<int>(input.actionType),
             input.isPlayer2(),
             input.isPressed(),
             input.stepOffset
         );
+        action.timeSeconds = input.timeSeconds;
+        action.swiftPairAnchor = input.swiftPairAnchor;
+        actions.push_back(action);
     }
     return actions;
 }
@@ -1164,27 +1170,42 @@ std::vector<MacroAction> TTRMacro::toPersistenceMacroActions() const {
     actions.reserve(totalInputs);
 
     int32_t baseTick = 0;
+    double baseTimeSeconds = 0.0;
+    double safeFramerate = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
     for (auto const& attempt : persistenceAttempts) {
         for (auto const& input : attempt.inputs) {
-            actions.emplace_back(
+            MacroAction action(
                 baseTick + input.tick,
                 static_cast<int>(input.actionType),
                 input.isPlayer2(),
                 input.isPressed(),
                 input.stepOffset
             );
+            if (input.hasAbsoluteTime()) {
+                action.timeSeconds = baseTimeSeconds + input.timeSeconds;
+            }
+            action.swiftPairAnchor = input.swiftPairAnchor;
+            actions.push_back(action);
         }
         baseTick += std::max<int32_t>(1, attempt.deathTick);
+        baseTimeSeconds += attempt.hasAbsoluteDeathTime()
+            ? std::max(0.0, attempt.deathTimeSeconds)
+            : static_cast<double>(std::max<int32_t>(1, attempt.deathTick)) / safeFramerate;
     }
 
     for (auto const& input : inputs) {
-        actions.emplace_back(
+        MacroAction action(
             baseTick + input.tick,
             static_cast<int>(input.actionType),
             input.isPlayer2(),
             input.isPressed(),
             input.stepOffset
         );
+        if (input.hasAbsoluteTime()) {
+            action.timeSeconds = baseTimeSeconds + input.timeSeconds;
+        }
+        action.swiftPairAnchor = input.swiftPairAnchor;
+        actions.push_back(action);
     }
 
     return actions;

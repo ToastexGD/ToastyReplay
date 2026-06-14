@@ -1,7 +1,7 @@
 #include "conversion/macro_converter.hpp"
 
-#include "replay.hpp"
-#include "ttr_format.hpp"
+#include "format/replay.hpp"
+#include "format/ttr_format.hpp"
 #include "utils.hpp"
 
 #include <algorithm>
@@ -30,12 +30,14 @@ struct FormatError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+thread_local bool g_importForTTR3 = false;
+
 static constexpr uint8_t kTCMHeader[16] = {
     0x9f, 0x88, 0x89, 0x84, 0x9f, 0x3b, 0x1d, 0xd8,
     0xcc, 0xa1, 0x86, 0x8a, 0x88, 0x99, 0x84, 0x00
 };
 
-static constexpr std::array<ReplayFormat, 27> kSupportedReplayFormats = {
+static constexpr std::array<ReplayFormat, 28> kSupportedReplayFormats = {
     ReplayFormat::MegaHackJson,
     ReplayFormat::MegaHackBinary,
     ReplayFormat::TasBotJson,
@@ -62,6 +64,7 @@ static constexpr std::array<ReplayFormat, 27> kSupportedReplayFormats = {
     ReplayFormat::Silicate3,
     ReplayFormat::TCBot,
     ReplayFormat::GDR2,
+    ReplayFormat::GdrJson,
     ReplayFormat::UvBot,
 };
 
@@ -238,7 +241,10 @@ public:
         m_currentFps = fps;
         replay.dynamicTiming = true;
         replay.needsCbsTiming = true;
-        addWarningOnce(replay, "Dynamic TPS/FPS was converted using absolute timing.");
+        replay.tpsEvents.push_back({m_segmentTime, fps});
+        if (!replay.convertedForTTR3) {
+            addWarningOnce(replay, "Dynamic TPS/FPS was converted using absolute timing.");
+        }
     }
 
     double initialFps() const {
@@ -269,11 +275,18 @@ static PlayerStateBundle makeImportedPlayerState(
     double yVelocity,
     bool platformer
 ) {
+    auto sanitizeF = [](float value) -> float {
+        return std::isfinite(value) ? value : 0.0f;
+    };
+    auto sanitizeD = [](double value) -> double {
+        return std::isfinite(value) ? value : 0.0;
+    };
+
     PlayerStateBundle state;
-    state.motion.position = cocos2d::CCPoint { x, y };
-    state.motion.rotation = rotation;
-    state.motion.verticalVelocity = yVelocity;
-    state.motion.preSlopeVerticalVelocity = yVelocity;
+    state.motion.position = cocos2d::CCPoint { sanitizeF(x), sanitizeF(y) };
+    state.motion.rotation = sanitizeF(rotation);
+    state.motion.verticalVelocity = sanitizeD(yVelocity);
+    state.motion.preSlopeVerticalVelocity = sanitizeD(yVelocity);
     state.flags.platformer = platformer;
     state.environment.extendedState = false;
     return state;
@@ -292,8 +305,8 @@ static void addAnchor(
 
     PlaybackAnchor anchor;
     anchor.tick = static_cast<int>(std::clamp<int64_t>(
-        static_cast<int64_t>(std::llround(time * safeFps(replay.fps))),
-        0,
+        static_cast<int64_t>(std::floor(time * safeFps(replay.fps))) + 1,
+        1,
         std::numeric_limits<int32_t>::max()
     ));
     anchor.hasPlayer2 = player2.has_value();
@@ -319,8 +332,8 @@ static void addPlayerAnchor(
         time = std::isfinite(sourceFrame) && sourceFrame >= 0.0 ? sourceFrame / safeFps(replay.fps) : 0.0;
     }
     int tick = static_cast<int>(std::clamp<int64_t>(
-        static_cast<int64_t>(std::llround(time * safeFps(replay.fps))),
-        0,
+        static_cast<int64_t>(std::floor(time * safeFps(replay.fps))) + 1,
+        1,
         std::numeric_limits<int32_t>::max()
     ));
 
@@ -391,7 +404,8 @@ static void addInput(
     double sourceFrame,
     int button,
     bool player2,
-    bool pressed
+    bool pressed,
+    bool swift = false
 ) {
     if (!isFiniteFps(replay.fps)) replay.fps = 240.0;
     if (!std::isfinite(time) || time < 0.0) {
@@ -404,7 +418,7 @@ static void addInput(
     button = sanitizeButton(button);
     double rawTick = time * replay.fps;
     bool fractional = std::abs(rawTick - std::round(rawTick)) > 0.000001;
-    if (fractional) {
+    if (fractional && !g_importForTTR3) {
         replay.needsCbsTiming = true;
     }
 
@@ -419,21 +433,70 @@ static void addInput(
         button,
         player2,
         pressed,
+        swift,
         0.0f,
         -1.0f
     });
 }
 
 static bool inputLess(ImportedInput const& a, ImportedInput const& b) {
-    constexpr double kTimeEpsilon = 0.0000005;
-    if (std::abs(a.time - b.time) > kTimeEpsilon) return a.time < b.time;
-    if (std::abs(a.sourceFrame - b.sourceFrame) > kTimeEpsilon) return a.sourceFrame < b.sourceFrame;
-    if (a.player2 != b.player2 || a.button != b.button) return a.sequence < b.sequence;
-    // Same time/frame and same button: keep source order (sequence). Forcing
-    // release-before-press here would reorder a same-frame tap (e.g. a Silicate
-    // "swift" click: press + release on one frame) to release-first, and the dedup
-    // pass below would then drop the release, leaving the button stuck held.
+    if (a.time != b.time) return a.time < b.time;
+    if (a.sourceFrame != b.sourceFrame) return a.sourceFrame < b.sourceFrame;
     return a.sequence < b.sequence;
+}
+
+static void resolveSameTickButtonCollisions(ImportedReplay& replay) {
+    if (replay.inputs.size() < 2) {
+        return;
+    }
+
+    double fps = safeFps(replay.fps);
+    double tickDuration = 1.0 / fps;
+    bool anyAdjusted = false;
+
+    size_t i = 0;
+    while (i < replay.inputs.size()) {
+        int64_t tick = replay.inputs[i].tick;
+        size_t tickEnd = i + 1;
+        while (tickEnd < replay.inputs.size() && replay.inputs[tickEnd].tick == tick) {
+            ++tickEnd;
+        }
+
+        if (tickEnd - i > 1) {
+            std::unordered_map<int, std::vector<size_t>> groups;
+            for (size_t j = i; j < tickEnd; ++j) {
+                if (replay.inputs[j].swift) {
+                    continue;
+                }
+                int key = replay.inputs[j].button | (replay.inputs[j].player2 ? 0x100 : 0x000);
+                groups[key].push_back(j);
+            }
+
+            for (auto const& entry : groups) {
+                auto const& indices = entry.second;
+                if (indices.size() < 2) continue;
+
+                if (!replay.inputs[indices.front()].pressed) {
+                    continue;
+                }
+
+                double baseTime = static_cast<double>(tick) / fps;
+                double fractionStep = 1.0 / static_cast<double>(indices.size());
+                for (size_t k = 0; k < indices.size(); ++k) {
+                    double fraction = static_cast<double>(k) * fractionStep;
+                    replay.inputs[indices[k]].time = baseTime + fraction * tickDuration;
+                }
+                anyAdjusted = true;
+            }
+        }
+
+        i = tickEnd;
+    }
+
+    if (anyAdjusted) {
+        replay.needsCbsTiming = true;
+        addWarningOnce(replay, "Spread same-tick taps across sub-ticks for accurate playback.");
+    }
 }
 
 static void populateAnchorHolds(ImportedReplay& replay) {
@@ -471,6 +534,11 @@ static void populateAnchorHolds(ImportedReplay& replay) {
 }
 
 static void finishImport(ImportedReplay& replay) {
+    if (replay.convertedForTTR3 || g_importForTTR3) {
+        finishImportForTTR3(replay);
+        return;
+    }
+
     if (!isFiniteFps(replay.fps)) {
         replay.warnings.push_back("Invalid source FPS; using 240 TPS.");
         replay.fps = 240.0;
@@ -478,6 +546,7 @@ static void finishImport(ImportedReplay& replay) {
 
     std::stable_sort(replay.inputs.begin(), replay.inputs.end(), inputLess);
 
+    std::array<bool, 6> held = { false, false, false, false, false, false };
     std::vector<ImportedInput> normalized;
     normalized.reserve(replay.inputs.size());
     size_t removedDuplicates = 0;
@@ -485,24 +554,18 @@ static void finishImport(ImportedReplay& replay) {
     for (auto input : replay.inputs) {
         input.button = sanitizeButton(input.button);
         input.tick = static_cast<int64_t>(std::llround(std::max(0.0, input.time * replay.fps)));
-
-        if (!normalized.empty()) {
-            auto const& last = normalized.back();
-            if (last.tick == input.tick &&
-                last.button == input.button &&
-                last.player2 == input.player2 &&
-                last.pressed == input.pressed) {
-                ++removedDuplicates;
-                continue;
-            }
+        size_t idx = (input.player2 ? 3u : 0u) + static_cast<size_t>(input.button - 1);
+        if (!input.swift && held[idx] == input.pressed) {
+            ++removedDuplicates;
+            continue;
         }
-
+        held[idx] = input.pressed;
         input.sequence = static_cast<uint64_t>(normalized.size());
         normalized.push_back(input);
     }
 
     if (removedDuplicates != 0) {
-        addWarningOnce(replay, "Removed consecutive duplicate input transitions.");
+        addWarningOnce(replay, "Removed duplicate or stale input transitions.");
     }
     replay.inputs = std::move(normalized);
 
@@ -512,6 +575,7 @@ static void finishImport(ImportedReplay& replay) {
     }
 
     populateAnchorHolds(replay);
+    resolveSameTickButtonCollisions(replay);
 }
 
 static bool hasMagic(std::vector<uint8_t> const& data, std::string_view magic) {
@@ -567,11 +631,15 @@ static ReplayFormat detectJsonFormat(gdr::json const& json, std::string const& f
     if (ReplayJson::getArray(*object, "Echo Replay")) {
         return ReplayFormat::Echo;
     }
+    if (ReplayJson::getFloat<double>(*object, "framerate") && ReplayJson::getArray(*object, "inputs")) {
+        return ReplayFormat::GdrJson;
+    }
     if (ReplayJson::getFloat<double>(*object, "fps") && ReplayJson::getArray(*object, "inputs")) {
         return ReplayFormat::Echo;
     }
     if (endsWith(filename, ".mhr.json")) return ReplayFormat::MegaHackJson;
     if (endsWith(filename, ".echo.json")) return ReplayFormat::Echo;
+    if (endsWith(filename, ".gdr.json")) return ReplayFormat::GdrJson;
     return ReplayFormat::TasBotJson;
 }
 
@@ -580,6 +648,7 @@ static ReplayFormat guessByExtension(std::filesystem::path const& path) {
     auto ext = lowerCopy(toasty::pathToUtf8(path.extension()));
     if (endsWith(filename, ".mhr.json")) return ReplayFormat::MegaHackJson;
     if (endsWith(filename, ".echo.json")) return ReplayFormat::Echo;
+    if (endsWith(filename, ".gdr.json")) return ReplayFormat::GdrJson;
     if (ext == ".json") return ReplayFormat::TasBotJson;
     if (ext == ".mhr") return ReplayFormat::MegaHackBinary;
     if (ext == ".zbf") return ReplayFormat::ZBotFrame;
@@ -963,7 +1032,6 @@ static ImportedReplay parseEchoJson(gdr::json const& json) {
     ImportedReplay replay;
     replay.format = ReplayFormat::Echo;
 
-    // Old Echo JSON: { "FPS", "Starting Frame", "Echo Replay": [ { "Frame", "Player 2", "Hold" } ] }
     if (auto const* echoReplay = ReplayJson::getArray(*object, "Echo Replay")) {
         replay.fps = ReplayJson::getFloat<double>(*object, "FPS").value_or(240.0);
         int64_t startingFrame = ReplayJson::getInteger<int64_t>(*object, "Starting Frame").value_or(0);
@@ -981,7 +1049,6 @@ static ImportedReplay parseEchoJson(gdr::json const& json) {
         return replay;
     }
 
-    // New Echo JSON: { "fps", "inputs": [ { "frame", "holding", "player_2" } ] }
     auto const* inputs = ReplayJson::getArray(*object, "inputs");
     if (!inputs) throw FormatError("Echo JSON is missing the 'inputs'/'Echo Replay' array");
     replay.fps = ReplayJson::getFloat<double>(*object, "fps").value_or(240.0);
@@ -1023,12 +1090,12 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
     if (std::memcmp(data.data(), kTCMHeader, 16) != 0) throw FormatError("invalid TCM header");
 
     ByteReader reader(data);
-    reader.skip(16); // header
+    reader.skip(16);
 
-    uint8_t version = reader.u8(); // meta byte 0
-    reader.skip(3); // bytes 1-3 (append_counter, flags, padding)
-    float tps = reader.f32le(); // bytes 4-7
-    reader.skip(0x40 - 8); // rest of 0x40 meta block
+    uint8_t version = reader.u8();
+    reader.skip(3);
+    float tps = reader.f32le();
+    reader.skip(0x40 - 8);
 
     ImportedReplay replay;
     replay.format = ReplayFormat::TCBot;
@@ -1041,14 +1108,13 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
             uint32_t frame = readLEB128(reader);
             uint8_t inputByte = reader.u8();
             uint8_t inputType = inputByte & 0x07;
-            if (inputType >= 3) continue; // restart/death inputs, skip
+            if (inputType >= 3) continue;
             bool pressed = (inputByte & 0x80) != 0;
             bool player2 = (inputByte & 0x40) != 0;
-            int button = static_cast<int>(inputType) + 1; // 0->1(jump), 1->2(left), 2->3(right)
+            int button = static_cast<int>(inputType) + 1;
             addInput(replay, static_cast<double>(frame) / replay.fps, frame, button, player2, pressed);
         }
     } else if (version == 2) {
-        // V2: first frame as LEB128, then delta-encoded action stream
         uint32_t currentFrame = readLEB128(reader);
         uint64_t lastDelta = 0;
 
@@ -1056,37 +1122,29 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
             uint8_t byte = reader.u8();
             uint8_t deltaData = (byte >> 5) & 0x07;
             uint8_t inputData = byte & 0x03;
-
-            // Decode delta info
             bool deltaMagic = (deltaData & 1) != 0;
             uint8_t deltaBlob = (deltaData >> 1) & 0x03;
 
             if (inputData > 0) {
-                // Vanilla input
                 bool pressed = (byte & 0x04) != 0;
                 bool player2 = (byte & 0x08) != 0;
                 bool swift = (byte & 0x10) != 0;
-                int button = static_cast<int>(inputData); // 1=jump, 2=left, 3=right
+                int button = static_cast<int>(inputData);
                 addInput(replay, static_cast<double>(currentFrame) / replay.fps, currentFrame, button, player2, pressed);
                 if (swift) {
                     addInput(replay, static_cast<double>(currentFrame) / replay.fps, currentFrame, button, player2, !pressed);
                 }
             } else {
-                // Custom input (restart/tps/bugpoint) - skip the extra data
                 uint8_t customType = (byte >> 2) & 0x03;
                 bool extra = (byte & 0x10) != 0;
                 if (customType == 3) {
                     if (!extra) {
-                        // TPS change - read 4 bytes
                         if (reader.remaining() < 4) break;
                         float newTps = reader.f32le();
                         replay.fps = static_cast<double>(newTps);
                     }
-                    // bugpoint: no extra data
                 } else {
-                    // Restart
                     if (extra) {
-                        // Has seed - read 8 bytes
                         if (reader.remaining() < 8) break;
                         reader.skip(8);
                     }
@@ -1094,7 +1152,6 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
                 }
             }
 
-            // Read frame delta
             uint64_t delta = 0;
             if (deltaBlob == 0) {
                 delta = deltaMagic ? lastDelta : 0;
@@ -1138,7 +1195,8 @@ static void addSilicatePlayerInput(
     uint64_t frame,
     int button,
     bool player2,
-    bool pressed
+    bool pressed,
+    bool swift = false
 ) {
     addInput(
         replay,
@@ -1146,7 +1204,8 @@ static void addSilicatePlayerInput(
         static_cast<double>(frame),
         button,
         player2,
-        pressed
+        pressed,
+        swift
     );
 }
 
@@ -1208,8 +1267,8 @@ static void addSilicate3PlayerInput(
 ) {
     currentFrame += input.delta;
     if (input.swift) {
-        addSilicatePlayerInput(replay, timeline, currentFrame, 1, input.player2, true);
-        addSilicatePlayerInput(replay, timeline, currentFrame, 1, input.player2, false);
+        addSilicatePlayerInput(replay, timeline, currentFrame, 1, input.player2, true, true);
+        addSilicatePlayerInput(replay, timeline, currentFrame, 1, input.player2, false, true);
         actionCount += 2;
         return;
     }
@@ -1261,9 +1320,6 @@ static void readSilicate3Section(
         } else if (specialType <= 2) {
             reader.u64le();
         } else if (specialType == 4) {
-            // Bugpoint (SLC3 SpecialType::Bugpoint): a frame marker with no payload.
-            // Advance the frame only; earlier versions threw here, which made any
-            // Silicate 3 macro containing a bugpoint fail to convert.
         } else {
             throw FormatError("invalid Silicate 3 special section");
         }
@@ -1351,6 +1407,7 @@ static ImportedReplay parseSilicate3(std::vector<uint8_t> const& data) {
             if (atomEnd - reader.position() < 12) throw FormatError("invalid Silicate 3 atom");
             uint32_t atomId = reader.u32le();
             uint64_t atomSize = reader.u64le();
+            atomSize &= ~(0xFFull << 56);
             if (atomId == 1) {
                 uint64_t actionCount = reader.u64le();
                 uint64_t actionsRead = 0;
@@ -1764,6 +1821,37 @@ static ImportedReplay parseGDR2(std::vector<uint8_t> const& data) {
     return replay;
 }
 
+static ImportedReplay parseGdrJson(std::vector<uint8_t> const& data) {
+    auto json = parseJson(data);
+    if (!json) throw FormatError("invalid GDR JSON");
+    auto const* object = ReplayJson::asObject(*json);
+    if (!object) throw FormatError("GDR JSON root is not an object");
+    auto const* inputs = ReplayJson::getArray(*object, "inputs");
+    if (!inputs) throw FormatError("GDR JSON missing inputs array");
+
+    ImportedReplay replay;
+    replay.format = ReplayFormat::GdrJson;
+    replay.fps = ReplayJson::getFloat<double>(*object, "framerate").value_or(240.0);
+    if (auto const* level = ReplayJson::getObject(*object, "level")) {
+        replay.levelId = ReplayJson::getInteger<int32_t>(*level, "id").value_or(0);
+        replay.levelName = ReplayJson::getString(*level, "name").value_or(std::string{});
+    }
+
+    for (auto const& entry : *inputs) {
+        auto const* action = ReplayJson::asObject(entry);
+        if (!action) continue;
+        auto frame = ReplayJson::getInteger<int64_t>(*action, "frame");
+        if (!frame) continue;
+        int button = sanitizeButton(ReplayJson::getInteger<int>(*action, "btn").value_or(1));
+        bool pressed = ReplayJson::getBool(*action, "down").value_or(false);
+        bool player2 = ReplayJson::getBool(*action, "2p").value_or(false);
+        addInput(replay, static_cast<double>(*frame) / replay.fps, static_cast<double>(*frame), button, player2, pressed);
+    }
+
+    finishImport(replay);
+    return replay;
+}
+
 static ImportedReplay parseGDMO(std::vector<uint8_t> const& data) {
     {
         try {
@@ -1922,6 +2010,7 @@ static ImportedReplay parseByFormat(ReplayFormat format, std::vector<uint8_t> co
         case ReplayFormat::Silicate3: return parseSilicate3(data);
         case ReplayFormat::TCBot: return parseTCBot(data);
         case ReplayFormat::GDR2: return parseGDR2(data);
+        case ReplayFormat::GdrJson: return parseGdrJson(data);
         case ReplayFormat::UvBot: return parseUvBot(data);
         default:
             throw FormatError(std::string(formatDisplayName(format)) + " is recognized but not supported by the native importer yet.");
@@ -1963,6 +2052,7 @@ static std::vector<ImportedInput> prepareOutputInputs(ImportedReplay const& repl
 
     std::vector<ImportedInput> result;
     result.reserve(replay.inputs.size());
+    double maxTick = static_cast<double>(std::numeric_limits<int32_t>::max());
     for (auto input : replay.inputs) {
         double rawTick = std::max(0.0, input.time * fps);
         if (useCbsTiming) {
@@ -1974,19 +2064,11 @@ static std::vector<ImportedInput> prepareOutputInputs(ImportedReplay const& repl
                 tickFloor += 1.0;
                 fraction = 0.0;
             }
-            input.tick = static_cast<int64_t>(std::clamp<double>(
-                tickFloor,
-                0.0,
-                static_cast<double>(std::numeric_limits<int32_t>::max())
-            ));
+            input.tick = static_cast<int64_t>(std::clamp<double>(tickFloor + 1.0, 1.0, maxTick));
             input.stepOffset = static_cast<float>(std::clamp(fraction, 0.0, 0.999999));
             input.cbsTimeOffset = fraction / fps;
         } else {
-            input.tick = static_cast<int64_t>(std::clamp<double>(
-                std::llround(rawTick),
-                0.0,
-                static_cast<double>(std::numeric_limits<int32_t>::max())
-            ));
+            input.tick = static_cast<int64_t>(std::clamp<int64_t>(input.tick + 1, 1, std::numeric_limits<int32_t>::max()));
             input.stepOffset = 0.0f;
             input.cbsTimeOffset = -1.0;
         }
@@ -1994,13 +2076,11 @@ static std::vector<ImportedInput> prepareOutputInputs(ImportedReplay const& repl
     }
     std::stable_sort(result.begin(), result.end(), [](ImportedInput const& a, ImportedInput const& b) {
         if (a.tick != b.tick) return a.tick < b.tick;
-        if (a.cbsTimeOffset >= 0.0f && b.cbsTimeOffset >= 0.0f &&
-            std::abs(a.cbsTimeOffset - b.cbsTimeOffset) > 0.000001f) {
+        bool aHasCbs = a.cbsTimeOffset >= 0.0;
+        bool bHasCbs = b.cbsTimeOffset >= 0.0;
+        if (aHasCbs && bHasCbs && a.cbsTimeOffset != b.cbsTimeOffset) {
             return a.cbsTimeOffset < b.cbsTimeOffset;
         }
-        // Keep source order for same-tick, same-button transitions so a same-frame
-        // tap stays press-before-release (see inputLess). Reordering to release-first
-        // would net a stuck "held" button on playback.
         return a.sequence < b.sequence;
     });
     return result;
@@ -2024,7 +2104,11 @@ static double preparedDuration(
 }
 
 static std::string conversionTargetExtension(ConversionTarget target) {
-    return target == ConversionTarget::TTR ? ".ttr2" : ".gdr";
+    switch (target) {
+        case ConversionTarget::TTR3: return ".ttr3";
+        case ConversionTarget::GDR: return ".gdr";
+    }
+    return ".gdr";
 }
 
 static double nativeGDRDuration(MacroSequence const& macro, double fps) {
@@ -2068,6 +2152,7 @@ const char* formatDisplayName(ReplayFormat format) {
         case ReplayFormat::Silicate2: return "Silicate 2";
         case ReplayFormat::Silicate3: return "Silicate 3";
         case ReplayFormat::GDR2: return "GDReplayFormat 2";
+        case ReplayFormat::GdrJson: return "GDReplayFormat JSON";
         case ReplayFormat::UvBot: return "uvBot";
         case ReplayFormat::TCBot: return "TCBot";
         default: return "Unknown";
@@ -2161,21 +2246,30 @@ ConversionResult convertReplay(
     std::filesystem::path const& outputDirectory
 ) {
     ConversionResult result;
+    geode::log::info("[TR-CONV][I002] conversion started: src={} target={}",
+        toasty::pathToUtf8(sourcePath), static_cast<int>(target));
     try {
         std::error_code ec;
         if (!std::filesystem::exists(outputDirectory, ec)) {
             std::filesystem::create_directories(outputDirectory, ec);
         }
         if (ec) {
+            geode::log::error("[TR-CONV][E004] replay output directory unavailable: {} ({})",
+                toasty::pathToUtf8(outputDirectory), ec.message());
             throw FormatError("Replay folder is unavailable.");
         }
 
         std::string importError;
         auto imported = importReplay(sourcePath, &importError);
         if (!imported) {
+            geode::log::error("[TR-CONV][E002] no matching importer for source bytes: {} ({})",
+                toasty::pathToUtf8(sourcePath),
+                importError.empty() ? "no importer matched" : importError);
             throw FormatError(importError.empty() ? "Failed to import source macro." : importError);
         }
 
+        geode::log::info("[TR-CONV][I001] detected foreign replay format: id={} inputCount={} fps={:.1f}",
+            static_cast<int>(imported->format), imported->inputs.size(), imported->fps);
         result.detectedFormat = imported->format;
         result.fps = isFiniteFps(imported->fps) ? imported->fps : 240.0;
         result.inputCount = imported->inputs.size();
@@ -2184,78 +2278,76 @@ ConversionResult convertReplay(
         if (requestedName.empty()) requestedName = imported->sourceName;
         std::string outputName = makeUniqueName(outputDirectory, requestedName);
         auto outputPath = outputDirectory / (outputName + conversionTargetExtension(target));
+
+        if (target == ConversionTarget::TTR3) {
+            TTR3InspectionFacts facts;
+            facts.hasFractionalPlaintextFrames = imported->hasFractionalPlaintextFrames;
+            facts.hasDecodedGdr2Extensions = imported->hasDecodedGdr2Extensions;
+            auto eligibility = inspectTTR3Eligibility(imported->format, facts);
+            if (!eligibility.lossless || eligibility.route != TTR3Route::LosslessTTR3) {
+                addWarningOnce(*imported, eligibility.message);
+                result.warnings = imported->warnings;
+                throw FormatError(eligibility.message);
+            }
+
+            imported->convertedForTTR3 = true;
+            finishImportForTarget(*imported, ConversionTarget::TTR3);
+            auto ttr3Macro = buildTTR3FromImported(*imported, outputName, std::move(author));
+            auto bytes = ttr3Macro.serialize();
+            if (bytes.empty()) throw FormatError("Failed to serialize TTR3 output.");
+            std::ofstream output(outputPath, std::ios::binary);
+            output.write(reinterpret_cast<char const*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (!output) throw FormatError("Failed to write TTR3 output.");
+
+            result.ok = true;
+            result.outputName = outputName;
+            result.outputPath = outputPath;
+            result.inputCount = ttr3Macro.inputs.size();
+            std::ostringstream message;
+            message << "Converted " << result.inputCount << " inputs at " << result.fps
+                    << " TPS to " << outputName << conversionTargetExtension(target);
+            result.message = message.str();
+            geode::log::info("[TR-CONV][I003] TTR3 conversion finished: out={} inputs={} fps={:.1f}",
+                toasty::pathToUtf8(result.outputPath), result.inputCount, result.fps);
+            return result;
+        }
+
         bool useCbsTiming = false;
         auto inputs = prepareOutputInputs(*imported, result.fps, useCbsTiming);
         auto outputDuration = preparedDuration(*imported, inputs, result.fps);
         auto outputAccuracy = useCbsTiming ? AccuracyMode::CBS : AccuracyMode::Vanilla;
-        if (useCbsTiming && target == ConversionTarget::TTR) {
-            throw FormatError("CBS or fractional-timing macros cannot be converted to exact TTR2 yet. Re-record them in TTR2 CBS mode.");
-        }
         if (useCbsTiming && target == ConversionTarget::GDR) {
-            addWarningOnce(*imported, "GDR output stores best-effort timing offsets; TTR2 keeps exact CBS timing.");
+            addWarningOnce(*imported, "GDR output stores best-effort timing offsets only.");
             result.warnings = imported->warnings;
         }
 
-        if (target == ConversionTarget::TTR) {
-            TTRMacro macro;
-            macro.author = std::move(author);
-            macro.name = outputName;
-            macro.persistedName = outputName;
-            macro.levelName = imported->levelName.empty() ? outputName : imported->levelName;
-            macro.levelId = imported->levelId;
-            macro.framerate = result.fps;
-            macro.duration = outputDuration;
-            macro.accuracyMode = outputAccuracy;
-            macro.platformerMode = imported->platformerMode;
-            macro.twoPlayerMode = imported->twoPlayerMode;
-            macro.exactCbsTiming = useCbsTiming;
-            macro.anchors = imported->anchors;
-            macro.recordTimestamp = static_cast<int64_t>(std::time(nullptr));
-            macro.inputs.reserve(inputs.size());
-            for (auto const& input : inputs) {
-                macro.recordAction(
-                    static_cast<int>(std::clamp<int64_t>(input.tick, 0, std::numeric_limits<int32_t>::max())),
-                    input.button,
-                    input.player2,
-                    input.pressed,
-                    useCbsTiming ? input.stepOffset : 0.0f,
-                    useCbsTiming ? input.cbsTimeOffset : -1.0f
-                );
-            }
-            auto bytes = macro.serialize();
-            if (bytes.empty()) throw FormatError("Failed to serialize TTR2 output.");
-            std::ofstream output(outputPath, std::ios::binary);
-            output.write(reinterpret_cast<char const*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            if (!output) throw FormatError("Failed to write TTR2 output.");
-        } else {
-            MacroSequence macro;
-            macro.author = std::move(author);
-            macro.name = outputName;
-            macro.persistedName = outputName;
-            macro.levelInfo.name = imported->levelName.empty() ? outputName : imported->levelName;
-            macro.levelInfo.id = imported->levelId;
-            macro.framerate = result.fps;
-            macro.duration = outputDuration;
-            macro.accuracyMode = outputAccuracy;
-            macro.platformerMode = imported->platformerMode;
-            macro.hasPlatformerModeMetadata = true;
-            macro.anchors = imported->anchors;
-            macro.inputs.reserve(inputs.size());
-            for (auto const& input : inputs) {
-                macro.inputs.emplace_back(
-                    static_cast<int>(std::clamp<int64_t>(input.tick, 0, std::numeric_limits<int32_t>::max())),
-                    input.button,
-                    input.player2,
-                    input.pressed,
-                    useCbsTiming ? input.stepOffset : 0.0f
-                );
-            }
-            auto bytes = macro.exportData(false);
-            if (bytes.empty()) throw FormatError("Failed to serialize GDR output.");
-            std::ofstream output(outputPath, std::ios::binary);
-            output.write(reinterpret_cast<char const*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            if (!output) throw FormatError("Failed to write GDR output.");
+        MacroSequence macro;
+        macro.author = std::move(author);
+        macro.name = outputName;
+        macro.persistedName = outputName;
+        macro.levelInfo.name = imported->levelName.empty() ? outputName : imported->levelName;
+        macro.levelInfo.id = imported->levelId;
+        macro.framerate = result.fps;
+        macro.duration = outputDuration;
+        macro.accuracyMode = outputAccuracy;
+        macro.platformerMode = imported->platformerMode;
+        macro.hasPlatformerModeMetadata = true;
+        macro.anchors = imported->anchors;
+        macro.inputs.reserve(inputs.size());
+        for (auto const& input : inputs) {
+            macro.inputs.emplace_back(
+                static_cast<int>(std::clamp<int64_t>(input.tick, 0, std::numeric_limits<int32_t>::max())),
+                input.button,
+                input.player2,
+                input.pressed,
+                useCbsTiming ? input.stepOffset : 0.0f
+            );
         }
+        auto bytes = macro.exportData(false);
+        if (bytes.empty()) throw FormatError("Failed to serialize GDR output.");
+        std::ofstream output(outputPath, std::ios::binary);
+        output.write(reinterpret_cast<char const*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!output) throw FormatError("Failed to write GDR output.");
 
         result.ok = true;
         result.outputName = outputName;
@@ -2264,9 +2356,12 @@ ConversionResult convertReplay(
         message << "Converted " << result.inputCount << " inputs at " << result.fps
                 << " TPS to " << outputName << conversionTargetExtension(target);
         result.message = message.str();
+        geode::log::info("[TR-CONV][I003] GDR/TTR2 conversion finished: out={} inputs={} fps={:.1f} cbs={}",
+            toasty::pathToUtf8(result.outputPath), result.inputCount, result.fps, useCbsTiming);
     } catch (std::exception const& ex) {
         result.ok = false;
         result.message = ex.what();
+        geode::log::error("[TR-CONV][E005] conversion aborted: {}", ex.what());
     }
     return result;
 }
@@ -2306,19 +2401,20 @@ ConversionResult convertNativeGDRToTTRDuplicate(
             sourceStem = imported->name.empty() ? "macro" : imported->name;
         }
 
-        std::string outputName = makeUniqueName(outputDirectory, sourceStem + "_ttr2");
-        auto outputPath = outputDirectory / (outputName + ".ttr2");
+        std::string outputName = makeUniqueName(outputDirectory, sourceStem + "_ttr3");
+        auto outputPath = outputDirectory / (outputName + ".ttr3");
         double fps = safeFps(imported->framerate);
-        AccuracyMode outputAccuracy = writableAccuracyMode(imported->accuracyMode);
-        bool usesCBS = outputAccuracy == AccuracyMode::CBS;
-        if (usesCBS) {
-            throw FormatError("Legacy CBS macros cannot be converted to exact TTR2 yet. Re-record them in TTR2 CBS mode.");
-        }
+        AccuracyMode importedMode = writableAccuracyMode(imported->accuracyMode);
+        bool isTimedSource = usesTimedAccuracy(importedMode);
         bool hasPlayer2Inputs = std::any_of(imported->inputs.begin(), imported->inputs.end(), [](MacroAction const& input) {
             return input.player2;
         });
 
         TTRMacro macro;
+        macro.fileFormat = TTRFileFormat::TTR3;
+        macro.sourceFormatId = static_cast<uint64_t>(ReplayFormat::Unknown);
+        macro.losslessVerified = true;
+        macro.macroConverted = true;
         macro.author = author.empty() ? imported->author : std::move(author);
         macro.name = outputName;
         macro.persistedName = outputName;
@@ -2326,18 +2422,24 @@ ConversionResult convertNativeGDRToTTRDuplicate(
         macro.levelId = imported->levelInfo.id;
         macro.framerate = fps;
         macro.duration = nativeGDRDuration(*imported, fps);
-        macro.accuracyMode = AccuracyMode::Vanilla;
+        macro.accuracyMode = AccuracyMode::CBS;
         macro.platformerMode = imported->platformerMode;
         macro.twoPlayerMode = hasPlayer2Inputs;
         macro.recordedFromStartPos = imported->recordedFromStartPos;
         macro.startPosX = imported->startPosX;
         macro.startPosY = imported->startPosY;
-        macro.exactCbsTiming = false;
+        macro.exactCbsTiming = true;
         macro.anchors = imported->anchors;
+        macro.tpsEvents = {{0.0, fps}};
         macro.recordTimestamp = static_cast<int64_t>(std::time(nullptr));
         macro.inputs.reserve(imported->inputs.size());
 
+        double substepDuration = isTimedSource ? (1.0 / std::max(1.0, fps * 4.0)) : 0.0;
         for (auto const& input : imported->inputs) {
+            float stepOffset = isTimedSource ? input.stepOffset : 0.0f;
+            double cbsTimeOffset = isTimedSource
+                ? std::clamp(static_cast<double>(stepOffset), 0.0, 3.999) * substepDuration
+                : -1.0;
             macro.recordAction(
                 static_cast<int>(std::clamp<int64_t>(
                     static_cast<int64_t>(input.frame),
@@ -2347,20 +2449,20 @@ ConversionResult convertNativeGDRToTTRDuplicate(
                 input.button,
                 input.player2,
                 input.down,
-                0.0f,
-                -1.0
+                stepOffset,
+                cbsTimeOffset
             );
         }
 
         auto outputBytes = macro.serialize();
         if (outputBytes.empty()) {
-            throw FormatError("Failed to serialize TTR2 output.");
+            throw FormatError("Failed to serialize TTR3 output.");
         }
 
         std::ofstream output(outputPath, std::ios::binary);
         output.write(reinterpret_cast<char const*>(outputBytes.data()), static_cast<std::streamsize>(outputBytes.size()));
         if (!output) {
-            throw FormatError("Failed to write TTR2 output.");
+            throw FormatError("Failed to write TTR3 output.");
         }
 
         result.ok = true;
@@ -2370,11 +2472,14 @@ ConversionResult convertNativeGDRToTTRDuplicate(
         result.fps = fps;
         std::ostringstream message;
         message << "Converted " << result.inputCount << " inputs at " << result.fps
-                << " TPS to " << outputName << ".ttr2";
+                << " TPS to " << outputName << ".ttr3";
         result.message = message.str();
+        geode::log::info("[TR-CONV][I003] conversion finished: out={} inputs={} fps={:.1f}",
+            toasty::pathToUtf8(result.outputPath), result.inputCount, result.fps);
     } catch (std::exception const& ex) {
         result.ok = false;
         result.message = ex.what();
+        geode::log::error("[TR-CONV][E005] conversion aborted: {}", ex.what());
     }
     return result;
 }
