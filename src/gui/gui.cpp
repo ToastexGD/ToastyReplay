@@ -1754,7 +1754,8 @@ void MenuInterface::drawReplayTab() {
         Widgets::StatusBadge("RECORDING", ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
         ImGui::SameLine();
         const char* recordingFormatLabel = engine->ttrMode
-            ? (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "TTR" : "TTR2")
+            ? (engine->activeTTR && engine->activeTTR->loadedFromTTR3() ? "TTR3"
+                : (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "TTR" : "TTR2"))
             : "GDR";
         Widgets::StatusBadge(recordingFormatLabel,
             engine->ttrMode ? getTTRTagColor() : ImVec4(1.0f, 0.9f, 0.2f, 1.0f));
@@ -1842,7 +1843,8 @@ void MenuInterface::drawReplayTab() {
         Widgets::StatusBadge("PLAYING", ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
         ImGui::SameLine();
         const char* activeFormatLabel = engine->ttrMode
-            ? (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "TTR" : "TTR2")
+            ? (engine->activeTTR && engine->activeTTR->loadedFromTTR3() ? "TTR3"
+                : (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "TTR" : "TTR2"))
             : "GDR";
         Widgets::StatusBadge(activeFormatLabel,
             engine->ttrMode ? getTTRTagColor() : ImVec4(1.0f, 0.9f, 0.2f, 1.0f));

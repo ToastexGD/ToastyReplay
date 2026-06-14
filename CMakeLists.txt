@@ -8,7 +8,8 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 project(ToastyReplay VERSION 2.1.1 LANGUAGES CXX)
 
 set(TOASTYREPLAY_SOURCES
-    src/ttr_format.cpp
+    src/format/ttr_format.cpp
+    src/format/ttr3_format.cpp
     src/conversion/macro_converter.cpp
     src/core/checkpoint_handler.cpp
     src/core/replay_engine.cpp

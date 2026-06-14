@@ -131,3 +131,24 @@ jobs:
         with:
           name: Build Output
           path: build/*.geode
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      # no watermark lib on mac (CMake gates it to WIN32)
+      - name: Build the mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          cli: "latest"
+          sdk: "5.7.1"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macOS Build Output
+          path: build/*.geode

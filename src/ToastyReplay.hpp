@@ -4,8 +4,8 @@
 #include "utils.hpp"
 #include "lang/localization.hpp"
 #include "conversion/macro_converter.hpp"
-#include "replay.hpp"
-#include "ttr_format.hpp"
+#include "format/replay.hpp"
+#include "format/ttr_format.hpp"
 #include "hacks/autoclicker.hpp"
 #include "trajectory/trajectory.hpp"
 #include "render/renderer.hpp"
@@ -529,6 +529,15 @@ public:
             return false;
         }
 
+        if (hasTTR && activeTTR->loadedFromTTR3()) {
+            double requiredTps = activeTTR->maxSourceTps();
+            double runtimeTps = runtimeTickRate();
+            if (std::isfinite(requiredTps) && std::isfinite(runtimeTps) && requiredTps > runtimeTps + 1e-6) {
+                log::warn("Playback aborted: macro requires a higher TPS than the current runtime.");
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -553,6 +562,10 @@ public:
         resetTimingTracking();
         clearQueuedSubstepState();
         beginReplayAccuracyEnvironment(runtimeAccuracyModeFor(activeMacroAccuracyMode()), true);
+
+        if (ttrMode && activeTTR && activeTTR->loadedFromTTR3()) {
+            activeTTR->materializeTTR3RuntimeTicks(runtimeTickRate());
+        }
 
         if (!ttrMode && activeMacro) {
             anchorInterval = activeMacro->savedAnchorInterval > 0

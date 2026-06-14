@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <limits>
 
-#include "ttr_format.hpp"
-#include "replay.hpp"
+#include "format/ttr_format.hpp"
+#include "format/replay.hpp"
 
 class MenuInterface;
 

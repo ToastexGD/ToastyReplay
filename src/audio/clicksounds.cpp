@@ -1,5 +1,5 @@
 #include "clicksounds.hpp"
-#include "replay.hpp"
+#include "format/replay.hpp"
 #include "utils.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/Bindings.hpp>

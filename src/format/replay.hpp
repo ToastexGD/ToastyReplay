@@ -1,6 +1,7 @@
 #ifndef _replay_hpp
 #define _replay_hpp
 
+#include "core/accuracy_mode.hpp"
 #include "utils.hpp"
 
 #include <Geode/Geode.hpp>
@@ -9,7 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdint>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -23,37 +24,10 @@ using namespace geode::prelude;
 
 #define MACRO_FORMAT_VER 1.2f
 
-enum class AccuracyMode : uint8_t {
-    Vanilla = 0,
-    CBS = 1,
-    CBF = 2,
-    Substep = 3,
-};
-
-inline AccuracyMode sanitizeAccuracyMode(int rawMode) {
-    switch (rawMode) {
-        case static_cast<int>(AccuracyMode::CBS):
-            return AccuracyMode::CBS;
-        default:
-            return AccuracyMode::Vanilla;
-    }
-}
-
-inline bool usesTimedAccuracy(AccuracyMode mode) {
-    return mode != AccuracyMode::Vanilla;
-}
-
-inline bool usesStepBasedAccuracy(AccuracyMode mode) {
-    return mode == AccuracyMode::CBS;
-}
-
-inline bool usesFractionalSubstepAccuracy(AccuracyMode mode) {
-    static_cast<void>(mode);
-    return false;
-}
-
 inline AccuracyMode writableAccuracyMode(AccuracyMode mode) {
-    return mode == AccuracyMode::CBS ? AccuracyMode::CBS : AccuracyMode::Vanilla;
+    if (mode == AccuracyMode::CBS) return AccuracyMode::CBS;
+    if (mode == AccuracyMode::CBF) return AccuracyMode::CBF;
+    return AccuracyMode::Vanilla;
 }
 
 namespace ReplayStorage {
@@ -111,8 +85,11 @@ namespace ReplayStorage {
         return false;
     }
 
-    inline std::string makeUniqueReplayName(std::string requestedName, std::string_view excludedStem = {}) {
-        auto directory = getReplayDirectoryPath();
+    inline std::string makeUniqueReplayNameInDirectory(
+        std::filesystem::path const& directory,
+        std::string requestedName,
+        std::string_view excludedStem = {}
+    ) {
         std::error_code ec;
         if (!std::filesystem::exists(directory, ec)) {
             std::filesystem::create_directories(directory, ec);
@@ -136,6 +113,10 @@ namespace ReplayStorage {
         }
     }
 
+    inline std::string makeUniqueReplayName(std::string requestedName, std::string_view excludedStem = {}) {
+        return makeUniqueReplayNameInDirectory(getReplayDirectoryPath(), std::move(requestedName), excludedStem);
+    }
+
     inline std::optional<std::vector<uint8_t>> readReplayBytes(std::filesystem::path const& path) {
         std::error_code ec;
         if (!std::filesystem::is_regular_file(path, ec) || ec) {
@@ -144,24 +125,24 @@ namespace ReplayStorage {
 
         auto size = std::filesystem::file_size(path, ec);
         if (ec) {
-            log::warn("Failed to inspect replay file {}: {}", toasty::pathToUtf8(path), ec.message());
+            log::warn("[TR-FMT][W003] failed to inspect replay file {}: {}", toasty::pathToUtf8(path), ec.message());
             return std::nullopt;
         }
         if (size > kMaxReplayFileSize) {
-            log::warn("Replay file is too large: {}", toasty::pathToUtf8(path));
+            log::warn("[TR-FMT][W004] replay file exceeds max size cap ({} bytes): {}", size, toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
         auto maxSize = static_cast<uintmax_t>(std::numeric_limits<size_t>::max());
         auto maxStreamSize = static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max());
         if (size > maxSize || size > maxStreamSize) {
-            log::warn("Replay file is too large: {}", toasty::pathToUtf8(path));
+            log::warn("[TR-FMT][W005] replay file too large for platform streams: {}", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
         std::ifstream input(path, std::ios::binary);
         if (!input.is_open()) {
-            log::warn("Failed to open replay file {}", toasty::pathToUtf8(path));
+            log::error("[TR-FMT][E001] failed to open replay file for read: {}", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
@@ -170,7 +151,8 @@ namespace ReplayStorage {
             auto streamSize = static_cast<std::streamsize>(size);
             input.read(reinterpret_cast<char*>(bytes.data()), streamSize);
             if (!input || input.gcount() != streamSize) {
-                log::warn("Failed to read replay file {}", toasty::pathToUtf8(path));
+                log::error("[TR-FMT][E007] short read on replay file (got {} of {} bytes): {}",
+                    input.gcount(), streamSize, toasty::pathToUtf8(path));
                 return std::nullopt;
             }
         }
@@ -354,12 +336,17 @@ struct AnchorRngState {
 
 struct PlaybackAnchor {
     int tick = 0;
+    double timeSeconds = -1.0;
     bool hasPlayer2 = false;
     PlayerStateBundle player1;
     PlayerStateBundle player2;
     AnchorRngState rng;
     uint8_t player1LatchMask = 0;
     uint8_t player2LatchMask = 0;
+
+    bool hasAbsoluteTime() const {
+        return std::isfinite(timeSeconds) && timeSeconds >= 0.0;
+    }
 };
 
 struct CheckpointStateBundle {
@@ -381,6 +368,8 @@ struct CheckpointStateBundle {
 
 struct MacroAction : gdr::Input {
     float stepOffset = 0.0f;
+    double timeSeconds = -1.0;
+    bool swiftPairAnchor = false;
 
     MacroAction() = default;
 
@@ -388,11 +377,21 @@ struct MacroAction : gdr::Input {
         : Input(tick, actionType, secondPlayer, pressed),
           stepOffset(offset) {}
 
+    bool hasAbsoluteTime() const {
+        return std::isfinite(timeSeconds) && timeSeconds >= 0.0;
+    }
+
     void parseExtension(gdr::json::object_t obj) override {
         if (auto value = ReplayJson::getFloat<float>(obj, "accuracy_offset")) {
             stepOffset = *value;
         } else if (auto legacyValue = ReplayJson::getFloat<float>(obj, "cbf_offset")) {
             stepOffset = *legacyValue;
+        }
+        if (auto value = ReplayJson::getFloat<double>(obj, "time_seconds")) {
+            timeSeconds = *value;
+        }
+        if (auto value = ReplayJson::getBool(obj, "swift_pair_anchor")) {
+            swiftPairAnchor = *value;
         }
     }
 
@@ -400,6 +399,12 @@ struct MacroAction : gdr::Input {
         gdr::json::object_t ext;
         if (stepOffset != 0.0f) {
             ext["accuracy_offset"] = stepOffset;
+        }
+        if (hasAbsoluteTime()) {
+            ext["time_seconds"] = timeSeconds;
+        }
+        if (swiftPairAnchor) {
+            ext["swift_pair_anchor"] = true;
         }
         return ext;
     }
@@ -419,7 +424,7 @@ public:
     bool hasPlatformerModeMetadata = false;
 
     MacroSequence()
-        : Replay("ToastyReplay", MOD_VERSION) {}
+        : Replay("ToastyReplay PRO", MOD_VERSION) {}
 
     void parseExtension(gdr::json::object_t obj) override {
         if (auto mode = ReplayJson::getInteger<int>(obj, "accuracy_mode")) {
@@ -511,7 +516,7 @@ public:
         auto bytes = exportData(false);
         output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
         output.close();
-        log::info("Saved replay to {}", toasty::pathToUtf8(dir / (name + ".gdr")));
+        log::info("[TR-FMT][I001] saved legacy GDR replay: {}", toasty::pathToUtf8(dir / (name + ".gdr")));
     }
 
     static MacroSequence* loadFromDisk(std::string const& filename) {
@@ -543,7 +548,8 @@ public:
             return result;
         }
 
-        log::warn("Failed to load GDR macro {}", toasty::pathToUtf8(path));
+        log::error("[TR-FMT][E003] GDR import returned no payload (corrupt or unsupported): {}",
+            toasty::pathToUtf8(path));
 
         return nullptr;
     }

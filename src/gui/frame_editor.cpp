@@ -3,7 +3,7 @@
 #include "gui/gui.hpp"
 #include "lang/localization.hpp"
 #include "ToastyReplay.hpp"
-#include "ttr_format.hpp"
+#include "format/ttr_format.hpp"
 
 #include <Geode/Geode.hpp>
 
