@@ -109,10 +109,25 @@ function(patch_gd_imgui_cocos_backend backend_file)
         "auto static read = geode::utils::clipboard::read();"
         "auto static read = new std::string();"
     )
-    toastyreplay_replace_once_or_verify(
+    set(toastyreplay_clipboard_read_block [=[#if defined(GEODE_IS_WINDOWS)
+		*read = readClipboardText();
+#else
+		*read = geode::utils::clipboard::read();
+#endif]=])
+    toastyreplay_replace_if_present(
         backend_content
         "read = geode::utils::clipboard::read();"
+        "${toastyreplay_clipboard_read_block}"
+    )
+    toastyreplay_replace_if_present(
+        backend_content
         "*read = readClipboardText();"
+        "${toastyreplay_clipboard_read_block}"
+    )
+    toastyreplay_replace_once_or_verify(
+        backend_content
+        "${toastyreplay_clipboard_read_block}"
+        "${toastyreplay_clipboard_read_block}"
     )
     toastyreplay_replace_once_or_verify(
         backend_content
