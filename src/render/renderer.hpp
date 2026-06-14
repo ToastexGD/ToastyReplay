@@ -82,7 +82,9 @@ public:
 
     void begin(bool wantNv12, FrameCaptureService& frameCapture);
     void end();
-    void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr);
+    // reuseLastScene: skip the scene re-render and read back the existing FBO contents again,
+    // used to emit duplicate output frames (output fps > sim tps) without redoing pl->visit().
+    void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr, bool reuseLastScene = false);
     void flushPbo(FrameCaptureService& frameCapture);
 
 private:
@@ -146,6 +148,7 @@ public:
     int finishFrame = 0;
     int levelStartFrame = 0;
     int cadenceLogFrames = 0;  // diagnostic: output frames emitted, for cadence logging
+    int lastProgressPercent = -1;
     bool clockPrimed = false;
     bool leadInFixEligible = false;
     double leadInSeconds = 0.0;
@@ -181,7 +184,7 @@ public:
     cocos2d::CCLabelBMFont* watermarkLabel = nullptr;
     cocos2d::CCLabelBMFont* progressLabel = nullptr;
 
-    void captureFrame();
+    void captureFrame(bool reuseLastScene = false);
     void changeRes(bool original);
 
     void start();

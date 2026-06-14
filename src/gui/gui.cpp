@@ -714,6 +714,7 @@ bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationS
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec4 accent = theme.getAccent();
     float dt = ImGui::GetIO().DeltaTime;
+    float alpha = ImGui::GetStyle().Alpha;
     std::string displayLabel = getLocalizedDisplayLabel(label);
 
     const float width = 44.0f;
@@ -734,12 +735,12 @@ bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationS
     toggleT = smoothStep(toggleT, *value ? 1.0f : 0.0f, 13.0f, dt);
     hoverT = smoothStep(hoverT, hovered ? 1.0f : 0.0f, 11.0f, dt);
 
-    ImVec4 offCol = ImVec4(0.18f, 0.18f, 0.22f, 0.50f);
+    ImVec4 offCol = ImVec4(0.18f, 0.18f, 0.22f, 0.50f * alpha);
     ImVec4 onCol = ImVec4(
         accent.x * 0.5f + 0.05f,
         accent.y * 0.5f + 0.05f,
         accent.z * 0.5f + 0.05f,
-        0.60f
+        0.60f * alpha
     );
     ImVec4 track = lerpColor(offCol, onCol, toggleT);
     if (hoverT > 0.0f) {
@@ -747,15 +748,17 @@ bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationS
     }
 
     dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), toU32(track), radius);
-    dl->AddRect(pos, ImVec2(pos.x + width, pos.y + height), toU32(ImVec4(accent.x * 0.4f, accent.y * 0.4f, accent.z * 0.4f, 0.25f)), radius, 0, 1.0f);
+    dl->AddRect(pos, ImVec2(pos.x + width, pos.y + height), toU32(ImVec4(accent.x * 0.4f, accent.y * 0.4f, accent.z * 0.4f, 0.25f * alpha)), radius, 0, 1.0f);
 
     float knobX = pos.x + radius + toggleT * (width - height);
     ImVec2 knobCenter(knobX, pos.y + radius);
-    dl->AddCircleFilled(knobCenter, radius - 2.0f, IM_COL32(220, 222, 230, 240));
-    dl->AddCircle(knobCenter, radius - 2.0f, theme.getAccentU32(0.30f + toggleT * 0.40f), 0, 1.0f);
+    dl->AddCircleFilled(knobCenter, radius - 2.0f, IM_COL32(220, 222, 230, (int)(240 * alpha)));
+    dl->AddCircle(knobCenter, radius - 2.0f, theme.getAccentU32((0.30f + toggleT * 0.40f) * alpha), 0, 1.0f);
 
     ImU32 textCol = hovered ? theme.getTextU32() : theme.getTextSecondaryU32();
-    dl->AddText(ImVec2(pos.x + width + 12.0f, pos.y + 2.0f), textCol, displayLabel.c_str());
+    ImVec4 textColV = ImGui::ColorConvertU32ToFloat4(textCol);
+    textColV.w *= alpha;
+    dl->AddText(ImVec2(pos.x + width + 12.0f, pos.y + 2.0f), ImGui::ColorConvertFloat4ToU32(textColV), displayLabel.c_str());
 
     ImGui::PopID();
     return clicked;
@@ -2889,6 +2892,58 @@ static bool audioCodecNeedsMkv(const char* codec) {
     return c == "flac" || c == "libopus" || c == "pcm_s16le";
 }
 
+static bool audioCodecIsExperimental(const std::string& codec) {
+    return codec == "opus" || codec == "vorbis" || codec == "dca"
+        || codec == "sonic" || codec == "sonic_ls";
+}
+
+enum class AudioCodecCategory { Lossy = 0, Lossless = 1, Voice = 2, Other = 3 };
+
+static AudioCodecCategory audioCodecCategoryOf(const std::string& c) {
+    auto in = [&](std::initializer_list<const char*> names) {
+        for (auto n : names) if (c == n) return true;
+        return false;
+    };
+    if (c.rfind("pcm_", 0) == 0) return AudioCodecCategory::Lossless;
+    if (in({ "flac", "alac", "truehd", "mlp", "tta", "wavpack", "libwavpack",
+             "ralf", "sonic_ls" }))
+        return AudioCodecCategory::Lossless;
+    if (in({ "speex", "libspeex", "gsm", "gsm_ms", "libgsm", "amrnb", "amrwb",
+             "libopencore_amrnb", "libopencore_amrwb", "nellymoser", "libilbc",
+             "libcodec2", "g723_1", "lc3", "liblc3", "wmavoice" }))
+        return AudioCodecCategory::Voice;
+    if (in({ "aac", "aac_mf", "aac_at", "libfdk_aac", "ac3", "ac3_fixed", "ac3_mf",
+             "eac3", "mp3", "mp3_mf", "libmp3lame", "libshine", "mp2", "mp2fixed",
+             "libtwolame", "dca", "opus", "libopus", "vorbis", "libvorbis",
+             "wmav1", "wmav2", "wmapro", "sonic" }))
+        return AudioCodecCategory::Lossy;
+    return AudioCodecCategory::Other;
+}
+
+static const char* audioCodecRecommendation(const std::string& c) {
+    if (c == "aac")     return "recommended";
+    if (c == "libopus") return "best quality";
+    if (c == "flac")    return "lossless";
+    return "";
+}
+
+static bool audioCodecIsOffered(const std::string& c) {
+    static constexpr const char* kOffered[] = {
+        // lossy
+        "aac", "libfdk_aac", "ac3", "eac3", "mp3", "libmp3lame", "mp2", "libtwolame",
+        "libopus", "opus", "libvorbis", "vorbis", "dca", "wmav2", "wmapro",
+        // lossless
+        "flac", "alac", "truehd", "tta", "wavpack", "libwavpack",
+        "pcm_s16le", "pcm_s24le", "pcm_f32le",
+        // voice / speech
+        "speex", "libspeex", "nellymoser", "wmavoice",
+        // experimental
+        "sonic", "sonic_ls",
+    };
+    for (auto n : kOffered) if (c == n) return true;
+    return false;
+}
+
 enum AudioContainerFlag : unsigned {
     AC_MP4 = 1u << 0,
     AC_MKV = 1u << 1,
@@ -3194,6 +3249,19 @@ void MenuInterface::drawRenderDisplaySection() {
     if (Widgets::ToggleSwitch("Hide Level Complete", &hideLevelComplete, theme, anim)) {
         if (isExp) saveRenderConfig(expConfig);
         else mod->setSavedValue("render_hide_levelcomplete", hideLevelComplete);
+    }
+
+    if (isExp) {
+        auto* engine = ReplayEngine::get();
+        if (Widgets::ToggleSwitch("Pulse Fix", &engine->pulseFix, theme, anim))
+            mod->setSavedValue("render_pulse_fix", engine->pulseFix);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(300.0f);
+            ImGui::TextUnformatted("Keeps pulse and color triggers in sync when rendering above 240 TPS.");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
     }
 }
 
@@ -5141,7 +5209,7 @@ void MenuInterface::loadExpRenderSettings() {
         std::filesystem::path probeExe;
         if (!ffmpegSetting.empty()) {
             std::error_code ec;
-            if (std::filesystem::exists(ffmpegSetting, ec)) probeExe = ffmpegSetting;
+            if (std::filesystem::is_regular_file(ffmpegSetting, ec)) probeExe = ffmpegSetting;
         }
 #ifdef GEODE_IS_WINDOWS
         if (probeExe.empty()) {
@@ -5171,6 +5239,22 @@ void MenuInterface::loadExpRenderSettings() {
     }
 
     expConfigInit = true;
+}
+
+static void drawExperimentalAudioBadge() {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 pos    = ImGui::GetCursorScreenPos();
+    const char* label = "EXP";
+    ImVec2 ts = ImGui::CalcTextSize(label);
+    float padX = 5.0f;
+    float h    = ImGui::GetTextLineHeight();
+    float w    = ts.x + padX * 2.0f;
+    ImVec4 amber(0.95f, 0.70f, 0.20f, 1.0f);
+    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h),
+        ImGui::GetColorU32(ImVec4(amber.x * 0.28f, amber.y * 0.24f, amber.z * 0.12f, 0.95f)), h * 0.35f);
+    dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), ImGui::GetColorU32(amber), h * 0.35f, 0, 1.0f);
+    dl->AddText(ImVec2(pos.x + padX, pos.y + (h - ts.y) * 0.5f), ImGui::GetColorU32(amber), label);
+    ImGui::Dummy(ImVec2(w, h));
 }
 
 void MenuInterface::drawExpAudioCodecPicker(bool ffmpegExeAvail) {
@@ -5219,26 +5303,33 @@ void MenuInterface::drawExpAudioCodecPicker(bool ffmpegExeAvail) {
         std::transform(filt.begin(), filt.end(), filt.begin(),
             [](unsigned char c) { return std::tolower(c); });
 
+        bool experimentalEnabled = Mod::get()->getSavedValue<bool>("render_experimental_audio", false);
+
         ImGui::BeginChild("##expAudioCodecList", ImVec2(-1, 240.0f), true);
         float rightX = ImGui::GetContentRegionMax().x;
         bool  any    = false;
-        for (const auto& codec : expProbedAudioCodecs) {
-            std::string cl(codec);
-            std::transform(cl.begin(), cl.end(), cl.begin(),
-                [](unsigned char c) { return std::tolower(c); });
-            if (!filt.empty() && cl.find(filt) == std::string::npos) continue;
-            any = true;
 
+        auto drawCodecRow = [&](const std::string& codec) {
             unsigned mask = audioCodecContainerMask(codec);
             bool compatible = curFlag == 0 || mask == 0 || (mask & curFlag);
             bool sel = std::string(expAdvAudioCodecBuf) == codec
                     || (!expAdvAudioCodecBuf[0] && codec == "aac");
 
-            if (!compatible)
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.55f, 0.30f, 1.0f));
-            bool clicked = ImGui::Selectable(codec.c_str(), sel);
-            if (!compatible)
+            ImGui::PushStyleColor(ImGuiCol_Text, compatible
+                ? ImVec4(0.92f, 0.92f, 0.92f, 1.0f)
+                : ImVec4(0.95f, 0.55f, 0.30f, 1.0f));
+            bool clicked = ImGui::Selectable(("  " + codec).c_str(), sel);
+            ImGui::PopStyleColor();
+
+            if (audioCodecIsExperimental(codec)) {
+                ImGui::SameLine(0.0f, 8.0f);
+                drawExperimentalAudioBadge();
+            } else if (const char* rec = audioCodecRecommendation(codec); rec[0]) {
+                ImGui::SameLine(0.0f, 8.0f);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.78f, 0.52f, 1.0f));
+                ImGui::TextUnformatted(rec);
                 ImGui::PopStyleColor();
+            }
 
             if (mask) {
                 std::string badges;
@@ -5268,6 +5359,37 @@ void MenuInterface::drawExpAudioCodecPicker(bool ffmpegExeAvail) {
                 ImGui::CloseCurrentPopup();
             }
             if (sel && appearing) ImGui::SetScrollHereY(0.5f);
+        };
+
+        struct CatRow { AudioCodecCategory cat; const char* label; };
+        static constexpr CatRow kAudioCats[] = {
+            { AudioCodecCategory::Lossy,    "Lossy"          },
+            { AudioCodecCategory::Lossless, "Lossless"       },
+            { AudioCodecCategory::Voice,    "Voice / Speech" },
+            { AudioCodecCategory::Other,    "Other"          },
+        };
+
+        for (const auto& cr : kAudioCats) {
+            std::vector<const std::string*> rows;
+            for (const auto& codec : expProbedAudioCodecs) {
+                if (!audioCodecIsOffered(codec)) continue;
+                if (audioCodecIsExperimental(codec) && !experimentalEnabled) continue;
+                if (audioCodecCategoryOf(codec) != cr.cat) continue;
+                std::string cl(codec);
+                std::transform(cl.begin(), cl.end(), cl.begin(),
+                    [](unsigned char c) { return std::tolower(c); });
+                if (!filt.empty() && cl.find(filt) == std::string::npos) continue;
+                rows.push_back(&codec);
+            }
+            if (rows.empty()) continue;
+            any = true;
+
+            ImGui::Dummy(ImVec2(0, 3));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.getAccent());
+            ImGui::TextUnformatted(cr.label);
+            ImGui::PopStyleColor();
+
+            for (const std::string* codec : rows) drawCodecRow(*codec);
         }
         if (!any) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
@@ -5314,8 +5436,8 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
 
         if (!ffmpegExeAvail) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
-            ImGui::TextWrapped("[!] ffmpeg.exe not found - the FFmpeg API picks its own encoder. "
-                               "Set the ffmpeg.exe path in Settings for full control.");
+            ImGui::TextWrapped("[!] FFmpeg API mode - the chosen codec is used if the API supports it "
+                               "(otherwise it falls back). CRF, bitrate caps and filters need ffmpeg.exe.");
             ImGui::PopStyleColor();
         }
         ImGui::Dummy(ImVec2(0, 2));
@@ -5598,19 +5720,66 @@ void MenuInterface::drawExpRenderTab() {
 #ifdef GEODE_IS_WINDOWS
     auto ffmpegSetting = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
     bool ffmpegAvail = false;
+    std::string ffmpegFoundPath;
     if (!ffmpegSetting.empty()) {
         std::error_code ec;
-        ffmpegAvail = std::filesystem::exists(ffmpegSetting, ec);
+        if (std::filesystem::is_regular_file(ffmpegSetting, ec)) {
+            ffmpegAvail = true;
+            ffmpegFoundPath = toasty::pathToUtf8(ffmpegSetting);
+        }
     } else {
         wchar_t ffmpegFound[MAX_PATH] = {};
-        ffmpegAvail = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, MAX_PATH, ffmpegFound, nullptr) > 0;
+        if (SearchPathW(nullptr, L"ffmpeg.exe", nullptr, MAX_PATH, ffmpegFound, nullptr) > 0) {
+            ffmpegAvail = true;
+            ffmpegFoundPath = toasty::pathToUtf8(std::filesystem::path(ffmpegFound));
+        }
     }
 #else
     bool ffmpegAvail = true;
+    std::string ffmpegFoundPath;
 #endif
     bool av1NeedsExe = isAv1 && !ffmpegAvail;
+    bool apiLimited = !ffmpegAvail;
+    if (apiLimited) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.78f, 0.15f, 1.0f));
+        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control. CRF, max bitrate, "
+                           "filters, speed tuning and custom audio (AAC only) are disabled; resolution, "
+                           "FPS, quality, codec and container still apply.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4));
+    }
 
     if (av1NeedsExe) expConfig.useGpu = false;
+    {
+        bool gpuEncoding  = expConfig.useGpu && gpuAvail && !isLossless;
+        bool speedApplies = !isLossless && !apiLimited;
+        imguiTextTr("Prefer Speed");
+        ImGui::SameLine(inputW);
+        ImGui::BeginDisabled(!speedApplies);
+        if (Widgets::ToggleSwitch("##preferSpeedToggle", &expConfig.preferSpeed, theme, anim))
+            saveRenderConfig(expConfig);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, 8.0f);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (22.0f - ImGui::GetTextLineHeight()) * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+        if (apiLimited)
+            ImGui::TextUnformatted("[needs ffmpeg.exe]");
+        else if (isLossless)
+            ImGui::TextUnformatted("[lossless is already fastest]");
+        else if (gpuEncoding)
+            ImGui::TextUnformatted(expConfig.preferSpeed
+                ? "[faster GPU encode - slight quality cost]"
+                : "[max-quality GPU tuning]");
+        else {
+            std::string preset = resolve(expConfig).x264Preset;
+            if (expConfig.preferSpeed)
+                ImGui::Text("[preset %s - same quality, faster]", preset.c_str());
+            else
+                ImGui::Text("[preset %s]", preset.c_str());
+        }
+        ImGui::PopStyleColor();
+    }
+
     imguiTextTr("Use GPU");
     ImGui::SameLine(inputW);
     ImGui::BeginDisabled(!gpuAvail || isLossless || av1NeedsExe);
@@ -5642,30 +5811,6 @@ void MenuInterface::drawExpRenderTab() {
     else
         ImGui::TextUnformatted("[unavailable]");
     ImGui::PopStyleColor();
-
-    {
-        bool cpuEncoding  = isLossless || !expConfig.useGpu || !gpuAvail;
-        bool speedApplies = cpuEncoding && !isLossless;
-        imguiTextTr("Prefer Speed");
-        ImGui::SameLine(inputW);
-        ImGui::BeginDisabled(!speedApplies);
-        if (Widgets::ToggleSwitch("##preferSpeedToggle", &expConfig.preferSpeed, theme, anim))
-            saveRenderConfig(expConfig);
-        ImGui::EndDisabled();
-        ImGui::SameLine(0, 8.0f);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (22.0f - ImGui::GetTextLineHeight()) * 0.5f);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (!speedApplies)
-            ImGui::TextUnformatted(isLossless ? "[lossless is already fastest]" : "[only affects CPU encoding]");
-        else {
-            std::string preset = resolve(expConfig).x264Preset;
-            if (expConfig.preferSpeed)
-                ImGui::Text("[preset %s - same quality, faster]", preset.c_str());
-            else
-                ImGui::Text("[preset %s]", preset.c_str());
-        }
-        ImGui::PopStyleColor();
-    }
 
     // codec family picker: H.264 / H.265 / AV1
     imguiTextTr("Codec Family");
@@ -5727,11 +5872,7 @@ void MenuInterface::drawExpRenderTab() {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
             ImGui::TextWrapped("[!] Overridden by Advanced settings. Clear the Advanced Codec field to use this picker.");
             ImGui::PopStyleColor();
-        } else if (videoCodecIsGpu(effectiveCodec)) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.85f, 0.4f, 1.0f));
-            ImGui::TextWrapped("Hardware encoder");
-            ImGui::PopStyleColor();
-        } else if (expConfig.codec.has_value()) {
+        } else if (expConfig.codec.has_value() && !videoCodecIsGpu(effectiveCodec)) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
             ImGui::TextWrapped("Software encoder (custom)");
             ImGui::PopStyleColor();
@@ -5746,7 +5887,7 @@ void MenuInterface::drawExpRenderTab() {
         bool overridden = customVideoFilter || isLossless;
         imguiTextTr("Quality Colorspace");
         ImGui::SameLine(inputW);
-        ImGui::BeginDisabled(overridden);
+        ImGui::BeginDisabled(overridden || apiLimited);
         if (Widgets::ToggleSwitch("##qualityCsToggle", &expConfig.qualityColorspace, theme, anim)) {
             snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s",
                      expConfig.qualityColorspace ? kDefaultVideoArgs : "");
@@ -5758,7 +5899,9 @@ void MenuInterface::drawExpRenderTab() {
         ImGui::SameLine(0, 8.0f);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (22.0f - ImGui::GetTextLineHeight()) * 0.5f);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        if (isLossless)
+        if (apiLimited)
+            ImGui::TextUnformatted("[needs ffmpeg.exe]");
+        else if (isLossless)
             ImGui::TextUnformatted("[lossless]");
         else if (customVideoFilter)
             ImGui::TextUnformatted("[overridden by Video Filter]");
@@ -5778,15 +5921,17 @@ void MenuInterface::drawExpRenderTab() {
 
     if (headerOpen) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
-        imguiTextWrappedTr("Advanced overrides for fine-tuning. Codec, CRF and Extra Args mirror the current preset and update when you change quality, codec, or GPU above; edit any field to pin your own value.");
+        imguiTextWrappedTr("Edit any field to pin a value. Fields reflect the current preset; leave blank to restore the preset default.");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
 
-        auto advInput = [&](const char* label, const char* id, char* buf, size_t sz) {
+        auto advInput = [&](const char* label, const char* id, char* buf, size_t sz, bool disabled = false) {
             imguiTextTr(label);
             ImGui::SameLine(inputW);
             ImGui::SetNextItemWidth(-1);
+            ImGui::BeginDisabled(disabled);
             ImGui::InputText(id, buf, sz);
+            ImGui::EndDisabled();
         };
 
         advInput("Codec",        "##expAdvCodec",    expAdvCodecBuf,      sizeof(expAdvCodecBuf));
@@ -5802,26 +5947,16 @@ void MenuInterface::drawExpRenderTab() {
             }
             saveRenderConfig(expConfig);
         }
-        advInput("CRF",          "##expAdvCrf",      expAdvCrfBuf,        sizeof(expAdvCrfBuf));
+        advInput("CRF",          "##expAdvCrf",      expAdvCrfBuf,        sizeof(expAdvCrfBuf), apiLimited);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             if (expAdvCrfBuf[0]) { if (auto v = toasty::parseInteger<int>(expAdvCrfBuf)) expConfig.crf = *v; }
             else expConfig.crf = std::nullopt;
             saveRenderConfig(expConfig);
         }
-        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf));
+        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf), apiLimited);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.maxBitrate = expAdvMaxBitrateBuf[0] ? std::optional<std::string>(expAdvMaxBitrateBuf) : std::nullopt;
             saveRenderConfig(expConfig);
-        }
-        {
-            auto rpHint = resolve(expConfig);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-            if (expConfig.tier == RenderQualityTier::Lossless)
-                ImGui::TextWrapped("%s preset: uncapped (lossless RGB).", kTierLabels[(int)expConfig.tier]);
-            else
-                ImGui::TextWrapped("%s preset targets ~%.0f Mbps (FFmpeg API); ffmpeg.exe uses CRF %d (variable). Blank = no cap.",
-                    kTierLabels[(int)expConfig.tier], rpHint.apiBitrate / 1'000'000.0, rpHint.crf);
-            ImGui::PopStyleColor();
         }
         advInput("Extension",    "##expAdvExt",      expAdvExtBuf,        sizeof(expAdvExtBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -5833,12 +5968,12 @@ void MenuInterface::drawExpRenderTab() {
             ImGui::TextWrapped("[!] Unrecognized container. Supported: .mp4  .mkv  .wmv  .mov  .m4v");
             ImGui::PopStyleColor();
         }
-        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf));
+        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf), apiLimited);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.extraArgs = expAdvExtraArgsBuf[0] ? std::optional<std::string>(expAdvExtraArgsBuf) : std::nullopt;
             saveRenderConfig(expConfig);
         }
-        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf));
+        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf), apiLimited);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             if (!expAdvVideoArgsBuf[0] && expConfig.qualityColorspace)
                 snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s", kDefaultVideoArgs);
@@ -5846,15 +5981,42 @@ void MenuInterface::drawExpRenderTab() {
             saveRenderConfig(expConfig);
         }
         {
+            bool expAudio = Mod::get()->getSavedValue<bool>("render_experimental_audio", false);
+            imguiTextTr("Experimental Audio Codecs");
+            ImGui::SameLine(inputW);
+            ImGui::BeginDisabled(apiLimited);
+            if (Widgets::ToggleSwitch("##expAudioCodecsToggle", &expAudio, theme, anim)) {
+                Mod::get()->setSavedValue("render_experimental_audio", expAudio);
+                if (!expAudio && expAdvAudioCodecBuf[0] && audioCodecIsExperimental(expAdvAudioCodecBuf)) {
+                    expAdvAudioCodecBuf[0] = '\0';
+                    expConfig.audioCodec = std::nullopt;
+                    saveRenderConfig(expConfig);
+                }
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(300.0f);
+                ImGui::TextUnformatted("Show ffmpeg's experimental audio encoders (native opus, vorbis, "
+                                       "dca, sonic) in the codec picker. They are forced with "
+                                       "-strict experimental. Off hides them.");
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+
             const char* curCodec = expAdvAudioCodecBuf[0] ? expAdvAudioCodecBuf : "aac";
             std::string curExt    = expAdvExtBuf[0] ? expAdvExtBuf : ".mp4";
 
             imguiTextTr("Audio Codec");
             ImGui::SameLine(inputW);
             ImGui::SetNextItemWidth(-1);
-            if (Widgets::StyledButton((std::string(curCodec) + "##expAudioCodecBtn").c_str(),
+            ImGui::BeginDisabled(apiLimited);
+            // the API path always outputs AAC, so show that as the locked value
+            const char* shownAudioCodec = apiLimited ? "aac" : curCodec;
+            if (Widgets::StyledButton((std::string(shownAudioCodec) + "##expAudioCodecBtn").c_str(),
                                       ImVec2(-1, 28.0f), theme, anim, 6.0f))
                 ImGui::OpenPopup("Audio Codec##expAudioCodecPicker");
+            ImGui::EndDisabled();
 
             if (!ffmpegAvail) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
@@ -5868,11 +6030,16 @@ void MenuInterface::drawExpRenderTab() {
                 ImGui::TextWrapped("[!] %s is not supported in %s. Use %s instead.",
                                    curCodec, curExt.c_str(), rec.c_str());
                 ImGui::PopStyleColor();
+            } else if (audioCodecIsExperimental(curCodec)) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+                ImGui::TextWrapped("Experimental encoder - forced with -strict experimental "
+                                   "(libopus/libvorbis are non-experimental alternatives).");
+                ImGui::PopStyleColor();
             }
 
             drawExpAudioCodecPicker(ffmpegAvail);
         }
-        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf));
+        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf), apiLimited);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.audioArgs = expAdvAudioArgsBuf[0] ? std::optional<std::string>(expAdvAudioArgsBuf) : std::nullopt;
             saveRenderConfig(expConfig);
@@ -5888,6 +6055,8 @@ void MenuInterface::drawExpRenderTab() {
         ImGui::Dummy(ImVec2(0, 4));
         if (ffmpegAvail) {
             Widgets::StatusBadge("ffmpeg.exe Found", ImVec4(0.3f, 0.85f, 0.4f, 1.0f));
+            if (ImGui::IsItemHovered() && !ffmpegFoundPath.empty())
+                ImGui::SetTooltip("%s", ffmpegFoundPath.c_str());
         } else {
             Widgets::StatusBadge("FFmpeg API Available", ImVec4(0.92f, 0.78f, 0.15f, 1.0f));
             if (ImGui::IsItemClicked())
@@ -6208,6 +6377,7 @@ void MenuInterface::loadSettings() {
     eng->selectedAccuracyMode = sanitizeAccuracyMode(mod->getSavedValue<int>("eng_accuracy_mode", 0));
     eng->tickRate = mod->getSavedValue<float>("eng_tick_rate", 240.f);
     eng->gameSpeed = mod->getSavedValue<float>("eng_speed", 1.0f);
+    eng->pulseFix = mod->getSavedValue<bool>("render_pulse_fix", false);
     eng->ttrMode = mod->getSavedValue<bool>("eng_ttr_mode", true);
     eng->completionAutosave = mod->getSavedValue<bool>("eng_completion_autosave", true);
     eng->persistenceMode = mod->getSavedValue<bool>("eng_persistence_mode", false);

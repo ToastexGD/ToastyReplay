@@ -116,6 +116,7 @@ public:
     bool pendingStep = false;
     bool singleTickStep = false;
     bool renderInternal = false;
+    bool pulseFix = false;
     bool priorTickStepping = false;
     bool stepKeyActive = false;
     bool audioPitchEnabled = true;

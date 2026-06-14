@@ -105,22 +105,24 @@ std::vector<std::string> probeVideoCodecs(const std::filesystem::path& ffmpegExe
     return probeEncodersByType(ffmpegExe, 'V');
 }
 
-static std::string buildEncoderTuning(const std::string& codec, RenderQualityTier tier) {
+static std::string buildEncoderTuning(const std::string& codec, RenderQualityTier tier, bool preferSpeed) {
     int t = static_cast<int>(tier);
     if (codec.find("nvenc") != std::string::npos) {
         if (t <= 0) return "";
-        if (t == 1) return "-rc-lookahead 20 -spatial_aq 1";
-        return "-rc-lookahead 32 -spatial_aq 1 -temporal_aq 1 -multipass fullres";
+        if (t == 1) return preferSpeed ? "-rc-lookahead 8 -spatial_aq 1"
+                                       : "-rc-lookahead 20 -spatial_aq 1";
+        return preferSpeed ? "-rc-lookahead 20 -spatial_aq 1 -temporal_aq 1 -multipass qres"
+                           : "-rc-lookahead 32 -spatial_aq 1 -temporal_aq 1 -multipass fullres";
     }
     if (codec.find("amf") != std::string::npos) {
         if (t <= 0) return "-quality speed";
-        if (t == 1) return "-quality balanced";
-        return "-quality quality -preanalysis 1";
+        if (t == 1) return preferSpeed ? "-quality speed" : "-quality balanced";
+        return preferSpeed ? "-quality balanced" : "-quality quality -preanalysis 1";
     }
     if (codec.find("qsv") != std::string::npos) {
         if (t <= 0) return "-preset veryfast";
-        if (t == 1) return "-preset medium";
-        return "-preset veryslow";
+        if (t == 1) return preferSpeed ? "-preset faster" : "-preset medium";
+        return preferSpeed ? "-preset faster" : "-preset veryslow";
     }
     return "";
 }
@@ -188,7 +190,7 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
 
     ResolvedEncodeParams r;
     r.codec      = cfg.codec.value_or(useGpu ? cfg.gpuEncoder : td.cpuCodec);
-    r.tuning     = buildEncoderTuning(r.codec, cfg.tier);
+    r.tuning     = buildEncoderTuning(r.codec, cfg.tier, cfg.preferSpeed && !isLossless);
     r.crf        = cfg.crf.value_or(td.crf);
     r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
 
@@ -221,7 +223,7 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
 
     r.ext = cfg.ext.value_or(".mp4");
     if (r.ext == ".mp4") {
-        for (const char* c : { "libopus", "flac" })
+        for (const char* c : { "libopus", "opus", "libvorbis", "vorbis", "flac" })
             if (r.audioCodec == c) { r.ext = ".mkv"; break; }
     }
     r.apiBitrate = td.apiBitrate;

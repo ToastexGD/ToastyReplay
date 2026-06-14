@@ -447,7 +447,8 @@ static bool tryMuxAudioWithExe(
     }
 
     bool isAac = audioCodec.empty() || audioCodec == "aac";
-    std::string audioEncodeArgs = "-c:a " + (audioCodec.empty() ? std::string("aac") : audioCodec);
+    std::string audioEncodeArgs = "-c:a " + (audioCodec.empty() ? std::string("aac") : audioCodec)
+        + " -strict experimental";
     if (isAac && shouldUseMobileMp4Audio(outputPath)) {
         audioEncodeArgs += fmt::format(
             " -profile:a aac_low -b:a {}k -ac {} -ar {} -movflags +faststart",
@@ -472,11 +473,12 @@ static bool tryMuxAudioWithExe(
         toasty::pathToUtf8(outputPath)
     );
 
-    //log::info("Executing (Audio): {}", command);
-    auto proc = Subprocess(command);
+    log::info("Executing (Audio): {}", command);
+    auto stderrLogPath = (Mod::get()->getSaveDir() / "last_audiomux_ffmpeg.log").wstring();
+    auto proc = Subprocess(command, stderrLogPath);
     int exitCode = proc.close();
     if (exitCode != 0) {
-        log::error("ffmpeg.exe audio mux failed with exit code {}", exitCode);
+        log::error("ffmpeg.exe audio mux failed with exit code {} (see last_audiomux_ffmpeg.log)", exitCode);
         return false;
     }
 
@@ -1053,7 +1055,7 @@ void RenderTexture::end() {
 #endif
 }
 
-void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay) {
+void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay, bool reuseLastScene) {
     CCDirector* director = CCDirector::sharedDirector();
     PlayLayer* pl = PlayLayer::get();
     if (!pl || !fbo) return;
@@ -1063,13 +1065,15 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-    auto visitStart = std::chrono::steady_clock::now();
-    pl->visit();
-    if (overlay) overlay->visit();
+    if (!reuseLastScene) {
+        auto visitStart = std::chrono::steady_clock::now();
+        pl->visit();
+        if (overlay) overlay->visit();
 
-    if (nv12) runNv12Pass();
-    m_dbgVisitSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - visitStart).count();
-    ++m_dbgFrames;
+        if (nv12) runNv12Pass();
+        m_dbgVisitSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - visitStart).count();
+        ++m_dbgFrames;
+    }
 
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
@@ -1160,11 +1164,11 @@ void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, c
 #endif
 }
 
-void Renderer::captureFrame() {
+void Renderer::captureFrame(bool reuseLastScene) {
     if (!recording) {
         return;
     }
-    renderTex.capture(frameCapture, watermarkLabel);
+    renderTex.capture(frameCapture, watermarkLabel, reuseLastScene);
 }
 
 void RenderTexture::flushPbo(FrameCaptureService& frameCapture) {
@@ -1559,6 +1563,7 @@ void Renderer::start() {
     //log::info("Render audio: musicVolume={:.3f}, clickVolume={:.3f}, includeAudio={}, includeClicks={}",
     //    musicVolume, sfxVolume, audioMode == AUDIO_SONG, includeClickSounds);
     cadenceLogFrames = 0;
+    lastProgressPercent = -1;
     //log::info("Render cadence config: tps={:.2f}, fps={}, ratio={:.3f} ticks/output-frame",
     //    getTPS(), fps, fps > 0 ? getTPS() / static_cast<double>(fps) : 0.0);
 
@@ -2400,8 +2405,11 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
 
     if (progressLabel) {
         int pct = getRenderProgressPercent(*this, pl);
-        auto progressText = trFormat("Rendering... {percent}%", fmt::arg("percent", pct));
-        progressLabel->setString(progressText.c_str());
+        if (pct != lastProgressPercent) {
+            lastProgressPercent = pct;
+            auto progressText = trFormat("Rendering... {percent}%", fmt::arg("percent", pct));
+            progressLabel->setString(progressText.c_str());
+        }
     }
 
     bool expectedPersistenceDeath = engine
@@ -2454,8 +2462,10 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
             if (std::abs(musicTimeDelta) >= syncThreshold)
                 fmod->setMusicTimeMS(correctMusicTime, true, 0);
 
+            bool sceneRendered = false;
             while (time >= s_renderClock.frameDelta) {
-                captureFrame();
+                captureFrame(sceneRendered);
+                sceneRendered = true;
                 time -= s_renderClock.frameDelta;
                 //if (fps > 0 && ++cadenceLogFrames % static_cast<int>(fps) == 0)
                 //    log::info("Cadence: outSec={} tick={} tps={:.1f} accum={:.4f}",
