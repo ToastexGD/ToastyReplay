@@ -29,7 +29,8 @@ struct RenderConfig {
     bool  hideEndscreen     = false;
     bool  hideLevelComplete = false;
     bool  qualityColorspace = true;
-    bool  preferSpeed       = false;  // CPU only: bump the encoder preset one step faster at the same CRF
+    bool  colorFix          = true;
+    bool  preferSpeed       = false;
 
     // nullopt = use tier defaults
     std::optional<std::string> codec;
@@ -50,6 +51,7 @@ struct ResolvedEncodeParams {
     std::string tuning;
     std::string videoArgs;   // -vf filter chain (no vflip; flip is done in capture)
     std::string colorTags;
+    bool        colorFix = true;  // applies in both NV12 and RGB paths
     std::string audioArgs;
     std::string audioCodec;  // nullopt = "aac"
     std::string ext;

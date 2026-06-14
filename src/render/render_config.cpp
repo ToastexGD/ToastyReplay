@@ -195,23 +195,24 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
 
     // colorspace: an explicit non-default videoArgs override always wins. Otherwise
-    // qualityColorspace picks the full conversion filter (accurate, slower) vs.
-    // metadata-only tagging (fast). Lossless never touches color.
+    // Color Fix tags the stream BT.709 so players don't misread the matrix (the actual
+    // RGB->YCbCr is already BT.709 in both the NV12 shader and the RGB path). On top of
+    // that, qualityColorspace=accurate adds the full ffmpeg colorspace conversion filter
+    // for the CPU/RGB path (the NV12 path drops it); fast leaves tagging-only. Lossless
+    // never touches color.
     bool userFilter = cfg.videoArgs.has_value()
         && !cfg.videoArgs->empty()
         && *cfg.videoArgs != kDefaultVideoArgs;
+    r.colorFix = cfg.colorFix;
     if (isLossless) {
         r.videoArgs = cfg.videoArgs.value_or("");
         r.colorTags = "";
     } else if (userFilter) {
         r.videoArgs = *cfg.videoArgs;
         r.colorTags = "";
-    } else if (cfg.qualityColorspace) {
-        r.videoArgs = kDefaultVideoArgs;
-        r.colorTags = "";
     } else {
-        r.videoArgs = "";
-        r.colorTags = kFastColorTags;
+        r.videoArgs = cfg.qualityColorspace ? kDefaultVideoArgs : "";
+        r.colorTags = cfg.colorFix ? kFastColorTags : "";
     }
 
     r.audioArgs  = cfg.audioArgs.value_or("");
@@ -257,6 +258,7 @@ void saveRenderConfig(const RenderConfig& cfg) {
     mod->setSavedValue("exp_render_hide_endscreen",     cfg.hideEndscreen);
     mod->setSavedValue("exp_render_hide_levelcomplete", cfg.hideLevelComplete);
     mod->setSavedValue("exp_render_quality_colorspace", cfg.qualityColorspace);
+    mod->setSavedValue("exp_render_color_fix",          cfg.colorFix);
     mod->setSavedValue("exp_render_prefer_speed",       cfg.preferSpeed);
     mod->setSavedValue("exp_render_adv_codec",          cfg.codec.value_or(""));
     mod->setSavedValue("exp_render_adv_crf",            static_cast<int64_t>(cfg.crf.value_or(-1)));
@@ -292,6 +294,7 @@ RenderConfig loadRenderConfig() {
     cfg.hideEndscreen   = mod->getSavedValue<bool>("exp_render_hide_endscreen", false);
     cfg.hideLevelComplete = mod->getSavedValue<bool>("exp_render_hide_levelcomplete", false);
     cfg.qualityColorspace = mod->getSavedValue<bool>("exp_render_quality_colorspace", true);
+    cfg.colorFix          = mod->getSavedValue<bool>("exp_render_color_fix", true);
     cfg.preferSpeed       = mod->getSavedValue<bool>("exp_render_prefer_speed", false);
 
     auto advCodec = mod->getSavedValue<std::string>("exp_render_adv_codec", "");

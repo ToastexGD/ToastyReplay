@@ -20,6 +20,7 @@
 #include <cfloat>
 #include <cstring>
 #include <cstdint>
+#include <fstream>
 #include <fmt/format.h>
 #include <regex>
 #include <system_error>
@@ -2875,15 +2876,14 @@ void MenuInterface::drawHacksTab() {
     }
 }
 
-static constexpr const char* kAudioCodecIds[]    = { "aac",  "libopus", "flac",  "libmp3lame", "pcm_s16le", "ac3",    nullptr };
-static constexpr const char* kAudioCodecLabels[] = { "AAC", "Opus",    "FLAC",  "MP3",        "PCM",       "AC-3", "Custom..." };
-static constexpr int kAudioCodecCustomIdx = 6;
+static constexpr const char* kAudioCodecIds[]    = { "aac",  "libopus", "flac",  "libmp3lame", "pcm_s16le", "ac3",   nullptr };
+static constexpr const char* kAudioCodecLabels[] = { "AAC", "Opus",    "FLAC",  "MP3",        "PCM",       "AC-3"          };
 
 static int audioCodecComboIndex(const char* codec) {
     if (!codec || codec[0] == '\0' || std::string(codec) == "aac") return 0;
     for (int i = 0; kAudioCodecIds[i]; ++i)
         if (std::string(codec) == kAudioCodecIds[i]) return i;
-    return kAudioCodecCustomIdx;
+    return 0;
 }
 
 static bool audioCodecNeedsMkv(const char* codec) {
@@ -3253,14 +3253,50 @@ void MenuInterface::drawRenderDisplaySection() {
 
     if (isExp) {
         auto* engine = ReplayEngine::get();
+        bool rendering = engine->renderer.recording;
+        bool isLossless = expConfig.tier == RenderQualityTier::Lossless;
+        bool customVideoFilter = expAdvVideoArgsBuf[0]
+            && strcmp(expAdvVideoArgsBuf, kDefaultVideoArgs) != 0;
+
+        ImGui::BeginDisabled(rendering);
         if (Widgets::ToggleSwitch("Pulse Fix", &engine->pulseFix, theme, anim))
             mod->setSavedValue("render_pulse_fix", engine->pulseFix);
+        ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(300.0f);
-            ImGui::TextUnformatted("Keeps pulse and color triggers in sync when rendering above 240 TPS.");
+            ImGui::TextUnformatted("Keeps pulse and color triggers in sync when rendering above 240 TPS. Enable before starting the render.");
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
+        }
+
+        ImGui::BeginDisabled(rendering || isLossless || customVideoFilter);
+        if (Widgets::ToggleSwitch("Color Fix", &expConfig.colorFix, theme, anim))
+            saveRenderConfig(expConfig);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(320.0f);
+            ImGui::TextUnformatted("Tags the video with the BT.709 color matrix so players and YouTube "
+                                   "don't misread it as BT.601 (which dulls/shifts colors, greens especially). "
+                                   "Makes the recording match in-game colors. Works on the GPU (NV12) path "
+                                   "with no speed cost. Enable before rendering.");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+
+        if (rendering) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+            ImGui::TextUnformatted("Stop the render to change these.");
+            ImGui::PopStyleColor();
+        } else if (isLossless) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+            ImGui::TextUnformatted("Color Fix is unavailable for lossless output.");
+            ImGui::PopStyleColor();
+        } else if (customVideoFilter) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+            ImGui::TextUnformatted("Color Fix is overridden by a custom Video Filter.");
+            ImGui::PopStyleColor();
         }
     }
 }
@@ -3580,17 +3616,14 @@ void MenuInterface::drawRenderTab() {
         ImGui::SameLine(inputW);
         ImGui::SetNextItemWidth(-1);
         if (ImGui::BeginCombo("##renderACodecCombo", kAudioCodecLabels[acodecIdx])) {
-            for (int i = 0; i <= kAudioCodecCustomIdx; ++i) {
+            for (int i = 0; kAudioCodecIds[i]; ++i) {
                 bool sel = (acodecIdx == i);
                 if (ImGui::Selectable(kAudioCodecLabels[i], sel)) {
                     guardAdvancedEdit();
                     if (advancedWarningAccepted) {
                         char prevCodec[64];
                         snprintf(prevCodec, sizeof(prevCodec), "%s", renderAudioCodecBuf);
-                        if (i < kAudioCodecCustomIdx)
-                            snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", kAudioCodecIds[i]);
-                        else
-                            renderAudioCodecBuf[0] = '\0';
+                        snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", kAudioCodecIds[i]);
                         mod->setSavedValue("render_audio_codec", std::string(renderAudioCodecBuf));
                         if (audioCodecNeedsMkv(renderAudioCodecBuf) && std::string(renderExtBuf) == ".mp4") {
                             showMkvWarning = true;
@@ -3602,20 +3635,6 @@ void MenuInterface::drawRenderTab() {
                 if (sel) ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
-        }
-        if (acodecIdx == kAudioCodecCustomIdx) {
-            ImGui::SetNextItemWidth(-1);
-            if (ImGui::InputText("##renderACodecCustom", renderAudioCodecBuf, sizeof(renderAudioCodecBuf))) {
-                guardAdvancedEdit();
-                if (advancedWarningAccepted)
-                    mod->setSavedValue("render_audio_codec", std::string(renderAudioCodecBuf));
-            }
-            if (ImGui::IsItemDeactivatedAfterEdit() && advancedWarningAccepted &&
-                    audioCodecNeedsMkv(renderAudioCodecBuf) && std::string(renderExtBuf) == ".mp4") {
-                showMkvWarning = true;
-                mkvWarningIsExp = false;
-                mkvWarningPrevCodec[0] = '\0';
-            }
         }
     }
 
@@ -4493,6 +4512,10 @@ void MenuInterface::drawSettingsTab() {
     if (Widgets::StyledButton("View Credits", ImVec2(-1, 32), theme, anim)) {
         ImGui::OpenPopup("Credits##settingsCredits");
     }
+    ImGui::Dummy(ImVec2(0, 4));
+    if (Widgets::StyledButton("Licenses", ImVec2(-1, 32), theme, anim)) {
+        ImGui::OpenPopup("Licenses##settingsLicenses");
+    }
 
     constexpr float kCreditsPopupRounding = 0.0f;
     ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Appearing);
@@ -4571,6 +4594,113 @@ void MenuInterface::drawSettingsTab() {
         if (Widgets::StyledButton("Ok##creditsClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
             ImGui::CloseCurrentPopup();
         }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+
+    struct LicenseEntry {
+        const char* name;
+        const char* description;
+        const char* resourceFile;
+        const char* popupId;
+    };
+    static constexpr std::array<LicenseEntry, 1> licenseEntries = {{
+        {"SIL Open Font License 1.1", "cjk.ttf (Source Han Sans)", "OFL.txt", "##licenseOFL"},
+    }};
+
+    static std::string licenseViewText;
+    static int licenseViewIndex = -1;
+
+    constexpr float kLicensesPopupRounding = 0.0f;
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kLicensesPopupRounding);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
+    if (ImGui::BeginPopupModal(
+        "Licenses##settingsLicenses",
+        nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+    )) {
+        auto licensesTitle = trString("Licenses");
+        drawPopupChrome(*this, licensesTitle.c_str(), kLicensesPopupRounding);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+        ImGui::TextUnformatted("Third-party components used by ToastyReplay:");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 6));
+
+        for (int i = 0; i < (int)licenseEntries.size(); ++i) {
+            auto const& entry = licenseEntries[i];
+            ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            float rowW = ImGui::GetContentRegionAvail().x;
+            float rowH = 52.0f;
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(rowPos, ImVec2(rowPos.x + rowW, rowPos.y + rowH), IM_COL32(255, 255, 255, 8), 4.0f);
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 8.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
+            ImGui::TextUnformatted(entry.name);
+            ImGui::PopStyleColor();
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 28.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+            ImGui::TextUnformatted(entry.description);
+            ImGui::PopStyleColor();
+
+            constexpr float btnW = 80.0f;
+            constexpr float btnH = 26.0f;
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + rowW - btnW - 8.0f, rowPos.y + 13.0f));
+            std::string btnId = std::string("View") + entry.popupId;
+            if (Widgets::StyledButton(btnId.c_str(), ImVec2(btnW, btnH), theme, anim, 6.0f)) {
+                licenseViewIndex = i;
+                auto path = Mod::get()->getResourcesDir() / entry.resourceFile;
+                std::ifstream f(path);
+                licenseViewText = f ? std::string(std::istreambuf_iterator<char>(f), {}) : "(Failed to load license file.)";
+                ImGui::OpenPopup("LicenseView##settingsLicenseView");
+            }
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowPos.y + rowH + 4.0f));
+        }
+
+        ImGui::Dummy(ImVec2(0, 8));
+        if (Widgets::StyledButton("Close##licensesClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        // Nested license text popup
+        ImGui::SetNextWindowSize(ImVec2(500.0f, 420.0f), ImGuiCond_Appearing);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kLicensesPopupRounding);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
+        if (ImGui::BeginPopupModal(
+            "LicenseView##settingsLicenseView",
+            nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        )) {
+            const char* viewTitle = (licenseViewIndex >= 0) ? licenseEntries[licenseViewIndex].name : "License";
+            drawPopupChrome(*this, viewTitle, kLicensesPopupRounding);
+
+            ImGui::BeginChild("##licenseTextScroll", ImVec2(-1, 340.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+            ImGui::TextUnformatted(licenseViewText.c_str());
+            ImGui::PopStyleColor();
+            ImGui::EndChild();
+
+            ImGui::Dummy(ImVec2(0, 6));
+            if (Widgets::StyledButton("Back##licenseViewBack", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar(2);
 
         ImGui::EndPopup();
     }
@@ -5050,6 +5180,15 @@ void MenuInterface::loadRenderSettings() {
 
     auto audioCodecStr = mod->getSavedValue<std::string>("render_audio_codec", "aac");
     if (audioCodecStr.empty()) audioCodecStr = "aac";
+    {
+        bool known = false;
+        for (int i = 0; kAudioCodecIds[i]; ++i)
+            if (audioCodecStr == kAudioCodecIds[i]) { known = true; break; }
+        if (!known) {
+            audioCodecStr = "aac";
+            mod->setSavedValue("render_audio_codec", audioCodecStr);
+        }
+    }
     snprintf(renderAudioCodecBuf, sizeof(renderAudioCodecBuf), "%s", audioCodecStr.c_str());
 
     renderIncludeAudio = includeAudio;
@@ -5906,7 +6045,7 @@ void MenuInterface::drawExpRenderTab() {
         else if (customVideoFilter)
             ImGui::TextUnformatted("[overridden by Video Filter]");
         else
-            ImGui::TextUnformatted(expConfig.qualityColorspace ? "[accurate]" : "[fast]");
+            ImGui::TextUnformatted(expConfig.qualityColorspace ? "[accurate - CPU path]" : "[fast]");
         ImGui::PopStyleColor();
     }
 

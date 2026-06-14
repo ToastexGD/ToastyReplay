@@ -1899,13 +1899,13 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 std::string vfArg;
                 std::string colorTags;
                 if (nv12Pipe) {
-                    // capture already delivers BT.709 NV12: drop the conversion
-                    // filter, keep a user-custom one, and always tag the stream
+                    // capture already delivers BT.709 NV12: drop the conversion filter,
+                    // keep a user-custom one, and tag the stream BT.709 when Color Fix is on
                     bool userFilter = !rp.videoArgs.empty() && rp.videoArgs != kDefaultVideoArgs;
                     if (userFilter) vfArg = fmt::format("-vf \"{}\" ", rp.videoArgs);
                     colorTags = userFilter
                         ? (rp.colorTags.empty() ? "" : rp.colorTags + " ")
-                        : std::string(kFastColorTags) + " ";
+                        : (rp.colorFix ? std::string(kFastColorTags) + " " : "");
                 } else {
                     if (!rp.videoArgs.empty()) vfArg = fmt::format("-vf \"{}\" ", rp.videoArgs);
                     if (!rp.colorTags.empty()) colorTags = rp.colorTags + " ";

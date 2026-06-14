@@ -100,6 +100,7 @@ static std::string serializePreset(RenderPreset const& p) {
        << "use_gpu="      << (p.useGpu ? "true" : "false") << "\n"
        << "codec_family=" << familyToString(p.codecFamily) << "\n"
        << "quality_cs="   << (p.qualityColorspace ? "true" : "false") << "\n"
+       << "color_fix="    << (p.colorFix ? "true" : "false") << "\n"
        << "prefer_speed=" << (p.preferSpeed ? "true" : "false") << "\n";
     return ss.str();
 }
@@ -154,6 +155,7 @@ static std::optional<RenderPreset> parsePreset(std::string_view text) {
         else if (key == "use_gpu")           p.useGpu      = (val == "true");
         else if (key == "codec_family")      p.codecFamily = familyFromString(val);
         else if (key == "quality_cs")        p.qualityColorspace = (val == "true");
+        else if (key == "color_fix")         p.colorFix = (val == "true");
         else if (key == "prefer_speed")      p.preferSpeed = (val == "true");
     }
 
@@ -231,6 +233,7 @@ RenderConfig RenderPreset::toRenderConfig() const {
     cfg.useGpu      = useGpu;
     cfg.codecFamily = codecFamily;
     cfg.qualityColorspace = qualityColorspace;
+    cfg.colorFix = colorFix;
     cfg.preferSpeed = preferSpeed;
     cfg.width  = static_cast<unsigned>(width);
     cfg.height = static_cast<unsigned>(height);
@@ -267,6 +270,7 @@ RenderPreset RenderPreset::fromRenderConfig(const RenderConfig& cfg, std::string
     p.useGpu      = cfg.useGpu;
     p.codecFamily = cfg.codecFamily;
     p.qualityColorspace = cfg.qualityColorspace;
+    p.colorFix = cfg.colorFix;
     p.preferSpeed = cfg.preferSpeed;
     p.width  = static_cast<int>(cfg.width);
     p.height = static_cast<int>(cfg.height);
