@@ -667,7 +667,7 @@ float Renderer::getTPS() const {
 }
 
 void RenderTexture::begin() {
-#ifdef GEODE_IS_WINDOWS
+#if !defined(GEODE_IS_IOS)
     end();
 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
@@ -700,7 +700,7 @@ void RenderTexture::begin() {
 }
 
 void RenderTexture::end() {
-#ifdef GEODE_IS_WINDOWS
+#if !defined(GEODE_IS_IOS)
     if (fbo) {
         glDeleteFramebuffers(1, &fbo);
         fbo = 0;
@@ -717,7 +717,7 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
     PlayLayer* pl = PlayLayer::get();
     if (!pl || !fbo) return;
 
-#ifdef GEODE_IS_WINDOWS
+#if !defined(GEODE_IS_IOS)
     auto frame = frameCapture.createFrameBuffer();
     if (frame.empty()) return;
 
