@@ -19,6 +19,7 @@
 #include <cfloat>
 #include <cstring>
 #include <cstdint>
+#include <fstream>
 #include <fmt/format.h>
 #include <regex>
 #include <system_error>
@@ -3925,6 +3926,10 @@ void MenuInterface::drawSettingsTab() {
     if (Widgets::StyledButton("View Credits", ImVec2(-1, 32), theme, anim)) {
         ImGui::OpenPopup("Credits##settingsCredits");
     }
+    ImGui::Dummy(ImVec2(0, 4));
+    if (Widgets::StyledButton("Licenses", ImVec2(-1, 32), theme, anim)) {
+        ImGui::OpenPopup("Licenses##settingsLicenses");
+    }
 
     constexpr float kCreditsPopupRounding = 0.0f;
     ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Appearing);
@@ -4003,6 +4008,113 @@ void MenuInterface::drawSettingsTab() {
         if (Widgets::StyledButton("Ok##creditsClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
             ImGui::CloseCurrentPopup();
         }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+
+    struct LicenseEntry {
+        const char* name;
+        const char* description;
+        const char* resourceFile;
+        const char* popupId;
+    };
+    static constexpr std::array<LicenseEntry, 1> licenseEntries = {{
+        {"SIL Open Font License 1.1", "cjk.ttf (Source Han Sans)", "OFL.txt", "##licenseOFL"},
+    }};
+
+    static std::string licenseViewText;
+    static int licenseViewIndex = -1;
+
+    constexpr float kLicensesPopupRounding = 0.0f;
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kLicensesPopupRounding);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
+    if (ImGui::BeginPopupModal(
+        "Licenses##settingsLicenses",
+        nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+    )) {
+        auto licensesTitle = trString("Licenses");
+        drawPopupChrome(*this, licensesTitle.c_str(), kLicensesPopupRounding);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+        ImGui::TextUnformatted("Third-party components used by ToastyReplay:");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 6));
+
+        for (int i = 0; i < (int)licenseEntries.size(); ++i) {
+            auto const& entry = licenseEntries[i];
+            ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            float rowW = ImGui::GetContentRegionAvail().x;
+            float rowH = 52.0f;
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(rowPos, ImVec2(rowPos.x + rowW, rowPos.y + rowH), IM_COL32(255, 255, 255, 8), 4.0f);
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 8.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
+            ImGui::TextUnformatted(entry.name);
+            ImGui::PopStyleColor();
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 28.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+            ImGui::TextUnformatted(entry.description);
+            ImGui::PopStyleColor();
+
+            constexpr float btnW = 80.0f;
+            constexpr float btnH = 26.0f;
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + rowW - btnW - 8.0f, rowPos.y + 13.0f));
+            std::string btnId = std::string("View") + entry.popupId;
+            if (Widgets::StyledButton(btnId.c_str(), ImVec2(btnW, btnH), theme, anim, 6.0f)) {
+                licenseViewIndex = i;
+                auto path = Mod::get()->getResourcesDir() / entry.resourceFile;
+                std::ifstream f(path);
+                licenseViewText = f ? std::string(std::istreambuf_iterator<char>(f), {}) : "(Failed to load license file.)";
+                ImGui::OpenPopup("LicenseView##settingsLicenseView");
+            }
+
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowPos.y + rowH + 4.0f));
+        }
+
+        ImGui::Dummy(ImVec2(0, 8));
+        if (Widgets::StyledButton("Close##licensesClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        // Nested license text popup
+        ImGui::SetNextWindowSize(ImVec2(500.0f, 420.0f), ImGuiCond_Appearing);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kLicensesPopupRounding);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
+        if (ImGui::BeginPopupModal(
+            "LicenseView##settingsLicenseView",
+            nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+        )) {
+            const char* viewTitle = (licenseViewIndex >= 0) ? licenseEntries[licenseViewIndex].name : "License";
+            drawPopupChrome(*this, viewTitle, kLicensesPopupRounding);
+
+            ImGui::BeginChild("##licenseTextScroll", ImVec2(-1, 340.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+            ImGui::TextUnformatted(licenseViewText.c_str());
+            ImGui::PopStyleColor();
+            ImGui::EndChild();
+
+            ImGui::Dummy(ImVec2(0, 6));
+            if (Widgets::StyledButton("Back##licenseViewBack", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar(2);
 
         ImGui::EndPopup();
     }
