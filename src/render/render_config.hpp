@@ -6,7 +6,8 @@
 #include <string>
 #include <vector>
 
-enum class RenderCodecFamily { H264, AV1, H265 };
+// appended in saved order: H264=0, AV1=1, H265=2, VP9=3, VP8=4, VVC=5
+enum class RenderCodecFamily { H264, AV1, H265, VP9, VP8, VVC };
 enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
 
 inline constexpr const char* kDefaultVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";

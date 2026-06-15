@@ -3031,7 +3031,21 @@ static unsigned videoFamilyContainerMask(RenderCodecFamily family) {
     switch (family) {
         case RenderCodecFamily::H265: return AC_MP4 | AC_MKV | AC_MOV;
         case RenderCodecFamily::AV1:  return AC_MP4 | AC_MKV | AC_WMV;
+        case RenderCodecFamily::VP9:  return AC_MKV;  // Matroska/WebM (WebM not modeled)
+        case RenderCodecFamily::VP8:  return AC_MKV;
+        case RenderCodecFamily::VVC:  return AC_MP4 | AC_MKV | AC_MOV;
         default:                      return kAllAudioContainers;
+    }
+}
+
+static const char* videoFamilyLabel(RenderCodecFamily family) {
+    switch (family) {
+        case RenderCodecFamily::H265: return "H.265";
+        case RenderCodecFamily::AV1:  return "AV1";
+        case RenderCodecFamily::VP9:  return "VP9";
+        case RenderCodecFamily::VP8:  return "VP8";
+        case RenderCodecFamily::VVC:  return "H.266/VVC";
+        default:                      return "H.264";
     }
 }
 
@@ -3064,6 +3078,10 @@ static constexpr KnownVideoEncoder kKnownVideoEncoders[] = {
     { "av1_nvenc",  RenderCodecFamily::AV1,  true,  "NVIDIA" },
     { "av1_qsv",    RenderCodecFamily::AV1,  true,  "Intel" },
     { "av1_amf",    RenderCodecFamily::AV1,  true,  "AMD" },
+    { "libvpx-vp9", RenderCodecFamily::VP9,  false, "software" },
+    { "vp9_qsv",    RenderCodecFamily::VP9,  true,  "Intel" },
+    { "libvpx",     RenderCodecFamily::VP8,  false, "software" },
+    { "libvvenc",   RenderCodecFamily::VVC,  false, "software, slow" },
 };
 
 void MenuInterface::drawRenderPresetsSection() {
@@ -5368,7 +5386,8 @@ void MenuInterface::loadExpRenderSettings() {
 
         expProbedVideoCodecs = probeVideoCodecs(probeExe);
         if (expProbedVideoCodecs.empty()) {
-            for (auto fam : { RenderCodecFamily::H264, RenderCodecFamily::H265, RenderCodecFamily::AV1 }) {
+            for (auto fam : { RenderCodecFamily::H264, RenderCodecFamily::H265,
+                              RenderCodecFamily::AV1, RenderCodecFamily::VP9 }) {
                 auto gpu = probeGpuEncoder(fam);
                 if (!gpu.empty()) expProbedVideoCodecs.push_back(gpu);
             }
@@ -5609,9 +5628,12 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
 
         struct FamilyRow { RenderCodecFamily fam; const char* label; };
         static constexpr FamilyRow kFamilies[] = {
-            { RenderCodecFamily::H264, "H.264" },
-            { RenderCodecFamily::H265, "H.265" },
-            { RenderCodecFamily::AV1,  "AV1"   },
+            { RenderCodecFamily::H264, "H.264"     },
+            { RenderCodecFamily::H265, "H.265"     },
+            { RenderCodecFamily::AV1,  "AV1"       },
+            { RenderCodecFamily::VP9,  "VP9"       },
+            { RenderCodecFamily::VP8,  "VP8"       },
+            { RenderCodecFamily::VVC,  "H.266/VVC" },
         };
 
         ImGui::BeginChild("##expVideoCodecList", ImVec2(-1, -40.0f), true);
@@ -5856,6 +5878,10 @@ void MenuInterface::drawExpRenderTab() {
     bool gpuAvail = !expConfig.gpuEncoder.empty();
     bool isLossless = expConfig.tier == RenderQualityTier::Lossless;
     bool isAv1 = expConfig.codecFamily == RenderCodecFamily::AV1;
+    bool familyNeedsExe = isAv1
+        || expConfig.codecFamily == RenderCodecFamily::VP8
+        || expConfig.codecFamily == RenderCodecFamily::VP9
+        || expConfig.codecFamily == RenderCodecFamily::VVC;
 #ifdef GEODE_IS_WINDOWS
     auto ffmpegSetting = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
     bool ffmpegAvail = false;
@@ -5877,7 +5903,7 @@ void MenuInterface::drawExpRenderTab() {
     bool ffmpegAvail = true;
     std::string ffmpegFoundPath;
 #endif
-    bool av1NeedsExe = isAv1 && !ffmpegAvail;
+    bool av1NeedsExe = familyNeedsExe && !ffmpegAvail;
     bool apiLimited = !ffmpegAvail;
     if (apiLimited) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.78f, 0.15f, 1.0f));
@@ -5951,11 +5977,13 @@ void MenuInterface::drawExpRenderTab() {
         ImGui::TextUnformatted("[unavailable]");
     ImGui::PopStyleColor();
 
-    // codec family picker: H.264 / H.265 / AV1
+    // codec family picker: H.264 / H.265 / AV1 / VP9 / VP8 / H.266 (VVC)
     imguiTextTr("Codec Family");
     ImGui::SameLine(inputW);
     {
-        float pillW = (ImGui::GetContentRegionAvail().x - 8.0f) / 3.0f;
+        constexpr int kPerRow = 3;
+        float pillW = (ImGui::GetContentRegionAvail().x - 4.0f * (kPerRow - 1)) / kPerRow;
+        float rowStartX = ImGui::GetCursorPosX();
         auto refreshTierBufs = [&]() {
             expConfig.codec = std::nullopt; expConfig.crf = std::nullopt; expConfig.extraArgs = std::nullopt;
             expCodecIsAdvancedOverride = false;
@@ -5972,14 +6000,25 @@ void MenuInterface::drawExpRenderTab() {
             refreshTierBufs();
             saveRenderConfig(expConfig);
         };
-        if (Widgets::PillButton("H.264", expConfig.codecFamily == RenderCodecFamily::H264, pillW, theme, anim))
-            selectFamily(RenderCodecFamily::H264);
-        ImGui::SameLine(0, 4);
-        if (Widgets::PillButton("H.265", expConfig.codecFamily == RenderCodecFamily::H265, pillW, theme, anim))
-            selectFamily(RenderCodecFamily::H265);
-        ImGui::SameLine(0, 4);
-        if (Widgets::PillButton("AV1", expConfig.codecFamily == RenderCodecFamily::AV1, pillW, theme, anim))
-            selectFamily(RenderCodecFamily::AV1);
+        struct FamPill { RenderCodecFamily fam; const char* label; };
+        static constexpr FamPill kFamPills[] = {
+            { RenderCodecFamily::H264, "H.264" },
+            { RenderCodecFamily::H265, "H.265" },
+            { RenderCodecFamily::AV1,  "AV1"   },
+            { RenderCodecFamily::VP9,  "VP9"   },
+            { RenderCodecFamily::VP8,  "VP8"   },
+            { RenderCodecFamily::VVC,  "H.266" },
+        };
+        for (int i = 0; i < static_cast<int>(std::size(kFamPills)); ++i) {
+            if (i % kPerRow == 0) {
+                if (i != 0) ImGui::SetCursorPosX(rowStartX);
+            } else {
+                ImGui::SameLine(0, 4);
+            }
+            const auto& fp = kFamPills[i];
+            if (Widgets::PillButton(fp.label, expConfig.codecFamily == fp.fam, pillW, theme, anim))
+                selectFamily(fp.fam);
+        }
     }
     {
         std::string curExt = expAdvExtBuf[0] ? expAdvExtBuf : ".mp4";
@@ -5987,7 +6026,7 @@ void MenuInterface::drawExpRenderTab() {
         unsigned ef    = extContainerFlag(curExt);
         if (ef && (vMask & ef) == 0) {
             const char* rec    = (vMask & AC_MP4) ? ".mp4" : (vMask & AC_MKV) ? ".mkv" : ".mkv";
-            const char* fam    = expConfig.codecFamily == RenderCodecFamily::H265 ? "H.265" : "AV1";
+            const char* fam    = videoFamilyLabel(expConfig.codecFamily);
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
             ImGui::TextWrapped("[!] %s cannot be muxed into %s. Change extension to %s.", fam, curExt.c_str(), rec);
             ImGui::PopStyleColor();

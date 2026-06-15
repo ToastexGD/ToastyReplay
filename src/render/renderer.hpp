@@ -25,6 +25,7 @@ class FrameCaptureService {
 public:
     void configure(size_t bytesPerFrame, size_t maxBufferedFrames = 2);
     void clear();
+    void releasePool();
     void notifyStop();
     bool hasPendingFrame() const;
     std::vector<uint8_t> acquireBuffer();

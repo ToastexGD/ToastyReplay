@@ -633,6 +633,15 @@ void FrameCaptureService::clear() {
     m_pendingChanged.notify_all();
 }
 
+void FrameCaptureService::releasePool() {
+    std::lock_guard lock(m_lock);
+    m_pendingFrames.clear();
+    m_pendingFrames.shrink_to_fit();
+    m_freeList.clear();
+    m_freeList.shrink_to_fit();
+    m_pendingChanged.notify_all();
+}
+
 void FrameCaptureService::notifyStop() {
     m_pendingChanged.notify_all();
 }
@@ -1344,9 +1353,11 @@ static bool isValidCodecName(const std::string& s) {
 // AMF uses CQP (-qp_i/p/b; AMF has no -cq and -b:v 0 doesn't mean "pure CQ" to it),
 // QSV uses -global_quality. Tuff fix.
 static std::string buildQualitySection(const ResolvedEncodeParams& rp) {
-    bool isNvenc = rp.codec.find("nvenc") != std::string::npos;
-    bool isAmf   = rp.codec.find("amf")   != std::string::npos;
-    bool isQsv   = rp.codec.find("qsv")   != std::string::npos;
+    bool isNvenc = rp.codec.find("nvenc")  != std::string::npos;
+    bool isAmf   = rp.codec.find("amf")    != std::string::npos;
+    bool isQsv   = rp.codec.find("qsv")    != std::string::npos;
+    bool isVpx   = rp.codec.find("libvpx") != std::string::npos;
+    bool isVvc   = rp.codec.find("vvenc")  != std::string::npos;
     std::string q;
     if (isNvenc)
         q = fmt::format("-rc vbr -cq {} -b:v 0", rp.crf);
@@ -1356,6 +1367,18 @@ static std::string buildQualitySection(const ResolvedEncodeParams& rp) {
         bool isAv1Qsv = rp.codec.find("av1") != std::string::npos;
         int qsvQ = isAv1Qsv ? std::max(1, (rp.crf * 51 + 32) / 63) : rp.crf;
         q = fmt::format("-global_quality {} -b:v 0", qsvQ);
+    } else if (isVpx) {
+        q = fmt::format("-crf {} -b:v 0", rp.crf);
+        if (!rp.x264Preset.empty())
+            q += fmt::format(" -deadline good -cpu-used {}", rp.x264Preset);
+        if (rp.codec.find("vp9") != std::string::npos)
+            q += " -row-mt 1";
+        return q;
+    } else if (isVvc) {
+        q = fmt::format("-qp {}", rp.crf);
+        if (!rp.x264Preset.empty())
+            q += fmt::format(" -preset {}", rp.x264Preset);
+        return q;
     } else
         q = fmt::format("-crf {}", rp.crf);
     if (!rp.x264Preset.empty())
@@ -1420,8 +1443,13 @@ void Renderer::start(const RenderConfig& config) {
     hideEndscreen     = config.hideEndscreen;
     hideLevelComplete = config.hideLevelComplete;
 
-    if (config.tier == RenderQualityTier::Lossless ||
-        config.codecFamily == RenderCodecFamily::AV1) {
+    // AV1, VP8/VP9, and H.266/VVC rely on encoders (libsvtav1/libvpx/libvvenc, vp9_qsv)
+    // that the bundled FFmpeg API build doesn't carry, so they require a real ffmpeg.exe.
+    bool familyNeedsExe = config.codecFamily == RenderCodecFamily::AV1
+                       || config.codecFamily == RenderCodecFamily::VP8
+                       || config.codecFamily == RenderCodecFamily::VP9
+                       || config.codecFamily == RenderCodecFamily::VVC;
+    if (config.tier == RenderQualityTier::Lossless || familyNeedsExe) {
 #ifdef GEODE_IS_WINDOWS
         if (ffmpegPath.empty()) {
             auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
@@ -1431,7 +1459,7 @@ void Renderer::start(const RenderConfig& config) {
             m_resolvedParams.reset();
             Loader::get()->queueInMainThread([] {
                 auto title = trString("Error");
-                auto msg = trString("AV1 and Lossless require <cl>ffmpeg.exe</c>. Configure the path in this mod's settings or switch to H264.");
+                auto msg = trString("AV1, VP8/VP9, H.266 and Lossless require <cl>ffmpeg.exe</c>. Configure the path in this mod's settings or switch to H264.");
                 auto ok = trString("Ok");
                 FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
             });
@@ -1617,8 +1645,16 @@ void Renderer::start() {
     bool wantNv12 = m_resolvedParams.has_value() && !usingApi
         && m_resolvedParams->codec.find("rgb") == std::string::npos;
     renderTex.begin(wantNv12, frameCapture);
-    frameCapture.configure(
-        static_cast<size_t>(width) * static_cast<size_t>(height) * (renderTex.nv12 ? 3 : 6) / 2, 8);
+    // Memory-bounded queue depth: cap the queued frame bytes instead of the frame count,
+    // so a 4K render doesn't balloon the pool (10 RGB frames at 4K is ~248 MB). The pool
+    // holds depth+2 buffers; low resolutions still get the full depth essentially for free,
+    // while at 4K the encoder is the bottleneck so a shallower queue costs no throughput.
+    size_t bytesPerFrame = static_cast<size_t>(width) * static_cast<size_t>(height)
+        * (renderTex.nv12 ? 3 : 6) / 2;
+    constexpr size_t kFrameQueueBudget = 96ull * 1024 * 1024;  // ~96 MB of queued frames
+    size_t queueDepth = bytesPerFrame ? kFrameQueueBudget / bytesPerFrame : 8;
+    queueDepth = std::clamp<size_t>(queueDepth, 3, 8);
+    frameCapture.configure(bytesPerFrame, queueDepth);
     changeRes(false);
     resetSimulationTimingState();
 
@@ -1760,9 +1796,12 @@ void Renderer::start() {
 
 void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi) {
         struct EncodeActiveGuard {
-            std::atomic<bool>& flag;
-            ~EncodeActiveGuard() { flag.store(false, std::memory_order_release); }
-        } encodeActiveGuard{ m_encodeActive };
+            Renderer* self;
+            ~EncodeActiveGuard() {
+                self->frameCapture.releasePool();
+                self->m_encodeActive.store(false, std::memory_order_release);
+            }
+        } encodeActiveGuard{ this };
 
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
@@ -1889,10 +1928,13 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 std::string qualitySection = buildQualitySection(rp);
                 if (!rp.tuning.empty()) qualitySection += " " + rp.tuning;
                 {
+                    bool isIsoBmff = rp.ext == ".mp4" || rp.ext == ".mov" || rp.ext == ".m4v";
                     bool isHevc = rp.codec.find("hevc") != std::string::npos
                                || rp.codec.find("265")  != std::string::npos;
-                    if (isHevc && (rp.ext == ".mp4" || rp.ext == ".mov" || rp.ext == ".m4v"))
+                    if (isHevc && isIsoBmff)
                         qualitySection += " -tag:v hvc1";
+                    else if (rp.codec.find("vvenc") != std::string::npos && isIsoBmff)
+                        qualitySection += " -tag:v vvc1";
                 }
 
                 bool nv12Pipe = renderTex.nv12;

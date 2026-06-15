@@ -50,6 +50,9 @@ static const char* familyToString(RenderCodecFamily f) {
     switch (f) {
         case RenderCodecFamily::AV1:  return "AV1";
         case RenderCodecFamily::H265: return "H265";
+        case RenderCodecFamily::VP9:  return "VP9";
+        case RenderCodecFamily::VP8:  return "VP8";
+        case RenderCodecFamily::VVC:  return "VVC";
         default:                      return "H264";
     }
 }
@@ -57,6 +60,9 @@ static const char* familyToString(RenderCodecFamily f) {
 static RenderCodecFamily familyFromString(std::string_view s) {
     if (s == "AV1")  return RenderCodecFamily::AV1;
     if (s == "H265") return RenderCodecFamily::H265;
+    if (s == "VP9")  return RenderCodecFamily::VP9;
+    if (s == "VP8")  return RenderCodecFamily::VP8;
+    if (s == "VVC")  return RenderCodecFamily::VVC;
     return RenderCodecFamily::H264;
 }
 

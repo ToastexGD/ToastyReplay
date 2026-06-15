@@ -28,6 +28,13 @@ std::string probeGpuEncoder(RenderCodecFamily family) {
         }
         return {};
     }
+    if (family == RenderCodecFamily::VP9) {
+        if (std::find(codecs.begin(), codecs.end(), std::string("vp9_qsv")) != codecs.end())
+            return "vp9_qsv";
+        return {};
+    }
+    if (family == RenderCodecFamily::VP8 || family == RenderCodecFamily::VVC)
+        return {};
     for (const char* candidate : { "h264_nvenc", "h264_amf", "h264_qsv" }) {
         if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
             return candidate;
@@ -134,6 +141,24 @@ static std::string fasterPreset(RenderCodecFamily family, const std::string& pre
         if (res.ec != std::errc{}) return preset;
         return std::to_string(std::min(p + 2, 12));
     }
+    if (family == RenderCodecFamily::VP8 || family == RenderCodecFamily::VP9) {
+        // libvpx preset is the -cpu-used value: higher = faster. VP8 tops out at 5
+        // under -deadline good; VP9 allows up to 8.
+        int p = 0;
+        auto res = std::from_chars(preset.data(), preset.data() + preset.size(), p);
+        if (res.ec != std::errc{}) return preset;
+        int cap = family == RenderCodecFamily::VP8 ? 5 : 8;
+        return std::to_string(std::min(p + 1, cap));
+    }
+    if (family == RenderCodecFamily::VVC) {
+        static constexpr const char* ladder[] = {
+            "faster", "fast", "medium", "slow", "slower",
+        };
+        for (size_t i = 0; i < std::size(ladder); ++i)
+            if (preset == ladder[i])
+                return ladder[i == 0 ? 0 : i - 1];
+        return preset;
+    }
     static constexpr const char* ladder[] = {
         "ultrafast", "superfast", "veryfast", "faster", "fast",
         "medium", "slow", "slower", "veryslow",
@@ -175,11 +200,42 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         { "libx265",    "slow",      "p7", 19,  40'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
+    // VP9 (libvpx-vp9): constant-quality via -crf + -b:v 0 (CRF 0-63, lower = better).
+    // cpuPreset holds the -cpu-used value (higher = faster). vp9_qsv (Intel) uses the
+    // shared QSV path. nvencPreset unused. Lossless falls back to libx264rgb.
+    static constexpr TierParams kVp9Tiers[] = {
+        { "libvpx-vp9", "5",         "p1", 36,  15'000'000LL },
+        { "libvpx-vp9", "2",         "p4", 31,  22'000'000LL },
+        { "libvpx-vp9", "1",         "p7", 24,  40'000'000LL },
+        { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
+    };
+    // VP8 (libvpx): CRF 4-63 with -b:v 0; cpuPreset is -cpu-used (0-5 under -deadline good).
+    // No GPU encoder. Lossless falls back to libx264rgb.
+    static constexpr TierParams kVp8Tiers[] = {
+        { "libvpx",     "4",         "p1", 30,  18'000'000LL },
+        { "libvpx",     "2",         "p4", 22,  28'000'000LL },
+        { "libvpx",     "1",         "p7", 14,  45'000'000LL },
+        { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
+    };
+    // H.266/VVC (libvvenc): quality via -qp (0-63, lower = better); cpuPreset is the named
+    // libvvenc preset. CPU only, very slow. Lossless falls back to libx264rgb.
+    static constexpr TierParams kVvcTiers[] = {
+        { "libvvenc",   "faster",    "p1", 38,  10'000'000LL },
+        { "libvvenc",   "medium",    "p4", 32,  15'000'000LL },
+        { "libvvenc",   "slow",      "p7", 26,  25'000'000LL },
+        { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
+    };
 
     bool isAv1 = cfg.codecFamily == RenderCodecFamily::AV1;
+    bool isVp8 = cfg.codecFamily == RenderCodecFamily::VP8;
+    bool isVp9 = cfg.codecFamily == RenderCodecFamily::VP9;
+    bool isVvc = cfg.codecFamily == RenderCodecFamily::VVC;
     const TierParams* tierArray =
         cfg.codecFamily == RenderCodecFamily::AV1  ? kAv1Tiers  :
         cfg.codecFamily == RenderCodecFamily::H265 ? kH265Tiers :
+        cfg.codecFamily == RenderCodecFamily::VP9  ? kVp9Tiers  :
+        cfg.codecFamily == RenderCodecFamily::VP8  ? kVp8Tiers  :
+        cfg.codecFamily == RenderCodecFamily::VVC  ? kVvcTiers  :
                                                      kH264Tiers;
     auto tierIdx = static_cast<size_t>(std::clamp(static_cast<int>(cfg.tier), 0,
                                                    static_cast<int>(RenderQualityTier::Lossless)));
@@ -217,7 +273,9 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
 
     r.audioArgs  = cfg.audioArgs.value_or("");
     r.audioCodec = cfg.audioCodec.value_or("aac");
-    r.maxBitrate = (isAv1 || isLossless) ? "" : cfg.maxBitrate.value_or("");
+
+    bool noBitrateCap = isAv1 || isVp8 || isVp9 || isVvc;
+    r.maxBitrate = (noBitrateCap || isLossless) ? "" : cfg.maxBitrate.value_or("");
     if (!r.maxBitrate.empty() && std::all_of(r.maxBitrate.begin(), r.maxBitrate.end(),
             [](unsigned char c) { return std::isdigit(c); }))
         r.maxBitrate += "M";
@@ -227,6 +285,9 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         for (const char* c : { "libopus", "opus", "libvorbis", "vorbis", "flac" })
             if (r.audioCodec == c) { r.ext = ".mkv"; break; }
     }
+
+    if ((isVp8 || isVp9) && (r.ext == ".mp4" || r.ext == ".mov" || r.ext == ".m4v"))
+        r.ext = ".mkv";
     r.apiBitrate = td.apiBitrate;
 
     // NVENC uses -preset pN; CPU x264/svtav1 uses -preset name; AMF/QSV have no standard flag
@@ -282,6 +343,9 @@ RenderConfig loadRenderConfig() {
     int family = static_cast<int>(mod->getSavedValue<int64_t>("exp_render_codec_family", 0));
     cfg.codecFamily = (family == 1) ? RenderCodecFamily::AV1
                     : (family == 2) ? RenderCodecFamily::H265
+                    : (family == 3) ? RenderCodecFamily::VP9
+                    : (family == 4) ? RenderCodecFamily::VP8
+                    : (family == 5) ? RenderCodecFamily::VVC
                                     : RenderCodecFamily::H264;
     cfg.width     = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_width", 1920));
     cfg.height    = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_height", 1080));
