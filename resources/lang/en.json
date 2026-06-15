@@ -380,5 +380,7 @@
   "Your account has been restricted.": "Your account has been restricted.",
   "Your account is restricted from submitting issues.": "Your account is restricted from submitting issues.",
   "Your account is restricted from uploading macros.": "Your account is restricted from uploading macros.",
-  "~{cps} clicks/sec with fractional substeps": "~{cps} clicks/sec with fractional substeps"
+  "~{cps} clicks/sec with fractional substeps": "~{cps} clicks/sec with fractional substeps",
+  "Search...": "Search...",
+  "Page {current} / {total}": "Page {current} / {total}"
 }

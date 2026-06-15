@@ -178,6 +178,12 @@ public:
     char backupVideoArgsBuf[256] = "colorspace=all=bt709:iall=bt470bg:fast=1";
     char backupAudioArgsBuf[256] = "";
     char backupSecondsAfterBuf[16] = "3";
+    char replaySearchBuffer[64] = "";
+    int replayCurrentPage = 0;
+    static constexpr int replayPageSize = 6;
+    static constexpr int replayPageSizeConversion = 4;
+    char foreignSearchBuffer[64] = "";
+    int foreignCurrentPage = 0;
 
     ImVec2 windowPos = ImVec2(-1, -1);
     bool windowPosInitialized = false;

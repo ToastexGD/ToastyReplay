@@ -354,5 +354,7 @@
   "Your account has been restricted.": "Ton compte a été restreint.",
   "Your account is restricted from submitting issues.": "Ton compte ne peut pas envoyer de signalements.",
   "Your account is restricted from uploading macros.": "Ton compte ne peut pas envoyer de macros.",
-  "~{cps} clicks/sec with fractional substeps": "~{cps} clics/sec avec sous-étapes fractionnaires"
+  "~{cps} clicks/sec with fractional substeps": "~{cps} clics/sec avec sous-étapes fractionnaires",
+  "Search...": "Rechercher...",
+  "Page {current} / {total}": "Page {current} / {total}"
 }

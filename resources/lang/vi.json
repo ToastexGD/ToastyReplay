@@ -380,5 +380,7 @@
   "Your account has been restricted.": "Tài khoản của bạn đã bị hạn chế.",
   "Your account is restricted from submitting issues.": "Tài khoản của bạn không thể gửi báo cáo.",
   "Your account is restricted from uploading macros.": "Tài khoản của bạn không thể tải lên macro.",
-  "~{cps} clicks/sec with fractional substeps": "~{cps} lần nhấp/giây với bước phụ phân số"
+  "~{cps} clicks/sec with fractional substeps": "~{cps} lần nhấp/giây với bước phụ phân số",
+  "Search...": "Tìm kiếm...",
+  "Page {current} / {total}": "Trang {current} / {total}"
 }

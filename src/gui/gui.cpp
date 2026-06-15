@@ -1892,9 +1892,44 @@ void MenuInterface::drawReplayTab() {
 
     Widgets::SectionHeader("Usable Replays", theme);
 
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##replaySearch", trString("Search...").c_str(), replaySearchBuffer, sizeof(replaySearchBuffer))) {
+        replayCurrentPage = 0; 
+    }
+    ImGui::Dummy(ImVec2(0, 4));
+
+    std::vector<std::string> filteredMacros;
+    std::string searchLower = replaySearchBuffer;
+    std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::tolower);
+    for (const auto& macro : engine->storedMacros) {
+        std::string macroLower = macro;
+        std::transform(macroLower.begin(), macroLower.end(), macroLower.begin(), ::tolower);
+        if (searchLower.empty() || macroLower.find(searchLower) != std::string::npos) {
+            filteredMacros.push_back(macro);
+        }
+    }
+
+    int totalMacros = (int)filteredMacros.size();
+    int totalPages = (totalMacros + replayPageSize - 1) / replayPageSize;
+    if (totalPages == 0) totalPages = 1;
+    if (replayCurrentPage >= totalPages) replayCurrentPage = totalPages - 1;
+    if (replayCurrentPage < 0) replayCurrentPage = 0;
+
+    ImGui::BeginGroup();
+    if (ImGui::ArrowButton("##prevPageReplay", ImGuiDir_Up) && replayCurrentPage > 0) replayCurrentPage--;
+    ImGui::SameLine();
+    auto pageText = trFormat("Page {current} / {total}",
+        fmt::arg("current", replayCurrentPage + 1),
+        fmt::arg("total", totalPages));
+    ImGui::TextUnformatted(pageText.c_str());
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##nextPageReplay", ImGuiDir_Down) && replayCurrentPage < totalPages - 1) replayCurrentPage++;
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, 8));
+
     float listPadY = 8.0f;
     float listPadX = 10.0f;
-    float listH = std::max(80.0f, std::min(200.0f, (float)engine->storedMacros.size() * 28.0f + listPadY * 2.0f));
+    float listH = std::max(80.0f, std::min(200.0f, (float)filteredMacros.size() * 28.0f + listPadY * 2.0f));
     ImVec2 listPos = ImGui::GetCursorScreenPos();
     float listW = ImGui::GetContentRegionAvail().x;
     drawSolidRect(ImGui::GetWindowDrawList(), listPos, ImVec2(listPos.x + listW, listPos.y + listH), theme.cornerRadius, theme, 0.55f);
@@ -1906,7 +1941,7 @@ void MenuInterface::drawReplayTab() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
     ImGui::Dummy(ImVec2(0, listPadY));
 
-    if (engine->storedMacros.empty()) {
+    if (filteredMacros.empty()) {  
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
         imguiTextTr("No usable replays");
@@ -1920,8 +1955,10 @@ void MenuInterface::drawReplayTab() {
         replayLoadReadyTime = ImGui::GetTime() + static_cast<double>(ImGui::GetIO().MouseDoubleClickTime) + 0.02;
     };
 
-    auto macroListCopy = engine->storedMacros;
-    for (const auto& macroName : macroListCopy) {
+    int startIdx = replayCurrentPage * replayPageSize;
+    int endIdx = std::min(startIdx + replayPageSize, totalMacros);
+    for (int i = startIdx; i < endIdx; ++i) {
+        const std::string& macroName = filteredMacros[i];
         bool isSelected = (engine->hasMacro() && engine->engineMode != MODE_CAPTURE && engine->getMacroName() == macroName);
         bool isIncompatible = engine->incompatibleMacros.count(macroName) > 0;
         bool isCBS = engine->cbsMacros.count(macroName) > 0;
@@ -2095,7 +2132,7 @@ void MenuInterface::drawReplayTab() {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-    if (replayLoadPending) {
+   if (replayLoadPending) {
         if (engine->engineMode == MODE_CAPTURE) {
             replayLoadPending = false;
         } else if (ImGui::GetTime() >= replayLoadReadyTime) {
@@ -2409,97 +2446,134 @@ void MenuInterface::drawReplayTab() {
         replayConversionsExpanded = !replayConversionsExpanded;
     }
 
-    if (replayConversionsExpanded) {
+if (replayConversionsExpanded) {
     ImGui::Dummy(ImVec2(0, 2));
     Widgets::SectionHeader("Needs Conversion", theme);
 
-    float convertListH = std::max(60.0f, std::min(150.0f, (float)engine->foreignReplays.size() * 28.0f + listPadY * 2.0f));
-    ImVec2 convertListPos = ImGui::GetCursorScreenPos();
-    float convertListW = ImGui::GetContentRegionAvail().x;
-    drawSolidRect(ImGui::GetWindowDrawList(), convertListPos, ImVec2(convertListPos.x + convertListW, convertListPos.y + convertListH), theme.cornerRadius, theme, 0.42f);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##foreignSearch", trString("Search...").c_str(), foreignSearchBuffer, sizeof(foreignSearchBuffer))) {
+        foreignCurrentPage = 0;
+    }
+    ImGui::Dummy(ImVec2(0, 4));
+
+    std::vector<toasty::conversion::DetectedReplay> filteredForeign;
+    std::string searchLower = foreignSearchBuffer;
+    std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::tolower);
+    for (const auto& entry : engine->foreignReplays) {
+        std::string nameLower = entry.filename;
+        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+        if (searchLower.empty() || nameLower.find(searchLower) != std::string::npos) {
+            filteredForeign.push_back(entry);
+        }
+    }
+
+    int totalForeign = (int)filteredForeign.size();
+    int totalForeignPages = (totalForeign + replayPageSizeConversion - 1) / replayPageSizeConversion;
+    if (totalForeignPages == 0) totalForeignPages = 1;
+    if (foreignCurrentPage >= totalForeignPages) foreignCurrentPage = totalForeignPages - 1;
+    if (foreignCurrentPage < 0) foreignCurrentPage = 0;
+
+    ImGui::BeginGroup();
+    if (ImGui::ArrowButton("##prevForeignPage", ImGuiDir_Up) && foreignCurrentPage > 0) foreignCurrentPage--;
+    ImGui::SameLine();
+    auto foreignPageText = trFormat("Page {current} / {total}",
+        fmt::arg("current", foreignCurrentPage + 1),
+        fmt::arg("total", totalForeignPages));
+    ImGui::TextUnformatted(foreignPageText.c_str());
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##nextForeignPage", ImGuiDir_Down) && foreignCurrentPage < totalForeignPages - 1) foreignCurrentPage++;
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, 8));
+
+    float foreignPadY = 8.0f;
+    float foreignPadX = 10.0f;
+    float listH = std::max(80.0f, std::min(150.0f, (float)filteredForeign.size() * 28.0f + foreignPadY * 2.0f));
+    ImVec2 listPos = ImGui::GetCursorScreenPos();
+    float listW = ImGui::GetContentRegionAvail().x;
+    drawSolidRect(ImGui::GetWindowDrawList(), listPos, ImVec2(listPos.x + listW, listPos.y + listH), theme.cornerRadius, theme, 0.42f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-    ImGui::BeginChild("##ForeignMacroList", ImVec2(-1, convertListH), false);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-    ImGui::Dummy(ImVec2(0, listPadY));
+    ImGui::BeginChild("##ForeignMacroList", ImVec2(-1, listH), false);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + foreignPadX);
+    ImGui::Dummy(ImVec2(0, foreignPadY));
 
-    if (engine->foreignReplays.empty()) {
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
+    if (filteredForeign.empty()) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + foreignPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
         imguiTextTr("No old macros found");
         ImGui::PopStyleColor();
-    }
+    } else {
+        int start = foreignCurrentPage * replayPageSizeConversion;
+        int end = std::min(start + replayPageSizeConversion, totalForeign);
+        for (int idx = start; idx < end; ++idx) {
+            const auto& entry = filteredForeign[idx];
+            auto pathKey = toasty::conversion::normalizedPathKey(entry.path);
+            bool selected = replayConvertSelectedPath == pathKey;
+            bool converted = entry.converted || engine->convertedForeignReplaySources.count(pathKey) > 0;
+            bool canConvert = entry.supported && !replayConvertRunning;
+            std::string statusText = converted ? "Converted" : (entry.supported ? "Convert" : (entry.recognized ? "Unsupported" : "Error"));
+            ImVec4 statusColor = converted
+                ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f)
+                : (entry.supported ? theme.getAccent() : ImVec4(1.0f, 0.35f, 0.28f, 1.0f));
 
-    for (auto const& entry : engine->foreignReplays) {
-        auto pathKey = toasty::conversion::normalizedPathKey(entry.path);
-        bool selected = replayConvertSelectedPath == pathKey;
-        bool converted = entry.converted || engine->convertedForeignReplaySources.count(pathKey) > 0;
-        bool canConvert = entry.supported && !replayConvertRunning;
-        std::string statusText = converted ? "Converted" : (entry.supported ? "Convert" : (entry.recognized ? "Unsupported" : "Error"));
-        ImVec4 statusColor = converted
-            ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f)
-            : (entry.supported ? theme.getAccent() : ImVec4(1.0f, 0.35f, 0.28f, 1.0f));
-
-        ImGui::PushID(pathKey.c_str());
-        float rowH = ImGui::GetTextLineHeight() + 8.0f;
-        float fullRowW = ImGui::GetContentRegionAvail().x;
-        ImVec2 rowStart = ImGui::GetCursorScreenPos();
-        bool rowActivated = ImGui::Selectable("##foreignrow", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(fullRowW, rowH));
-        if (ImGui::IsItemHovered() && !entry.detail.empty()) {
-            ImGui::SetTooltip("%s", entry.detail.c_str());
-        }
-        if (rowActivated) {
-            replayConvertSelectedPath = pathKey;
-            std::strncpy(replayConvertNameBuffer, entry.stem.c_str(), sizeof(replayConvertNameBuffer) - 1);
-            replayConvertNameBuffer[sizeof(replayConvertNameBuffer) - 1] = '\0';
-            replayConvertTargetTTR = true;
-            replayConvertStatus.clear();
-            replayConvertWarnings.clear();
-            replayConvertStatusOk = false;
-            replayConvertShowStandaloneStatus = false;
-        }
-
-        std::string nameLabel = entry.filename.empty() ? entry.stem : entry.filename;
-        std::string formatLabel = toasty::conversion::formatDisplayName(entry.format);
-        float statusW = ImGui::CalcTextSize(statusText.c_str()).x + 10.0f;
-        float formatW = ImGui::CalcTextSize(formatLabel.c_str()).x + 12.0f;
-        float maxNameW = std::max(40.0f, fullRowW - statusW - formatW - listPadX * 2.0f - 22.0f);
-        if (ImGui::CalcTextSize(nameLabel.c_str()).x > maxNameW) {
-            while (!nameLabel.empty() && ImGui::CalcTextSize((nameLabel + "...").c_str()).x > maxNameW) {
-                nameLabel.pop_back();
+            ImGui::PushID(pathKey.c_str());
+            float rowH = ImGui::GetTextLineHeight() + 8.0f;
+            float fullRowW = ImGui::GetContentRegionAvail().x;
+            ImVec2 rowStart = ImGui::GetCursorScreenPos();
+            bool rowActivated = ImGui::Selectable("##foreignrow", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(fullRowW, rowH));
+            if (ImGui::IsItemHovered() && !entry.detail.empty()) {
+                ImGui::SetTooltip("%s", entry.detail.c_str());
             }
-            nameLabel += "...";
+            if (rowActivated) {
+                replayConvertSelectedPath = pathKey;
+                std::strncpy(replayConvertNameBuffer, entry.stem.c_str(), sizeof(replayConvertNameBuffer) - 1);
+                replayConvertNameBuffer[sizeof(replayConvertNameBuffer) - 1] = '\0';
+                replayConvertTargetTTR = true;
+                replayConvertStatus.clear();
+                replayConvertWarnings.clear();
+                replayConvertStatusOk = false;
+                replayConvertShowStandaloneStatus = false;
+            }
+
+            std::string nameLabel = entry.filename.empty() ? entry.stem : entry.filename;
+            std::string formatLabel = toasty::conversion::formatDisplayName(entry.format);
+            float maxNameW = std::max(40.0f, fullRowW - ImGui::CalcTextSize(statusText.c_str()).x - 10.0f - ImGui::CalcTextSize(formatLabel.c_str()).x - 12.0f - foreignPadX * 2.0f - 22.0f);
+            if (ImGui::CalcTextSize(nameLabel.c_str()).x > maxNameW) {
+                while (!nameLabel.empty() && ImGui::CalcTextSize((nameLabel + "...").c_str()).x > maxNameW)
+                    nameLabel.pop_back();
+                nameLabel += "...";
+            }
+
+            float itemMinY = rowStart.y;
+            float itemH = rowH;
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(rowStart.x + foreignPadX, itemMinY + (itemH - ImGui::GetTextLineHeight()) * 0.5f),
+                entry.supported ? theme.getTextU32() : toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.55f)),
+                nameLabel.c_str()
+            );
+
+            float tagX = rowStart.x + fullRowW - foreignPadX;
+            ImVec2 statusSize = ImGui::CalcTextSize(statusText.c_str());
+            tagX -= statusSize.x;
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(tagX, itemMinY + (itemH - statusSize.y) * 0.5f),
+                toU32(statusColor),
+                statusText.c_str()
+            );
+            ImVec2 formatSize = ImGui::CalcTextSize(formatLabel.c_str());
+            tagX -= formatSize.x + 12.0f;
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(tagX, itemMinY + (itemH - formatSize.y) * 0.5f),
+                toU32(ImVec4(1.0f, 0.85f, 0.35f, entry.recognized ? 1.0f : 0.55f)),
+                formatLabel.c_str()
+            );
+
+            if (rowActivated && canConvert && ImGui::IsMouseDoubleClicked(0)) {
+                replayConvertStatus.clear();
+            }
+            ImGui::PopID();
         }
-
-        float itemMinY = rowStart.y;
-        float itemH = rowH;
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(rowStart.x + listPadX, itemMinY + (itemH - ImGui::GetTextLineHeight()) * 0.5f),
-            entry.supported ? theme.getTextU32() : toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.55f)),
-            nameLabel.c_str()
-        );
-
-        float tagX = rowStart.x + fullRowW - listPadX;
-        ImVec2 statusSize = ImGui::CalcTextSize(statusText.c_str());
-        tagX -= statusSize.x;
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(tagX, itemMinY + (itemH - statusSize.y) * 0.5f),
-            toU32(statusColor),
-            statusText.c_str()
-        );
-        ImVec2 formatSize = ImGui::CalcTextSize(formatLabel.c_str());
-        tagX -= formatSize.x + 12.0f;
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(tagX, itemMinY + (itemH - formatSize.y) * 0.5f),
-            toU32(ImVec4(1.0f, 0.85f, 0.35f, entry.recognized ? 1.0f : 0.55f)),
-            formatLabel.c_str()
-        );
-
-        if (rowActivated && canConvert && ImGui::IsMouseDoubleClicked(0)) {
-            replayConvertStatus.clear();
-        }
-        ImGui::PopID();
     }
 
     ImGui::EndChild();
