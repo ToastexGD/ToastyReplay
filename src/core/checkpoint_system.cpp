@@ -640,7 +640,7 @@ void ReplayEngine::runWithUnsavedMacroGuard(std::function<void()> continueAction
 }
 
 class $modify(RestorePointHandler, CheckpointObject) {
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
     bool init() {
         bool result = CheckpointObject::init();
         CheckpointObject* checkpoint = this;
