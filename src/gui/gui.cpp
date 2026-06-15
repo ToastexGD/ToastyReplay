@@ -4622,17 +4622,19 @@ void MenuInterface::drawSettingsTab() {
         const char* name;
         const char* description;
         const char* resourceFile;
-        const char* popupId;
     };
-    static constexpr std::array<LicenseEntry, 1> licenseEntries = {{
-        {"SIL Open Font License 1.1", "cjk.ttf (Source Han Sans)", "OFL.txt", "##licenseOFL"},
+    static constexpr std::array<LicenseEntry, 3> licenseEntries = {{
+        {"GNU Lesser General Public License v2.1", "FFmpeg (video encoding & audio muxing)", "LGPL-2.1.txt"},
+        {"GNU General Public License v2.0", "FFmpeg GPL build components (e.g. libx264)", "GPL-2.0.txt"},
+        {"SIL Open Font License 1.1", "cjk.ttf (Source Han Sans)", "OFL.txt"},
     }};
 
     static std::string licenseViewText;
     static int licenseViewIndex = -1;
 
     constexpr float kLicensesPopupRounding = 0.0f;
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
+    constexpr float kLicensesPopupWidth = 460.0f;
+    ImGui::SetNextWindowSize(ImVec2(kLicensesPopupWidth, 0.0f), ImGuiCond_Appearing);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kLicensesPopupRounding);
     ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
@@ -4643,67 +4645,56 @@ void MenuInterface::drawSettingsTab() {
         nullptr,
         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
     )) {
-        auto licensesTitle = trString("Licenses");
-        drawPopupChrome(*this, licensesTitle.c_str(), kLicensesPopupRounding);
+        const char* popupTitle = (licenseViewIndex >= 0) ? licenseEntries[licenseViewIndex].name : "Licenses";
+        drawPopupChrome(*this, popupTitle, kLicensesPopupRounding);
 
-        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::TextUnformatted("Third-party components used by ToastyReplay:");
-        ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0, 6));
-
-        for (int i = 0; i < (int)licenseEntries.size(); ++i) {
-            auto const& entry = licenseEntries[i];
-            ImVec2 rowPos = ImGui::GetCursorScreenPos();
-            float rowW = ImGui::GetContentRegionAvail().x;
-            float rowH = 52.0f;
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(rowPos, ImVec2(rowPos.x + rowW, rowPos.y + rowH), IM_COL32(255, 255, 255, 8), 4.0f);
-
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 8.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
-            ImGui::TextUnformatted(entry.name);
-            ImGui::PopStyleColor();
-
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 28.0f));
+        if (licenseViewIndex < 0) {
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            ImGui::TextUnformatted(entry.description);
+            ImGui::TextUnformatted("Third-party components used by ToastyReplay:");
             ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0, 6));
 
-            constexpr float btnW = 80.0f;
-            constexpr float btnH = 26.0f;
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + rowW - btnW - 8.0f, rowPos.y + 13.0f));
-            std::string btnId = std::string("View") + entry.popupId;
-            if (Widgets::StyledButton(btnId.c_str(), ImVec2(btnW, btnH), theme, anim, 6.0f)) {
-                licenseViewIndex = i;
-                auto path = Mod::get()->getResourcesDir() / entry.resourceFile;
-                std::ifstream f(path);
-                licenseViewText = f ? std::string(std::istreambuf_iterator<char>(f), {}) : "(Failed to load license file.)";
-                ImGui::OpenPopup("LicenseView##settingsLicenseView");
+            for (int i = 0; i < (int)licenseEntries.size(); ++i) {
+                auto const& entry = licenseEntries[i];
+                ImVec2 rowPos = ImGui::GetCursorScreenPos();
+                float rowW = ImGui::GetContentRegionAvail().x;
+                constexpr float rowH = 52.0f;
+                ImVec2 rowMax(rowPos.x + rowW, rowPos.y + rowH);
+
+                drawSolidRect(ImGui::GetWindowDrawList(), rowPos, rowMax, theme.cornerRadius, theme, 0.44f);
+
+                ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 8.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
+                ImGui::TextUnformatted(entry.name);
+                ImGui::PopStyleColor();
+
+                ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 10.0f, rowPos.y + 28.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+                ImGui::TextUnformatted(entry.description);
+                ImGui::PopStyleColor();
+
+                constexpr float btnW = 80.0f;
+                constexpr float btnH = 26.0f;
+                ImGui::SetCursorScreenPos(ImVec2(rowPos.x + rowW - btnW - 8.0f, rowPos.y + 13.0f));
+                char btnId[32];
+                std::snprintf(btnId, sizeof(btnId), "View##lic%d", i);
+                if (Widgets::StyledButton(btnId, ImVec2(btnW, btnH), theme, anim, 6.0f)) {
+                    auto path = Mod::get()->getResourcesDir() / entry.resourceFile;
+                    std::ifstream f(path);
+                    licenseViewText = f ? std::string(std::istreambuf_iterator<char>(f), {}) : "(Failed to load license file.)";
+                    licenseViewIndex = i;
+                }
+
+                ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowPos.y + rowH + 4.0f));
             }
 
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowPos.y + rowH + 4.0f));
-        }
-
-        ImGui::Dummy(ImVec2(0, 8));
-        if (Widgets::StyledButton("Close##licensesClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
-            ImGui::CloseCurrentPopup();
-        }
-
-        // Nested license text popup
-        ImGui::SetNextWindowSize(ImVec2(500.0f, 420.0f), ImGuiCond_Appearing);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kLicensesPopupRounding);
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
-        if (ImGui::BeginPopupModal(
-            "LicenseView##settingsLicenseView",
-            nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-        )) {
-            const char* viewTitle = (licenseViewIndex >= 0) ? licenseEntries[licenseViewIndex].name : "License";
-            drawPopupChrome(*this, viewTitle, kLicensesPopupRounding);
+            ImGui::Dummy(ImVec2(0, 8));
+            if (Widgets::StyledButton("Close##licensesClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
+                licenseViewIndex = -1;
+                ImGui::CloseCurrentPopup();
+            }
+        } else {
+            ImGui::Dummy(ImVec2(kLicensesPopupWidth - 28.0f, 0.0f));
 
             ImGui::BeginChild("##licenseTextScroll", ImVec2(-1, 340.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
@@ -4713,12 +4704,9 @@ void MenuInterface::drawSettingsTab() {
 
             ImGui::Dummy(ImVec2(0, 6));
             if (Widgets::StyledButton("Back##licenseViewBack", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
-                ImGui::CloseCurrentPopup();
+                licenseViewIndex = -1;
             }
-            ImGui::EndPopup();
         }
-        ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar(2);
 
         ImGui::EndPopup();
     }
@@ -5699,8 +5687,9 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
                         expConfig.useGpu     = true;
                         expConfig.codec      = std::nullopt;
                     } else {
-                        expConfig.useGpu = false;
-                        expConfig.codec  = std::string(e->name);
+                        expConfig.gpuEncoder = probeGpuEncoder(f.fam);
+                        expConfig.useGpu     = false;
+                        expConfig.codec      = std::string(e->name);
                     }
                     expConfig.crf       = std::nullopt;
                     expConfig.extraArgs = std::nullopt;
@@ -5977,49 +5966,6 @@ void MenuInterface::drawExpRenderTab() {
         ImGui::TextUnformatted("[unavailable]");
     ImGui::PopStyleColor();
 
-    // codec family picker: H.264 / H.265 / AV1 / VP9 / VP8 / H.266 (VVC)
-    imguiTextTr("Codec Family");
-    ImGui::SameLine(inputW);
-    {
-        constexpr int kPerRow = 3;
-        float pillW = (ImGui::GetContentRegionAvail().x - 4.0f * (kPerRow - 1)) / kPerRow;
-        float rowStartX = ImGui::GetCursorPosX();
-        auto refreshTierBufs = [&]() {
-            expConfig.codec = std::nullopt; expConfig.crf = std::nullopt; expConfig.extraArgs = std::nullopt;
-            expCodecIsAdvancedOverride = false;
-            auto rp = resolve(expConfig);
-            snprintf(expAdvCodecBuf,     sizeof(expAdvCodecBuf),     "%s", rp.codec.c_str());
-            snprintf(expAdvCrfBuf,       sizeof(expAdvCrfBuf),       "%d", rp.crf);
-            snprintf(expAdvExtraArgsBuf, sizeof(expAdvExtraArgsBuf), "%s", rp.extraArgs.c_str());
-        };
-        auto selectFamily = [&](RenderCodecFamily fam) {
-            if (expConfig.codecFamily == fam) return;
-            expConfig.codecFamily = fam;
-            expConfig.gpuEncoder  = probeGpuEncoder(fam);
-            expGpuProbed = false;
-            refreshTierBufs();
-            saveRenderConfig(expConfig);
-        };
-        struct FamPill { RenderCodecFamily fam; const char* label; };
-        static constexpr FamPill kFamPills[] = {
-            { RenderCodecFamily::H264, "H.264" },
-            { RenderCodecFamily::H265, "H.265" },
-            { RenderCodecFamily::AV1,  "AV1"   },
-            { RenderCodecFamily::VP9,  "VP9"   },
-            { RenderCodecFamily::VP8,  "VP8"   },
-            { RenderCodecFamily::VVC,  "H.266" },
-        };
-        for (int i = 0; i < static_cast<int>(std::size(kFamPills)); ++i) {
-            if (i % kPerRow == 0) {
-                if (i != 0) ImGui::SetCursorPosX(rowStartX);
-            } else {
-                ImGui::SameLine(0, 4);
-            }
-            const auto& fp = kFamPills[i];
-            if (Widgets::PillButton(fp.label, expConfig.codecFamily == fp.fam, pillW, theme, anim))
-                selectFamily(fp.fam);
-        }
-    }
     {
         std::string curExt = expAdvExtBuf[0] ? expAdvExtBuf : ".mp4";
         unsigned vMask = videoFamilyContainerMask(expConfig.codecFamily);
