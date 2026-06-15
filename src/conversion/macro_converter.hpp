@@ -284,7 +284,8 @@ std::vector<ReplayFormat> supportedFormats();
 bool isForeignReplayExtension(std::filesystem::path const& path);
 inline constexpr char kTTR3BlockedWarning[] =
     "This macro format does not store enough timing information for frame-perfect TTR3 conversion. "
-    "Re-record the macro on ToastyReplay for guaranteed accuracy.";
+    "Re-record the macro on ToastyReplay for guaranteed accuracy. "
+    "Try converting it to GDR instead.";
 
 inline TTR3Eligibility inspectTTR3Eligibility(ReplayFormat format, TTR3InspectionFacts const& facts) {
     auto lossless = [] {

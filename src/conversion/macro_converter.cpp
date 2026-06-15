@@ -546,7 +546,6 @@ static void finishImport(ImportedReplay& replay) {
 
     std::stable_sort(replay.inputs.begin(), replay.inputs.end(), inputLess);
 
-    std::array<bool, 6> held = { false, false, false, false, false, false };
     std::vector<ImportedInput> normalized;
     normalized.reserve(replay.inputs.size());
     size_t removedDuplicates = 0;
@@ -554,12 +553,17 @@ static void finishImport(ImportedReplay& replay) {
     for (auto input : replay.inputs) {
         input.button = sanitizeButton(input.button);
         input.tick = static_cast<int64_t>(std::llround(std::max(0.0, input.time * replay.fps)));
-        size_t idx = (input.player2 ? 3u : 0u) + static_cast<size_t>(input.button - 1);
-        if (!input.swift && held[idx] == input.pressed) {
-            ++removedDuplicates;
-            continue;
+        
+        if (!normalized.empty()) {
+            auto const& last = normalized.back();
+            if (last.tick == input.tick &&
+                last.button == input.button &&
+                last.player2 == input.player2 &&
+                last.pressed == input.pressed) {
+                ++removedDuplicates;
+                continue;
+            }
         }
-        held[idx] = input.pressed;
         input.sequence = static_cast<uint64_t>(normalized.size());
         normalized.push_back(input);
     }
@@ -2328,19 +2332,23 @@ ConversionResult convertReplay(
         macro.levelInfo.name = imported->levelName.empty() ? outputName : imported->levelName;
         macro.levelInfo.id = imported->levelId;
         macro.framerate = result.fps;
-        macro.duration = outputDuration;
-        macro.accuracyMode = outputAccuracy;
+        macro.duration = imported->duration;
+        macro.accuracyMode = AccuracyMode::Vanilla;
         macro.platformerMode = imported->platformerMode;
         macro.hasPlatformerModeMetadata = true;
-        macro.anchors = imported->anchors;
-        macro.inputs.reserve(inputs.size());
-        for (auto const& input : inputs) {
+        macro.anchors = imported->anchors;  
+        macro.inputs.reserve(imported->inputs.size());
+
+        for (auto const& input : imported->inputs) {
+            double rawTick = input.time * result.fps;
+            int64_t tick = static_cast<int64_t>(std::llround(rawTick));
+            tick = std::clamp<int64_t>(tick, 0, std::numeric_limits<int32_t>::max());
             macro.inputs.emplace_back(
-                static_cast<int>(std::clamp<int64_t>(input.tick, 0, std::numeric_limits<int32_t>::max())),
+                static_cast<int>(tick),
                 input.button,
                 input.player2,
                 input.pressed,
-                useCbsTiming ? input.stepOffset : 0.0f
+                0.0f  
             );
         }
         auto bytes = macro.exportData(false);
@@ -2352,10 +2360,7 @@ ConversionResult convertReplay(
         result.ok = true;
         result.outputName = outputName;
         result.outputPath = outputPath;
-        std::ostringstream message;
-        message << "Converted " << result.inputCount << " inputs at " << result.fps
-                << " TPS to " << outputName << conversionTargetExtension(target);
-        result.message = message.str();
+        result.message = "Converted " + std::to_string(result.inputCount) + " inputs at " + std::to_string(result.fps) + " TPS to " + outputName + ".gdr";
         geode::log::info("[TR-CONV][I003] GDR/TTR2 conversion finished: out={} inputs={} fps={:.1f} cbs={}",
             toasty::pathToUtf8(result.outputPath), result.inputCount, result.fps, useCbsTiming);
     } catch (std::exception const& ex) {
