@@ -445,6 +445,9 @@ class $modify(TickControlPlayLayer, PlayLayer) {
                 PlayLayer::updateVisibility(static_cast<float>(baseStep));
                 accum -= baseStep;
             }
+            if (accum >= baseStep) {
+                accum = std::fmod(accum, baseStep);
+            }
             return;
         }
         m_fields->pulseFixAccum = 0.0;

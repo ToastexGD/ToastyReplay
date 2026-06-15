@@ -81,6 +81,7 @@ public:
     bool nv12 = false;
     cocos2d::CCTexture2D* texture = nullptr;
 
+    ~RenderTexture();
     void begin(bool wantNv12, FrameCaptureService& frameCapture);
     void end();
     // reuseLastScene: skip the scene re-render and read back the existing FBO contents again,
@@ -130,6 +131,7 @@ public:
         : width(1920),
           height(1080),
           fps(60) {}
+    ~Renderer();
 
     bool levelFinished = false;
     bool recording = false;
@@ -162,8 +164,8 @@ public:
     double lastFrame_t = 0;
     double extra_t = 0;
 
-    RenderTexture renderTex;
     FrameCaptureService frameCapture;
+    RenderTexture renderTex;
     EncodeSession encodeSession;
     AudioCaptureService audioCapture;
     std::string codec;
@@ -204,8 +206,7 @@ public:
 private:
     std::thread m_encodeThread;
     // true from thread launch until runEncodeLoop fully returns (frames drained,
-    // audio muxed). The thread is detached and keeps touching shared render state
-    // after recording=false, so a new render must not start while this is set.
+    // audio muxed). A new render must not start while this is set.
     std::atomic<bool> m_encodeActive{false};
     std::optional<ResolvedEncodeParams> m_resolvedParams;
     std::string m_extOverride;

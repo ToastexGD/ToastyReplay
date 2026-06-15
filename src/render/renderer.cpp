@@ -1023,6 +1023,10 @@ void RenderTexture::stopCopyWorker() {
 #endif
 }
 
+RenderTexture::~RenderTexture() {
+    stopCopyWorker();
+}
+
 void RenderTexture::releasePbo(int idx) {
 #ifdef GEODE_IS_WINDOWS
     if (!m_pboMapped[idx]) return;
@@ -1171,6 +1175,10 @@ void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, c
     }
     glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
 #endif
+}
+
+Renderer::~Renderer() {
+    if (m_encodeThread.joinable()) m_encodeThread.join();
 }
 
 void Renderer::captureFrame(bool reuseLastScene) {
@@ -1789,9 +1797,9 @@ void Renderer::start() {
         ClickSoundManager::get()->preDecodeForRender(systemRate);
     }
 
+    if (m_encodeThread.joinable()) m_encodeThread.join();
     m_encodeActive.store(true, std::memory_order_release);
     m_encodeThread = std::thread(&Renderer::runEncodeLoop, this, songFile, songOffset, fadeIn, fadeOut, extension, bitrateApi);
-    m_encodeThread.detach();
 }
 
 void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi) {

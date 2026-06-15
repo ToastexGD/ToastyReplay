@@ -274,7 +274,16 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     r.audioArgs  = cfg.audioArgs.value_or("");
     r.audioCodec = cfg.audioCodec.value_or("aac");
 
-    bool noBitrateCap = isAv1 || isVp8 || isVp9 || isVvc;
+    bool rIsNvenc = r.codec.find("nvenc") != std::string::npos;
+    bool rIsGpu   = rIsNvenc
+                 || r.codec.find("amf")   != std::string::npos
+                 || r.codec.find("qsv")   != std::string::npos;
+    bool rIsAv1   = r.codec.find("av1")   != std::string::npos;
+    bool rIsVp9   = r.codec.find("vp9")   != std::string::npos;
+    bool rIsVp8   = r.codec == "libvpx";
+    bool rIsVvc   = r.codec.find("vvenc") != std::string::npos;
+
+    bool noBitrateCap = rIsAv1 || rIsVp8 || rIsVp9 || rIsVvc;
     r.maxBitrate = (noBitrateCap || isLossless) ? "" : cfg.maxBitrate.value_or("");
     if (!r.maxBitrate.empty() && std::all_of(r.maxBitrate.begin(), r.maxBitrate.end(),
             [](unsigned char c) { return std::isdigit(c); }))
@@ -286,15 +295,14 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
             if (r.audioCodec == c) { r.ext = ".mkv"; break; }
     }
 
-    if ((isVp8 || isVp9) && (r.ext == ".mp4" || r.ext == ".mov" || r.ext == ".m4v"))
+    if ((rIsVp8 || rIsVp9) && (r.ext == ".mp4" || r.ext == ".mov" || r.ext == ".m4v"))
         r.ext = ".mkv";
     r.apiBitrate = td.apiBitrate;
 
     // NVENC uses -preset pN; CPU x264/svtav1 uses -preset name; AMF/QSV have no standard flag
-    bool isNvenc = useGpu && cfg.gpuEncoder.find("nvenc") != std::string::npos;
-    if (isNvenc)
+    if (rIsNvenc)
         r.x264Preset = td.nvencPreset;
-    else if (!useGpu) {
+    else if (!rIsGpu) {
         r.x264Preset = td.cpuPreset;
         if (cfg.preferSpeed && !isLossless)
             r.x264Preset = fasterPreset(cfg.codecFamily, r.x264Preset);
@@ -373,7 +381,7 @@ RenderConfig loadRenderConfig() {
     auto advExtraArgs = mod->getSavedValue<std::string>("exp_render_adv_extra_args", "");
     if (!advExtraArgs.empty()) cfg.extraArgs = advExtraArgs;
 
-    auto advVideoArgs = mod->getSavedValue<std::string>("exp_render_adv_video_args", kDefaultVideoArgs);
+    auto advVideoArgs = mod->getSavedValue<std::string>("exp_render_adv_video_args", "");
     if (!advVideoArgs.empty()) cfg.videoArgs = advVideoArgs;
 
     auto advAudioArgs = mod->getSavedValue<std::string>("exp_render_adv_audio_args", "");
