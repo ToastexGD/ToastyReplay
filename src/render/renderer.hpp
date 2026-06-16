@@ -1,9 +1,11 @@
 #pragma once
 
 #include "ffmpeg_events.hpp"
+#include "render_config.hpp"
 
 #include <Geode/Geode.hpp>
 
+#include <atomic>
 #include <deque>
 #include <filesystem>
 #include <condition_variable>
@@ -23,10 +25,13 @@ class FrameCaptureService {
 public:
     void configure(size_t bytesPerFrame, size_t maxBufferedFrames = 2);
     void clear();
+    void releasePool();
+    void notifyStop();
     bool hasPendingFrame() const;
-    std::vector<uint8_t> createFrameBuffer() const;
+    std::vector<uint8_t> acquireBuffer();
     bool submit(std::vector<uint8_t>&& frame);
     std::vector<uint8_t> takeFrame();
+    void releaseBuffer(std::vector<uint8_t>&& frame);
 
 private:
     size_t m_bytesPerFrame = 0;
@@ -34,6 +39,7 @@ private:
     mutable std::mutex m_lock;
     std::condition_variable m_pendingChanged;
     std::deque<std::vector<uint8_t>> m_pendingFrames;
+    std::vector<std::vector<uint8_t>> m_freeList;
 };
 
 struct EncodeSession {
@@ -58,6 +64,13 @@ struct AudioCaptureService {
     }
 };
 
+struct RenderSoundEvent {
+    std::string path;
+    float time;
+    float volume;
+    float speed;
+};
+
 class RenderTexture {
 public:
     unsigned width = 0;
@@ -65,11 +78,49 @@ public:
     int old_fbo = 0;
     int old_rbo = 0;
     unsigned fbo = 0;
+    bool nv12 = false;
     cocos2d::CCTexture2D* texture = nullptr;
 
-    void begin();
+    void begin(bool wantNv12, FrameCaptureService& frameCapture);
     void end();
-    void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr);
+
+    void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr, bool reuseLastScene = false);
+    void flushPbo(FrameCaptureService& frameCapture);
+
+private:
+    static constexpr int kPboRingDepth = 3;
+    GLuint  m_pbos[kPboRingDepth] = {};
+    int     m_pboCount      = kPboRingDepth;
+    int     m_pboFrameCount = 0;
+    size_t  m_pboSize       = 0;
+
+    GLuint  m_prog[2]     = {};
+    GLuint  m_planeFbo[2] = {};
+    GLuint  m_planeTex[2] = {};
+
+    double  m_dbgVisitSec = 0.0;
+    double  m_dbgMapSec   = 0.0;
+    double  m_dbgCopySec  = 0.0;
+    int     m_dbgFrames   = 0;
+
+    struct CopyJob { const uint8_t* src; int pboIndex; bool nv12; unsigned w, h; size_t size; };
+    std::thread             m_copyThread;
+    std::mutex              m_copyMutex;
+    std::condition_variable m_copyCv;
+    std::deque<CopyJob>     m_copyJobs;
+    bool                    m_copyStop      = false;
+    int                     m_copyInFlight  = 0;
+    bool                    m_pboCopyBusy[kPboRingDepth] = {};
+    bool                    m_pboMapped[kPboRingDepth]   = {};
+    FrameCaptureService*    m_copyTarget    = nullptr;
+
+    bool initNv12Pass();
+    void destroyNv12Pass();
+    void runNv12Pass();
+    void startCopyWorker(FrameCaptureService& frameCapture);
+    void stopCopyWorker();
+    void releasePbo(int idx);
+    void submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg);
 };
 
 class Renderer {
@@ -92,8 +143,15 @@ public:
     bool dontRender = false;
     bool isPlatformer = false;
     bool includeClickSounds = false;
+    bool hideEndscreen = false;
+    bool hideLevelComplete = false;
     int finishFrame = 0;
     int levelStartFrame = 0;
+    int cadenceLogFrames = 0;
+    int lastProgressPercent = -1;
+    bool clockPrimed = false;
+    bool leadInFixEligible = false;
+    double leadInSeconds = 0.0;
 
     float stopAfter = 3.f;
     float timeAfter = 0.f;
@@ -112,9 +170,11 @@ public:
     std::string extraArgs;
     std::string videoArgs;
     std::string extraAudioArgs;
+    std::string audioCodec = "aac";
     std::filesystem::path path;
     std::filesystem::path ffmpegPath;
     std::vector<bool> m_capturedFrameSet;
+    std::vector<RenderSoundEvent> m_capturedSounds;
 
     FMODAudioEngine* fmod = nullptr;
     cocos2d::CCSize ogRes = { 0, 0 };
@@ -124,10 +184,11 @@ public:
     cocos2d::CCLabelBMFont* watermarkLabel = nullptr;
     cocos2d::CCLabelBMFont* progressLabel = nullptr;
 
-    void captureFrame();
+    void captureFrame(bool reuseLastScene = false);
     void changeRes(bool original);
 
     void start();
+    void start(const RenderConfig& config);
     void stop(int frame = 0);
     void handleRecording(PlayLayer* playLayer, int frame);
 
@@ -137,10 +198,18 @@ public:
     int getCurrentFrame() const;
     float getTPS() const;
 
+    std::optional<RenderConfig> m_pendingConfig;
+
 private:
     std::thread m_encodeThread;
+
+    std::atomic<bool> m_encodeActive{false};
+    std::optional<ResolvedEncodeParams> m_resolvedParams;
+    std::string m_extOverride;
+
     bool resolveEncoder();
     void restoreAudioVolumes();
     bool isLevelComplete();
+    void startFromPending();
     void runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
 };

@@ -424,12 +424,30 @@ void resetSimulationTimingState() {
 }
 
 class $modify(TickControlPlayLayer, PlayLayer) {
+    struct Fields {
+        double pulseFixAccum = 0.0;
+    };
+
     void update(float dt) {
         ReplayEngine::get()->processHotkeys();
         PlayLayer::update(dt);
     }
 
     void updateVisibility(float dt) {
+        auto* engine = ReplayEngine::get();
+        if (engine->pulseFix && engine->renderer.recording
+            && engine->runtimeTickRate() > ReplayEngine::kBaseTickRate) {
+            double baseStep = 1.0 / ReplayEngine::kBaseTickRate;
+            double& accum = m_fields->pulseFixAccum;
+            accum += dt;
+            int guard = 0;
+            while (accum + 1e-9 >= baseStep && guard++ < 16) {
+                PlayLayer::updateVisibility(static_cast<float>(baseStep));
+                accum -= baseStep;
+            }
+            return;
+        }
+        m_fields->pulseFixAccum = 0.0;
         PlayLayer::updateVisibility(dt);
     }
 };

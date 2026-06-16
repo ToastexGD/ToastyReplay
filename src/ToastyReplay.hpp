@@ -116,6 +116,7 @@ public:
     bool pendingStep = false;
     bool singleTickStep = false;
     bool renderInternal = false;
+    bool pulseFix = false;
     bool priorTickStepping = false;
     bool stepKeyActive = false;
     bool audioPitchEnabled = true;
@@ -1219,6 +1220,7 @@ public:
     }
 
     Renderer renderer;
+    bool useNewRenderer = false;
 
     static ReplayEngine* get() {
         static auto* singleton = new ReplayEngine();

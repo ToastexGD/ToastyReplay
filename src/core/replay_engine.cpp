@@ -132,7 +132,7 @@ namespace {
 
     static double sanitizeCbsTimeOffset(double offset) {
         if (!std::isfinite(offset) || offset < 0.0) {
-            // -1 means "no exact cbs time", easier to check later
+
             return -1.0;
         }
         return offset;
@@ -385,7 +385,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         auto* engine = ReplayEngine::get();
         return engine &&
             engine->engineMode == MODE_EXECUTE &&
-            !engine->ttrMode &&                     
+            !engine->ttrMode &&
             engine->activeMacro &&
             !engine->activeMacro->inputs.empty() &&
             engine->activeMacro->anchors.empty() &&

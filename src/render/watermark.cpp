@@ -46,4 +46,4 @@ void drawPlaybackWatermark(PlaybackWatermarkFrame const& frame) {
 #endif
 }
 
-} // namespace toasty::watermark
+}

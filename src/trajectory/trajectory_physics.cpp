@@ -677,7 +677,7 @@ namespace toasty::trajectory::physics {
 
     void startDashing(PlayerObject* player, DashRingObject* object) {
         if (!player || !object) {
-            return; 
+            return;
         }
 
         ActivationScope scope(object);

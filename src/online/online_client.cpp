@@ -213,8 +213,8 @@ struct OnlineClientImpl {
     geode::async::TaskHolder<web::WebResponse> avatarTask;
     geode::async::TaskHolder<web::WebResponse> issueTask;
     geode::async::TaskHolder<web::WebResponse> uploadTask;
-    geode::async::TaskHolder<web::WebResponse> authStartTask;  // device-code start
-    geode::async::TaskHolder<web::WebResponse> authPollTask;   // device-code poll
+    geode::async::TaskHolder<web::WebResponse> authStartTask;
+    geode::async::TaskHolder<web::WebResponse> authPollTask;
     geode::async::TaskHolder<web::WebResponse> authRefreshTask;
     geode::async::TaskHolder<web::WebResponse> statusTask;
 };
@@ -535,7 +535,7 @@ void OnlineClient::startAuthFlow() {
     m_pollToken.clear();
     m_activationExpiresAt = 0;
 
-    authPolling = true;  // Flip early so the GUI shows "waiting for approval"
+    authPolling = true;
     authPollTimer = 0.0f;
 
     web::WebRequest req;
@@ -627,7 +627,7 @@ void OnlineClient::pollAuthStatus() {
             auto status = data.contains("status") ? data["status"].asString().unwrapOr("") : "";
 
             if (status == "pending") {
-                return;  // Keep polling.
+                return;
             }
             if (status == "approved") {
                 onActivationApproved(data);
@@ -790,10 +790,10 @@ void OnlineClient::unlinkAccount() {
     if (!m_accessToken.empty()) {
         web::WebRequest req;
         req.header("Authorization", "Bearer " + m_accessToken);
-        m_impl->authRefreshTask.spawn(  // reusing a holder is fine; it just owns the task
+        m_impl->authRefreshTask.spawn(
             "ToastyReplay Auth Logout",
             req.post(getApiBase() + "/api/macros/auth/logout"),
-            [](web::WebResponse) { /* ignore */ }
+            [](web::WebResponse) {  }
         );
     }
     clearAuthState(true);

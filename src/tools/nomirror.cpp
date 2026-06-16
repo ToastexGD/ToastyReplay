@@ -26,7 +26,6 @@ class $modify(NoMirrorBaseLayer, GJBaseGameLayer) {
         if (!shouldBlockMirror()) return;
         if (!settings) return;
 
-        
         if (settings->m_mirrorMode) {
             GJBaseGameLayer::toggleFlipped(false, true);
         }

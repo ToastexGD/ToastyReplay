@@ -10,6 +10,8 @@
 
 #include "conversion/macro_converter.hpp"
 #include "gui/frame_editor.hpp"
+#include "render/render_preset.hpp"
+#include "render/render_config.hpp"
 
 struct ThemePreset {
     const char* name;
@@ -157,6 +159,7 @@ public:
     char renderArgsBuf[256] = "-pix_fmt yuv420p";
     char renderVideoArgsBuf[256] = "colorspace=all=bt709:iall=bt470bg:fast=1";
     char renderAudioArgsBuf[256] = "";
+    char renderAudioCodecBuf[64] = "aac";
     char renderSecondsAfterBuf[16] = "3";
     bool renderIncludeAudio = true;
     bool renderIncludeClicks = false;
@@ -171,12 +174,40 @@ public:
     bool renderBufsInit = false;
     bool advancedWarningAccepted = false;
     bool showAdvancedWarning = false;
+    bool showMkvWarning = false;
+    bool mkvWarningIsExp = false;
+    char mkvWarningPrevCodec[64] = "aac";
+
+    RenderConfig expConfig;
+    bool expConfigInit = false;
+    bool expGpuProbed = false;
+    bool expAdvancedOpen = false;
+    bool expRendererRestartNotice = false;
+    char expRenderNameBuf[256] = "";
+    char expRenderFpsBuf[16] = "60";
+    char expAdvCodecBuf[64] = "";
+    char expAdvCrfBuf[8] = "";
+    char expAdvMaxBitrateBuf[24] = "";
+    char expAdvExtBuf[16] = "";
+    char expAdvExtraArgsBuf[256] = "";
+    char expAdvVideoArgsBuf[256] = "";
+    char expAdvAudioArgsBuf[256] = "";
+    char expAdvAudioCodecBuf[64] = "";
+    char expAudioCodecFilterBuf[64] = "";
+    std::vector<std::string> expProbedAudioCodecs;
+    bool expAudioCodecsProbed = false;
+    std::vector<std::string> expProbedVideoCodecs;
+    char expVideoCodecFilterBuf[64] = "";
+    bool expCodecIsAdvancedOverride = false;
+    char expAdvSecondsAfterBuf[16] = "3";
+    int expRvDeleteConfirm = -1;
     char backupCodecBuf[64] = "";
     char backupBitrateBuf[16] = "30";
     char backupExtBuf[16] = ".mp4";
     char backupArgsBuf[256] = "-pix_fmt yuv420p";
     char backupVideoArgsBuf[256] = "colorspace=all=bt709:iall=bt470bg:fast=1";
     char backupAudioArgsBuf[256] = "";
+    char backupAudioCodecBuf[64] = "aac";
     char backupSecondsAfterBuf[16] = "3";
 
     ImVec2 windowPos = ImVec2(-1, -1);
@@ -224,6 +255,12 @@ private:
     std::string replayConvertSourceKeyOnComplete;
     bool replayConversionsExpanded = false;
 
+    std::vector<std::string> presetNames;
+    int presetSelectedIndex = -1;
+    bool presetListDirty = true;
+    char presetNameBuf[128] = "";
+    std::string presetError;
+
     void drawBackdrop();
     void drawAmbientWaves(ImDrawList* dl, ImVec2 panelMin, ImVec2 panelMax);
     void drawMainWindow();
@@ -237,9 +274,18 @@ private:
     void drawToolsTab();
     void drawHacksTab();
     void drawRenderTab();
+    void drawExpRenderTab();
     void drawClicksTab();
     void drawSettingsTab();
     void loadRenderSettings();
+    void loadExpRenderSettings();
+    void applyRenderPreset(RenderPreset const& preset);
+    RenderPreset captureRenderPreset();
+    void drawRenderPresetsSection();
+    void drawRenderAudioSection();
+    void drawRenderDisplaySection();
+    void drawExpAudioCodecPicker(bool ffmpegExeAvail);
+    void drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::string& curAudioCodec, const std::string& curExt);
     void markReplayListDirty(bool queueRefresh = true);
     void refreshReplayListIfNeeded(bool force);
     bool hasReplayDirectoryChanged() const;

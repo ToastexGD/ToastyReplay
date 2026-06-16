@@ -91,7 +91,6 @@ class $modify(GuardedPlayLayer, PlayLayer) {
             PlayLayer::levelComplete();
         }
 
-        
         if (engine && engine->completionAutosave && engine->engineMode == MODE_CAPTURE) {
             engine->saveActiveMacro();
         }

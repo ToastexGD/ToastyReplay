@@ -2,8 +2,6 @@
 
 #include <Geode/Geode.hpp>
 
-#include <array>
-#include <unordered_set>
 #include <vector>
 
 using namespace geode::prelude;

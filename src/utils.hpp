@@ -3,7 +3,9 @@
 
 #include <Geode/utils/string.hpp>
 
+#include <cerrno>
 #include <charconv>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -25,6 +27,19 @@ namespace toasty {
         auto const* end = begin + text.size();
         auto result = std::from_chars(begin, end, value, base);
         if (result.ec != std::errc{} || result.ptr != end) {
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    inline std::optional<float> parseFloat(std::string_view text) {
+        if (text.empty()) return std::nullopt;
+        std::string buf(text);
+        char const* begin = buf.c_str();
+        char* end = nullptr;
+        errno = 0;
+        float value = std::strtof(begin, &end);
+        if (errno != 0 || end != begin + buf.size()) {
             return std::nullopt;
         }
         return value;
