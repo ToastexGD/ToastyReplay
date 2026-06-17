@@ -1,4 +1,10 @@
 {
+  "Search...": "Rechercher...",
+  "Page {current} / {total}": "Page {current} / {total}",
+  "Video Codec": "Codec vidéo",
+  "Experimental Audio Codecs": "Codecs audio expérimentaux",
+  "Prefer Speed": "Privilégier la vitesse",
+  "Edit any field to pin a value. Fields reflect the current preset; leave blank to restore the preset default.": "Modifie n'importe quel champ pour fixer une valeur. Les champs reflètent le préréglage actuel ; laisse vide pour restaurer la valeur par défaut du préréglage.",
   "< Back": "< Retour",
   "Rendering needs the <cl>FFmpeg API</c> mod. Install it to continue.": "Le rendu nécessite le mod <cl>FFmpeg API</c>. Installe-le pour continuer.",
   "Couldn't find <cl>FFmpeg</c>. Pick the ffmpeg.exe in this mod's settings or install the FFmpeg API mod.\nOpen the download page?": "Impossible de trouver <cl>FFmpeg</c>. Choisis ffmpeg.exe dans les paramètres du mod ou installe le mod FFmpeg API.\nOuvrir la page de téléchargement ?",
