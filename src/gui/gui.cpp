@@ -1901,9 +1901,44 @@ void MenuInterface::drawReplayTab() {
 
     Widgets::SectionHeader("Usable Replays", theme);
 
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##replaySearch", trString("Search...").c_str(), replaySearchBuffer, sizeof(replaySearchBuffer))) {
+        replayCurrentPage = 0;
+    }
+    ImGui::Dummy(ImVec2(0, 4));
+
+    std::vector<std::string> filteredMacros;
+    std::string replaySearchLower = replaySearchBuffer;
+    std::transform(replaySearchLower.begin(), replaySearchLower.end(), replaySearchLower.begin(), ::tolower);
+    for (auto const& macro : engine->storedMacros) {
+        std::string macroLower = macro;
+        std::transform(macroLower.begin(), macroLower.end(), macroLower.begin(), ::tolower);
+        if (replaySearchLower.empty() || macroLower.find(replaySearchLower) != std::string::npos) {
+            filteredMacros.push_back(macro);
+        }
+    }
+
+    int totalMacros = (int)filteredMacros.size();
+    int totalPages = (totalMacros + replayPageSize - 1) / replayPageSize;
+    if (totalPages == 0) totalPages = 1;
+    if (replayCurrentPage >= totalPages) replayCurrentPage = totalPages - 1;
+    if (replayCurrentPage < 0) replayCurrentPage = 0;
+
+    ImGui::BeginGroup();
+    if (ImGui::ArrowButton("##prevPageReplay", ImGuiDir_Up) && replayCurrentPage > 0) replayCurrentPage--;
+    ImGui::SameLine();
+    auto replayPageText = trFormat("Page {current} / {total}",
+        fmt::arg("current", replayCurrentPage + 1),
+        fmt::arg("total", totalPages));
+    ImGui::TextUnformatted(replayPageText.c_str());
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##nextPageReplay", ImGuiDir_Down) && replayCurrentPage < totalPages - 1) replayCurrentPage++;
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, 8));
+
     float listPadY = 8.0f;
     float listPadX = 10.0f;
-    float listH = std::max(80.0f, std::min(200.0f, (float)engine->storedMacros.size() * 28.0f + listPadY * 2.0f));
+    float listH = std::max(80.0f, std::min(200.0f, (float)filteredMacros.size() * 28.0f + listPadY * 2.0f));
     ImVec2 listPos = ImGui::GetCursorScreenPos();
     float listW = ImGui::GetContentRegionAvail().x;
     drawSolidRect(ImGui::GetWindowDrawList(), listPos, ImVec2(listPos.x + listW, listPos.y + listH), theme.cornerRadius, theme, 0.55f);
@@ -1915,7 +1950,7 @@ void MenuInterface::drawReplayTab() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
     ImGui::Dummy(ImVec2(0, listPadY));
 
-    if (engine->storedMacros.empty()) {
+    if (filteredMacros.empty()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
         imguiTextTr("No usable replays");
@@ -1929,8 +1964,10 @@ void MenuInterface::drawReplayTab() {
         replayLoadReadyTime = ImGui::GetTime() + static_cast<double>(ImGui::GetIO().MouseDoubleClickTime) + 0.02;
     };
 
-    auto macroListCopy = engine->storedMacros;
-    for (const auto& macroName : macroListCopy) {
+    int macroStartIdx = replayCurrentPage * replayPageSize;
+    int macroEndIdx = std::min(macroStartIdx + replayPageSize, totalMacros);
+    for (int macroIdx = macroStartIdx; macroIdx < macroEndIdx; ++macroIdx) {
+        const std::string& macroName = filteredMacros[macroIdx];
         bool isSelected = (engine->hasMacro() && engine->engineMode != MODE_CAPTURE && engine->getMacroName() == macroName);
         bool isIncompatible = engine->incompatibleMacros.count(macroName) > 0;
         bool isCBS = engine->cbsMacros.count(macroName) > 0;
@@ -2422,7 +2459,42 @@ void MenuInterface::drawReplayTab() {
     ImGui::Dummy(ImVec2(0, 2));
     Widgets::SectionHeader("Needs Conversion", theme);
 
-    float convertListH = std::max(60.0f, std::min(150.0f, (float)engine->foreignReplays.size() * 28.0f + listPadY * 2.0f));
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##foreignSearch", trString("Search...").c_str(), foreignSearchBuffer, sizeof(foreignSearchBuffer))) {
+        foreignCurrentPage = 0;
+    }
+    ImGui::Dummy(ImVec2(0, 4));
+
+    std::vector<toasty::conversion::DetectedReplay> filteredForeign;
+    std::string foreignSearchLower = foreignSearchBuffer;
+    std::transform(foreignSearchLower.begin(), foreignSearchLower.end(), foreignSearchLower.begin(), ::tolower);
+    for (auto const& entry : engine->foreignReplays) {
+        std::string nameLower = entry.filename;
+        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+        if (foreignSearchLower.empty() || nameLower.find(foreignSearchLower) != std::string::npos) {
+            filteredForeign.push_back(entry);
+        }
+    }
+
+    int totalForeign = (int)filteredForeign.size();
+    int totalForeignPages = (totalForeign + replayPageSizeConversion - 1) / replayPageSizeConversion;
+    if (totalForeignPages == 0) totalForeignPages = 1;
+    if (foreignCurrentPage >= totalForeignPages) foreignCurrentPage = totalForeignPages - 1;
+    if (foreignCurrentPage < 0) foreignCurrentPage = 0;
+
+    ImGui::BeginGroup();
+    if (ImGui::ArrowButton("##prevForeignPage", ImGuiDir_Up) && foreignCurrentPage > 0) foreignCurrentPage--;
+    ImGui::SameLine();
+    auto foreignPageText = trFormat("Page {current} / {total}",
+        fmt::arg("current", foreignCurrentPage + 1),
+        fmt::arg("total", totalForeignPages));
+    ImGui::TextUnformatted(foreignPageText.c_str());
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##nextForeignPage", ImGuiDir_Down) && foreignCurrentPage < totalForeignPages - 1) foreignCurrentPage++;
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, 8));
+
+    float convertListH = std::max(60.0f, std::min(150.0f, (float)filteredForeign.size() * 28.0f + listPadY * 2.0f));
     ImVec2 convertListPos = ImGui::GetCursorScreenPos();
     float convertListW = ImGui::GetContentRegionAvail().x;
     drawSolidRect(ImGui::GetWindowDrawList(), convertListPos, ImVec2(convertListPos.x + convertListW, convertListPos.y + convertListH), theme.cornerRadius, theme, 0.42f);
@@ -2433,14 +2505,17 @@ void MenuInterface::drawReplayTab() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
     ImGui::Dummy(ImVec2(0, listPadY));
 
-    if (engine->foreignReplays.empty()) {
+    if (filteredForeign.empty()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
         imguiTextTr("No old macros found");
         ImGui::PopStyleColor();
     }
 
-    for (auto const& entry : engine->foreignReplays) {
+    int foreignStartIdx = foreignCurrentPage * replayPageSizeConversion;
+    int foreignEndIdx = std::min(foreignStartIdx + replayPageSizeConversion, totalForeign);
+    for (int foreignIdx = foreignStartIdx; foreignIdx < foreignEndIdx; ++foreignIdx) {
+        auto const& entry = filteredForeign[foreignIdx];
         auto pathKey = toasty::conversion::normalizedPathKey(entry.path);
         bool selected = replayConvertSelectedPath == pathKey;
         bool converted = entry.converted || engine->convertedForeignReplaySources.count(pathKey) > 0;
