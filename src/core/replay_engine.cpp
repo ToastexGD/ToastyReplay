@@ -715,12 +715,8 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
         engine->lastTickIndex = tick;
         engine->lastStepDelta = std::max(0, m_currentStep - engine->tickStartStep);
-        if (engine->engineMode == MODE_CAPTURE) {
-            if (newTick) captureTick(tick);
-        } else if (engine->engineMode == MODE_EXECUTE) {
-            executeTick(tick, engine->lastStepDelta);
-            processInputOnly(shouldUseInputOnlyTTRPlayback(), [&](int p) { dispatchInputOnlyTTRInputs(p); });
-            processInputOnly(shouldUseInputOnlyGDRPlayback(), [&](int p) { dispatchGDRInputsOnly(p); });
+        if (engine->engineMode == MODE_CAPTURE && newTick) {
+            captureTick(tick);
         }
     }
 #endif
@@ -927,6 +923,19 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
             }
         }
     }
+
+#ifdef GEODE_IS_MACOS
+    void macSubstepDispatch() {
+        auto* engine = ReplayEngine::get();
+        if (!engine || engine->engineMode != MODE_EXECUTE || !engine->hasMacro()) {
+            return;
+        }
+        int tick = tick_util::current(this, engine);
+        executeTick(tick, 0);
+        processInputOnly(shouldUseInputOnlyTTRPlayback(), [&](int p) { dispatchInputOnlyTTRInputs(p); });
+        processInputOnly(shouldUseInputOnlyGDRPlayback(), [&](int p) { dispatchGDRInputsOnly(p); });
+    }
+#endif
 
     void processQueuedButtons(float dt, bool clearInputQueue) {
         auto* engine = ReplayEngine::get();
@@ -1138,6 +1147,12 @@ class $modify(MacroEnginePlayerObject, PlayerObject) {
     void update(float stepDelta) {
         auto* playLayer = PlayLayer::get();
         auto* engine = ReplayEngine::get();
+
+#ifdef GEODE_IS_MACOS
+        if (playLayer && engine && !engine->simulatingPath && !engine->substepMidStep && this == playLayer->m_player1) {
+            static_cast<MacroEngineBaseLayer*>(static_cast<GJBaseGameLayer*>(playLayer))->macSubstepDispatch();
+        }
+#endif
 
         if (!playLayer || !engine || engine->simulatingPath || !engine->hasQueuedSubstepTick()) {
             if (!engine || !engine->substepMidStep) {
