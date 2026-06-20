@@ -715,9 +715,6 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
         engine->lastTickIndex = tick;
         engine->lastStepDelta = std::max(0, m_currentStep - engine->tickStartStep);
-        if (engine->engineMode == MODE_CAPTURE && newTick) {
-            captureTick(tick);
-        }
     }
 #endif
 
@@ -991,6 +988,11 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         m_fields->macroInput = previousMacroInput ||
             (executingCBS && engine->manualInputIgnoredActive() && !queuedSnapshot.empty());
         engine->cbsPlaybackProcessingQueue = executingCBS;
+#ifdef GEODE_IS_MACOS
+        if (!engine->simulatingPath && !engine->substepMidStep) {
+            macSubstepDispatch();
+        }
+#endif
         GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
 
         processInputOnly(shouldUseInputOnlyTTRPlayback(), [&](int p) { dispatchInputOnlyTTRInputs(p); });
@@ -998,6 +1000,11 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
         m_fields->macroInput = previousMacroInput;
         engine->cbsPlaybackProcessingQueue = previousCbsPlaybackProcessingQueue;
+#ifdef GEODE_IS_MACOS
+        if (engine->engineMode == MODE_CAPTURE && !engine->simulatingPath && !engine->substepMidStep) {
+            captureTick(tick_util::current(this, engine));
+        }
+#endif
         engine->cbsCaptureProcessingQueue = false;
         engine->queuedCaptureCommands.clear();
 
@@ -1147,12 +1154,6 @@ class $modify(MacroEnginePlayerObject, PlayerObject) {
     void update(float stepDelta) {
         auto* playLayer = PlayLayer::get();
         auto* engine = ReplayEngine::get();
-
-#ifdef GEODE_IS_MACOS
-        if (playLayer && engine && !engine->simulatingPath && !engine->substepMidStep && this == playLayer->m_player1) {
-            static_cast<MacroEngineBaseLayer*>(static_cast<GJBaseGameLayer*>(playLayer))->macSubstepDispatch();
-        }
-#endif
 
         if (!playLayer || !engine || engine->simulatingPath || !engine->hasQueuedSubstepTick()) {
             if (!engine || !engine->substepMidStep) {
