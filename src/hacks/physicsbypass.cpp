@@ -408,7 +408,13 @@ namespace {
         setExpectedTicks(steps);
         engine->tickAccumulator = static_cast<float>(std::max(0.0, *extraDelta));
 
+#ifdef GEODE_IS_MACOS
+        for (int64_t i = 0; i < steps; ++i) {
+            layer->GJBaseGameLayer::update(static_cast<float>(timestep));
+        }
+#else
         layer->GJBaseGameLayer::update(static_cast<float>(totalDelta));
+#endif
     }
 }
 
