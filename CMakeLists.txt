@@ -18,6 +18,12 @@ set(TOASTYREPLAY_SOURCES
     src/core/frame_stepper.cpp
     src/core/keybinds.cpp
     src/gui/gui.cpp
+    src/gui/cocos/frontend.cpp
+    src/gui/cocos/tr_menu_popup.cpp
+    src/gui/cocos/tr_frame_editor_popup.cpp
+    src/gui/cocos/tr_replay_actions_popup.cpp
+    src/gui/cocos/mobile_float.cpp
+    src/gui/cocos/cells/cells.cpp
     src/gui/frame_editor.cpp
     src/tools/layoutmode.cpp
     src/tools/nomirror.cpp

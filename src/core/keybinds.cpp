@@ -1,6 +1,7 @@
 #include <Geode/Bindings.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include "gui/gui.hpp"
+#include "gui/cocos/frontend.hpp"
 #include "ToastyReplay.hpp"
 #include "hacks/autoclicker.hpp"
 #include "audio/clicksounds.hpp"
@@ -55,6 +56,10 @@ static constexpr KeybindEntry dispatchTable[] = {
 static bool runAction(KeybindAction action, ReplayEngine* engine, MenuInterface* ui, PlayLayer* pl) {
     switch (action) {
         case KeybindAction::MenuToggle:
+            if (toasty::frontend::isCocos()) {
+                toasty::frontend::toggleMenu();
+                return true;
+            }
             if (ui->anim.closing) {
                 ui->anim.closing = false;
                 ui->anim.opening = true;

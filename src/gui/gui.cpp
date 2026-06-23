@@ -1,4 +1,5 @@
 #include "gui/gui.hpp"
+#include "gui/cocos/frontend.hpp"
 #include "gui/pride_mode.hpp"
 #include "lang/localization.hpp"
 #include "ToastyReplay.hpp"
@@ -6747,6 +6748,18 @@ void MenuInterface::drawInterface() {
     if (engine) engine->processHotkeys();
 
     float dt = ImGui::GetIO().DeltaTime;
+
+    if (toasty::frontend::isCocos()) {
+        OnlineClient::get()->update(dt);
+        if (shown) {
+            shown = false;
+            anim.opening = false;
+            anim.closing = false;
+            anim.openProgress = 0.0f;
+        }
+        return;
+    }
+
     anim.update(dt);
 
     if (anim.closing && anim.openProgress <= 0.0f) {

@@ -12,6 +12,8 @@
 
 class MenuInterface;
 
+namespace toasty::frontend { class TRFrameEditorPopup; }
+
 struct EditorInput {
     int32_t frame = 0;
     int actionType = 0;
@@ -104,8 +106,11 @@ public:
     bool isActive() const;
 
     void draw(MenuInterface& ui);
+    void save();
 
 private:
+    friend class toasty::frontend::TRFrameEditorPopup;
+
     void rebuildSegments();
     void recomputeMaxFrame();
     bool hasPlayer2Inputs() const;

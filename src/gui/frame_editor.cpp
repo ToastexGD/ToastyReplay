@@ -488,6 +488,13 @@ void FrameEditor::redo() {
     clearSelection();
 }
 
+void FrameEditor::save() {
+    commitPendingSelectionEdits();
+    if (!dirty) return;
+    if (format == EditorFormat::TTR) applyToTTR();
+    else applyToGDR();
+}
+
 void FrameEditor::applyToTTR() {
     if (!cachedTTR) {
         log::error("[FrameEditor] applyToTTR: cachedTTR is null, cannot save");

@@ -237,6 +237,7 @@ public:
     std::unordered_set<std::string> platformerMacros;
     std::unordered_set<std::string> ttrMacros;
     std::unordered_set<std::string> ttr2Macros;
+    std::unordered_set<std::string> ttr3Macros;
     std::unordered_set<std::string> legacyTtrMacros;
     std::unordered_set<std::string> legacyCbsMacros;
     std::vector<toasty::conversion::DetectedReplay> foreignReplays;
@@ -312,6 +313,7 @@ public:
         platformerMacros.clear();
         ttrMacros.clear();
         ttr2Macros.clear();
+        ttr3Macros.clear();
         legacyTtrMacros.clear();
         legacyCbsMacros.clear();
         foreignReplays.clear();

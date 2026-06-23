@@ -25,6 +25,13 @@
 		}
 	},
 	"settings": {
+		"menu_frontend": {
+			"name": "Menu Style",
+			"description": "Which in-game menu to use. <cy>ImGui</c> is the classic overlay; <cj>Cocos2d</c> is the native Geometry Dash UI. Open with your menu key (or the floating button on mobile). Takes effect the next time you open the menu.",
+			"type": "string",
+			"default": "ImGui",
+			"one-of": ["ImGui", "Cocos2d"]
+		},
 		"ui_language": {
 			"name": "UI Language",
 			"type": "string",
