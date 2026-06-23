@@ -76,6 +76,17 @@ public:
 
     bool isRunning() const { return m_pi.hProcess != nullptr; }
 
+    // Raw kernel handles, valid for as long as this object lives. Exposed so a
+    // watchdog on another thread can force-kill a hung ffmpeg without owning the
+    // object: TerminateProcess on the process handle, or CloseHandle on the job
+    // (which carries JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) both terminate the child.
+    HANDLE processHandle() const { return m_pi.hProcess; }
+    HANDLE jobHandle() const { return m_job; }
+
+    void kill() {
+        if (m_pi.hProcess) TerminateProcess(m_pi.hProcess, 1);
+    }
+
     bool writeStdin(const uint8_t* data, size_t size) {
         if (!m_stdinWrite) return false;
         size_t offset = 0;

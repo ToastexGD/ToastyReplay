@@ -204,6 +204,7 @@ public:
     float getTPS() const;
 
     std::optional<RenderConfig> m_pendingConfig;
+    static void cleanupOrphanedRenderFiles();
 
 private:
     std::thread m_encodeThread;
@@ -213,9 +214,36 @@ private:
     std::optional<ResolvedEncodeParams> m_resolvedParams;
     std::string m_extOverride;
 
+    // crash handle
+    enum class EncodeCrashReason { Exception, HardwareFault, Hang };
+    std::thread       m_watchdogThread;
+    std::atomic<bool> m_watchdogStop{false};
+    std::atomic<bool> m_encodeHang{false};
+    std::atomic<bool> m_encodeFinalizing{false};
+    std::atomic<bool> m_crashHandled{false};
+    std::atomic<long long> m_blockingSinceNs{0};
+    // Raw HANDLE copies (void*) of the live ffmpeg subprocess, so the watchdog and
+    // the crash handler can terminate it without touching the owning C++ object.
+    std::atomic<void*> m_activeProcessHandle{nullptr};
+    std::atomic<void*> m_activeJobHandle{nullptr};
+    int m_encodeTimeoutSec = 30;
+    std::vector<std::filesystem::path> m_inflightFiles;
+
     bool resolveEncoder();
     void restoreAudioVolumes();
     bool isLevelComplete();
     void startFromPending();
     void runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
+#ifdef GEODE_IS_WINDOWS
+    static void encodeSehBoundary(Renderer* self, const std::filesystem::path* songFile, float songOffset, bool fadeIn, bool fadeOut, const std::string* extension, int64_t bitrateApi);
+#endif
+    void runEncodeLoopGuarded(const std::filesystem::path& songFile, float songOffset, bool fadeIn, bool fadeOut, const std::string& extension, int64_t bitrateApi);
+    void runEncodeLoopBody(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
+
+    void startWatchdog();
+    void stopWatchdog();
+    void watchdogLoop();
+    void onEncodeCrash(EncodeCrashReason reason);
+    void registerInflightFile(const std::filesystem::path& file);
+    void clearInflightFiles();
 };

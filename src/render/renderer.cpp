@@ -1181,6 +1181,7 @@ void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, c
 
 Renderer::~Renderer() {
     if (m_encodeThread.joinable()) m_encodeThread.join();
+    stopWatchdog();
 }
 
 void Renderer::detectGpuVendor() {
@@ -1834,20 +1835,86 @@ void Renderer::start() {
     m_encodeThread = std::thread(&Renderer::runEncodeLoop, this, songFile, songOffset, fadeIn, fadeOut, extension, bitrateApi);
 }
 
+#ifdef GEODE_IS_WINDOWS
+// Contain hardware faults (access violation, illegal instruction, ...) so a crash
+// in the encode thread is recoverable instead of calling std::terminate() and
+// taking the whole game down. C++ exceptions are caught one layer down in
+// runEncodeLoopGuarded; they surface here as code 0xE06D7363 and are passed through.
+static int encodeSehFilter(unsigned int code) {
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION:
+        case EXCEPTION_ILLEGAL_INSTRUCTION:
+        case EXCEPTION_PRIV_INSTRUCTION:
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:
+        case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+        case EXCEPTION_FLT_INVALID_OPERATION:
+        case EXCEPTION_IN_PAGE_ERROR:
+        case EXCEPTION_DATATYPE_MISALIGNMENT:
+            return EXCEPTION_EXECUTE_HANDLER;
+        default:
+            // stack overflow and unknown codes (incl. C++ EH) are left to propagate
+            return EXCEPTION_CONTINUE_SEARCH;
+    }
+}
+#endif
+
+#ifdef GEODE_IS_WINDOWS
+// SEH boundary. Takes only pointers/scalars so it has no objects requiring unwinding
+// (MSVC forbids __try/__except otherwise). Binding the pointed-to args to the const
+// references of runEncodeLoopGuarded builds no temporaries in this frame.
+void Renderer::encodeSehBoundary(Renderer* self,
+                                 const std::filesystem::path* songFile, float songOffset,
+                                 bool fadeIn, bool fadeOut,
+                                 const std::string* extension, int64_t bitrateApi) {
+    __try {
+        self->runEncodeLoopGuarded(*songFile, songOffset, fadeIn, fadeOut, *extension, bitrateApi);
+    } __except (encodeSehFilter(GetExceptionCode())) {
+        self->onEncodeCrash(EncodeCrashReason::HardwareFault);
+    }
+}
+#endif
+
+// Thread entry. Owns by-value params (so they outlive the encode), which means it
+// cannot itself host __try/__except (SEH is forbidden in functions requiring object
+// unwinding). It only forwards into the SEH boundary, which takes pointers/scalars.
 void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi) {
+#ifdef GEODE_IS_WINDOWS
+    encodeSehBoundary(this, &songFile, songOffset, fadeIn, fadeOut, &extension, bitrateApi);
+#else
+    runEncodeLoopGuarded(songFile, songOffset, fadeIn, fadeOut, extension, bitrateApi);
+#endif
+}
+
+void Renderer::runEncodeLoopGuarded(const std::filesystem::path& songFile, float songOffset, bool fadeIn, bool fadeOut, const std::string& extension, int64_t bitrateApi) {
+    try {
+        runEncodeLoopBody(songFile, songOffset, fadeIn, fadeOut, extension, bitrateApi);
+    } catch (const std::exception& e) {
+        log::error("Encode thread C++ exception: {}", e.what());
+        onEncodeCrash(EncodeCrashReason::Exception);
+    } catch (...) {
+        log::error("Encode thread C++ exception (unknown type)");
+        onEncodeCrash(EncodeCrashReason::Exception);
+    }
+}
+
+void Renderer::runEncodeLoopBody(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi) {
         struct EncodeActiveGuard {
             Renderer* self;
             ~EncodeActiveGuard() {
+                self->stopWatchdog();
                 self->frameCapture.releasePool();
                 self->m_encodeActive.store(false, std::memory_order_release);
             }
         } encodeActiveGuard{ this };
 
+        // reset per-render crash state up front: an early failure (e.g. encoder init)
+        // can reach onEncodeCrash before the watchdog, which also resets these
+        m_crashHandled.store(false, std::memory_order_release);
+        m_encodeHang.store(false, std::memory_order_release);
+        m_inflightFiles.clear();
+
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
-        // the API mod's vflip defaults to true 
-        // (it expects raw bottom-up GL frames), so leaving it on
-        // double-flips and renders upside down on the API path. You can comment this out if you want
         settings.m_doVerticalFlip = false;
         settings.m_codec = codec;
         settings.m_bitrate = bitrateApi;
@@ -1862,7 +1929,13 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         //    settings.m_codec, settings.m_bitrate, settings.m_width, settings.m_height, settings.m_fps,
         //    toasty::pathToUtf8(settings.m_outputFile));
 
-        auto availableCodecs = ffmpeg::events::Recorder::getAvailableCodecs();
+        std::vector<std::string> availableCodecs;
+#ifdef GEODE_IS_WINDOWS
+        if (!usingApi && pathExists(ffmpegPath))
+            availableCodecs = probeVideoCodecs(ffmpegPath);
+        else
+#endif
+            availableCodecs = ffmpeg::events::Recorder::getAvailableCodecs();
         //std::string codecList;
         //for (auto& c : availableCodecs) codecList += c + ", ";
         //log::info("Available codecs ({}): {}", availableCodecs.size(), codecList);
@@ -2028,6 +2101,32 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             process = Subprocess(command, stderrLogPath);
 #endif
         }
+
+        // Track the output file so a crash/hang can discard the partial, and so a
+        // hard game crash leaves a breadcrumb for cleanup on next launch.
+        registerInflightFile(path);
+
+        // Publish the live process handles for the watchdog, and arm a guard that
+        // detaches them (and stops the watchdog) before `process` is destroyed at the
+        // end of this block. The guard's dtor is skipped on a hardware fault (SEH does
+        // not run C++ unwinders), which is exactly what lets onEncodeCrash still reach
+        // the leaked job handle to kill an orphaned ffmpeg.
+        struct ProcessScopeGuard {
+            Renderer* self;
+            ~ProcessScopeGuard() {
+                self->stopWatchdog();
+                self->m_activeProcessHandle.store(nullptr, std::memory_order_release);
+                self->m_activeJobHandle.store(nullptr, std::memory_order_release);
+            }
+        } processScopeGuard{ this };
+#ifdef GEODE_IS_WINDOWS
+        if (!useApiForEncoding && process.isRunning()) {
+            m_activeProcessHandle.store(process.processHandle(), std::memory_order_release);
+            m_activeJobHandle.store(process.jobHandle(), std::memory_order_release);
+        }
+#endif
+        startWatchdog();
+
         auto encodeWallStart = std::chrono::steady_clock::now();
         int  framesEncoded = 0;
         double waitSeconds = 0.0;
@@ -2038,36 +2137,46 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             waitSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
             if (!frame.empty()) {
                 auto writeFrame = [&](std::vector<uint8_t> const& data) {
+                    m_blockingSinceNs.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_release);
                     if (useApiForEncoding) {
                         auto res = recorder.writeFrame(data);
+                        m_blockingSinceNs.store(0, std::memory_order_release);
                         if (res.isErr()) {
-                            Loader::get()->queueInMainThread([this] {
-                                auto errorTitle = trString("Error");
-                                auto errorMessage = trString("Frame submission to the FFmpeg API failed.");
-                                auto okText = trString("Ok");
-                                FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
-                                stop();
-                            });
-                            audioMode = AUDIO_OFF;
-                            recording = false;
-                            frameCapture.notifyStop();
+                            if (!m_encodeHang.load(std::memory_order_acquire)) {
+                                Loader::get()->queueInMainThread([this] {
+                                    auto errorTitle = trString("Error");
+                                    auto errorMessage = trString("Frame submission to the FFmpeg API failed.");
+                                    auto okText = trString("Ok");
+                                    FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
+                                    stop();
+                                });
+                                audioMode = AUDIO_OFF;
+                                recording = false;
+                                frameCapture.notifyStop();
+                            }
                             return false;
                         }
                     }
 #ifdef GEODE_IS_WINDOWS
-                    else if (!process.writeStdin(data.data(), data.size())) {
-                        log::error("FFmpeg subprocess stopped accepting frames, aborting render");
-                        Loader::get()->queueInMainThread([this] {
-                            auto errorTitle = trString("Error");
-                            auto errorMessage = trString("The FFmpeg process exited unexpectedly. Check your encoder settings.");
-                            auto okText = trString("Ok");
-                            FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
-                            stop();
-                        });
-                        audioMode = AUDIO_OFF;
-                        recording = false;
-                        frameCapture.notifyStop();
-                        return false;
+                    else {
+                        bool wrote = process.writeStdin(data.data(), data.size());
+                        m_blockingSinceNs.store(0, std::memory_order_release);
+                        if (!wrote) {
+                            if (!m_encodeHang.load(std::memory_order_acquire)) {
+                                log::error("FFmpeg subprocess stopped accepting frames, aborting render");
+                                Loader::get()->queueInMainThread([this] {
+                                    auto errorTitle = trString("Error");
+                                    auto errorMessage = trString("The FFmpeg process exited unexpectedly. Check your encoder settings.");
+                                    auto okText = trString("Ok");
+                                    FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
+                                    stop();
+                                });
+                                audioMode = AUDIO_OFF;
+                                recording = false;
+                                frameCapture.notifyStop();
+                            }
+                            return false;
+                        }
                     }
 #endif
                     return true;
@@ -2089,12 +2198,18 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         //}
 
         auto finishEncoder = [&]() -> bool {
+            // close()/stop() is the flush; mark it as the blocking window so a wedged
+            // finalize is caught, but the wider finalizing budget tolerates a slow one
+            m_blockingSinceNs.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_release);
             if (useApiForEncoding) {
                 recorder.stop();
+                m_blockingSinceNs.store(0, std::memory_order_release);
                 return true;
             }
 #ifdef GEODE_IS_WINDOWS
-            if (int exitCode = process.close()) {
+            int exitCode = process.close();
+            m_blockingSinceNs.store(0, std::memory_order_release);
+            if (exitCode) {
                 log::error("FFmpeg exited with code {}; see {}", exitCode,
                     toasty::pathToUtf8(Mod::get()->getSaveDir() / "last_render_ffmpeg.log"));
                 Loader::get()->queueInMainThread([] {
@@ -2108,8 +2223,14 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 #endif
             return true;
         };
-        if (!finishEncoder()) return;
-        } 
+        m_encodeFinalizing.store(true, std::memory_order_release);
+        bool encoderOk = finishEncoder();
+        if (m_encodeHang.load(std::memory_order_acquire)) {
+            onEncodeCrash(EncodeCrashReason::Hang);
+            return;
+        }
+        if (!encoderOk) return;
+        }
 
         bool preferExeAudioMux = false;
 #ifdef GEODE_IS_WINDOWS
@@ -2267,6 +2388,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         }
 
         if (!hasAudio) {
+            clearInflightFiles();
             Loader::get()->queueInMainThread([this] {
                 Notification::create(trString("Render done without audio"), NotificationIcon::Success)->show();
                 if (ReplayEngine::get()->renderer.hideEndscreen) {
@@ -2280,6 +2402,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         std::filesystem::path tempPath = path.parent_path() /
             ("temp_" + toasty::pathToUtf8(path.filename()));
+        registerInflightFile(tempPath);
         std::filesystem::path rawAudioPath;
         auto ensureRawAudioFile = [&]() -> bool {
             if (rawAudioPath.empty()) {
@@ -2292,6 +2415,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     rawAudioPath.clear();
                     return false;
                 }
+                registerInflightFile(rawAudioPath);
             }
             return true;
         };
@@ -2434,7 +2558,126 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             });
         }
 
+        clearInflightFiles();
         m_resolvedParams.reset();
+}
+
+void Renderer::startWatchdog() {
+    stopWatchdog();
+    m_encodeTimeoutSec = std::max(5, Mod::get()->getSavedValue<int>("render_encode_timeout", 30));
+    m_watchdogStop.store(false, std::memory_order_release);
+    m_encodeHang.store(false, std::memory_order_release);
+    m_encodeFinalizing.store(false, std::memory_order_release);
+    m_crashHandled.store(false, std::memory_order_release);
+    m_blockingSinceNs.store(0, std::memory_order_release);
+    m_watchdogThread = std::thread(&Renderer::watchdogLoop, this);
+}
+
+void Renderer::stopWatchdog() {
+    m_watchdogStop.store(true, std::memory_order_release);
+    if (m_watchdogThread.joinable()) m_watchdogThread.join();
+}
+
+void Renderer::watchdogLoop() {
+    using namespace std::chrono;
+    while (!m_watchdogStop.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(milliseconds(500));
+        if (m_watchdogStop.load(std::memory_order_acquire)) break;
+        long long since = m_blockingSinceNs.load(std::memory_order_acquire);
+        if (since == 0) continue;
+
+        double blockedSec = static_cast<double>(steady_clock::now().time_since_epoch().count() - since) / 1e9;
+        int budget = m_encodeFinalizing.load(std::memory_order_acquire)
+            ? std::max(m_encodeTimeoutSec * 4, 60)
+            : m_encodeTimeoutSec;
+        if (blockedSec > budget) {
+            log::error("Render watchdog: ffmpeg write/close blocked for {:.0f}s (budget {}s), killing ffmpeg",
+                       blockedSec, budget);
+            m_encodeHang.store(true, std::memory_order_release);
+#ifdef GEODE_IS_WINDOWS
+            if (HANDLE h = static_cast<HANDLE>(m_activeProcessHandle.load(std::memory_order_acquire)))
+                TerminateProcess(h, 1);
+#endif
+            recording.store(false, std::memory_order_release);
+            pause.store(false, std::memory_order_release);
+            frameCapture.notifyStop();
+            break;
+        }
+    }
+}
+
+void Renderer::onEncodeCrash(EncodeCrashReason reason) {
+    if (m_crashHandled.exchange(true, std::memory_order_acq_rel)) return;
+
+    stopWatchdog();
+
+#ifdef GEODE_IS_WINDOWS
+    if (HANDLE p = static_cast<HANDLE>(m_activeProcessHandle.exchange(nullptr, std::memory_order_acq_rel)))
+        TerminateProcess(p, 1);
+    if (HANDLE j = static_cast<HANDLE>(m_activeJobHandle.exchange(nullptr, std::memory_order_acq_rel)))
+        CloseHandle(j);
+#endif
+
+    for (auto const& f : m_inflightFiles) {
+        std::error_code ec;
+        std::filesystem::remove(f, ec);
+    }
+    clearInflightFiles();
+
+    frameCapture.notifyStop();
+    frameCapture.releasePool();
+    recording.store(false, std::memory_order_release);
+    pause.store(false, std::memory_order_release);
+    m_encodeActive.store(false, std::memory_order_release);
+    m_resolvedParams.reset();
+
+    bool hang = reason == EncodeCrashReason::Hang;
+    Loader::get()->queueInMainThread([hang] {
+        ReplayEngine::get()->renderer.stop();
+        auto errorTitle = trString("Render failed");
+        auto errorMessage = hang
+            ? trString("The render timed out and was stopped. Try a lower resolution or a faster encoder.")
+            : trString("The render crashed and was stopped. No file was saved.");
+        auto okText = trString("Ok");
+        FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
+    });
+}
+
+void Renderer::registerInflightFile(const std::filesystem::path& file) {
+    if (file.empty()) return;
+    m_inflightFiles.push_back(file);
+    std::string joined;
+    for (auto const& f : m_inflightFiles) {
+        if (!joined.empty()) joined += '\n';
+        joined += toasty::pathToUtf8(f);
+    }
+    Mod::get()->setSavedValue<std::string>("render_inflight_files", joined);
+}
+
+void Renderer::clearInflightFiles() {
+    m_inflightFiles.clear();
+    Mod::get()->setSavedValue<std::string>("render_inflight_files", std::string{});
+}
+
+void Renderer::cleanupOrphanedRenderFiles() {
+    std::string joined = Mod::get()->getSavedValue<std::string>("render_inflight_files", "");
+    if (joined.empty()) return;
+    size_t start = 0;
+    while (start <= joined.size()) {
+        size_t nl = joined.find('\n', start);
+        std::string entry = joined.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        if (!entry.empty()) {
+            auto p = toasty::stringToPath(entry);
+            std::error_code ec;
+            if (std::filesystem::exists(p, ec)) {
+                std::filesystem::remove(p, ec);
+                if (!ec) log::info("Removed orphaned render file from a previous crash: {}", entry);
+            }
+        }
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    Mod::get()->setSavedValue<std::string>("render_inflight_files", std::string{});
 }
 
 void Renderer::restoreAudioVolumes() {

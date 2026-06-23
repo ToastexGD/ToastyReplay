@@ -259,10 +259,11 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     // RGB->YCbCr is already BT.709 in both the NV12 shader and the RGB path). On top of
     // that, qualityColorspace=accurate adds the full ffmpeg colorspace conversion filter
     // for the CPU/RGB path (the NV12 path drops it); fast leaves tagging-only. Lossless
-    // never touches color.
+    // never touches color
     bool userFilter = cfg.videoArgs.has_value()
         && !cfg.videoArgs->empty()
         && *cfg.videoArgs != kDefaultVideoArgs;
+    bool needsRealRemap = cfg.qualityColorspace || cfg.height < 720;
     r.colorFix = cfg.colorFix;
     if (isLossless) {
         r.videoArgs = cfg.videoArgs.value_or("");
@@ -271,8 +272,8 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         r.videoArgs = *cfg.videoArgs;
         r.colorTags = "";
     } else {
-        r.videoArgs = cfg.qualityColorspace ? kDefaultVideoArgs : "";
-        r.colorTags = cfg.colorFix ? kFastColorTags : "";
+        r.videoArgs = needsRealRemap ? kDefaultVideoArgs : "";
+        r.colorTags = (!needsRealRemap && cfg.colorFix) ? kFastColorTags : "";
     }
 
     r.audioArgs  = cfg.audioArgs.value_or("");

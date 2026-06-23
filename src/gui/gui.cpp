@@ -5667,6 +5667,14 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
             ImGui::TextUnformatted(famInfo.c_str());
             ImGui::PopStyleColor();
 
+            if (f.fam == RenderCodecFamily::VVC) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.55f, 0.30f, 1.0f));
+                ImGui::TextWrapped("  [!] Very slow: software-only, ~30-40x slower than real-time. "
+                                   "The game will be unresponsive for the entire render. Use a GPU "
+                                   "encoder (NVENC) or H.264/H.265 for practical renders.");
+                ImGui::PopStyleColor();
+            }
+
             for (const KnownVideoEncoder* e : encs) {
                 bool sel = std::string(expAdvCodecBuf) == e->name;
 
@@ -6038,6 +6046,19 @@ void MenuInterface::drawExpRenderTab() {
         else
             ImGui::TextUnformatted(expConfig.qualityColorspace ? "[accurate - CPU path]" : "[fast]");
         ImGui::PopStyleColor();
+    }
+
+    {
+        static int encodeTimeout = -1;
+        if (encodeTimeout < 0)
+            encodeTimeout = std::clamp(Mod::get()->getSavedValue<int>("render_encode_timeout", 30), 5, 600);
+        imguiTextTr("Render Timeout (s)");
+        ImGui::SameLine(inputW);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputInt("##renderTimeout", &encodeTimeout)) {
+            encodeTimeout = std::clamp(encodeTimeout, 5, 600);
+            Mod::get()->setSavedValue<int>("render_encode_timeout", encodeTimeout);
+        }
     }
 
     drawRenderAudioSection();
@@ -6836,6 +6857,7 @@ void MenuInterface::ensureLogoTexture() {
 }
 
 $on_mod(Loaded) {
+    Renderer::cleanupOrphanedRenderFiles();
     ImGuiCocos::get().setup([] {
         MenuInterface::get()->initialize();
     }).draw([] {
