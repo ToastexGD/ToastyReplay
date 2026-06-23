@@ -134,8 +134,8 @@ public:
     ~Renderer();
 
     bool levelFinished = false;
-    bool recording = false;
-    bool pause = false;
+    std::atomic<bool> recording = false;
+    std::atomic<bool> pause = false;
     int audioMode = AUDIO_OFF;
     float ogMusicVol = 1.f;
     float ogSFXVol = 1.f;

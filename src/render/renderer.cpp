@@ -715,7 +715,9 @@ int Renderer::getCurrentFrame() const {
 }
 
 float Renderer::getTPS() const {
-    return static_cast<float>(ReplayEngine::get()->tickRate);
+    // runtimeTickRate clamps to >= 1; using the raw tickRate risks a divide-by-zero
+    // in handleRecording that spins the duplicate-frame loop forever
+    return static_cast<float>(ReplayEngine::get()->runtimeTickRate());
 }
 
 static void copyFlippedRows(uint8_t* dst, const uint8_t* src, unsigned width, unsigned height) {
@@ -2048,6 +2050,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                             });
                             audioMode = AUDIO_OFF;
                             recording = false;
+                            frameCapture.notifyStop();
                             return false;
                         }
                     }
@@ -2063,6 +2066,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                         });
                         audioMode = AUDIO_OFF;
                         recording = false;
+                        frameCapture.notifyStop();
                         return false;
                     }
 #endif
@@ -2485,6 +2489,7 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
     if (!pl) return stop(frame);
     isPlatformer = pl->m_levelSettings ? pl->m_levelSettings->m_platformerMode : false;
     if (dontRender) return;
+    if (frame < 0) return;
     auto* engine = ReplayEngine::get();
 
     if (progressLabel) {
