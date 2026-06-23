@@ -492,7 +492,7 @@ public:
         return ext;
     }
 
-    void persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240) {
+    void persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240, bool useJson = false) {
         author = GJAccountManager::get()->m_username;
         duration = inputs.empty() ? 0.0 : static_cast<double>(inputs.back().frame) / framerate;
         accuracyMode = writableAccuracyMode(mode);
@@ -512,11 +512,12 @@ public:
         name = ReplayStorage::makeUniqueReplayName(name, persistedName);
         persistedName = name;
 
-        std::ofstream output(dir / (name + ".gdr"), std::ios::binary);
-        auto bytes = exportData(false);
+        std::string const extension = useJson ? ".gdr.json" : ".gdr";
+        std::ofstream output(dir / (name + extension), std::ios::binary);
+        auto bytes = exportData(useJson);
         output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
         output.close();
-        log::info("[TR-FMT][I001] saved legacy GDR replay: {}", toasty::pathToUtf8(dir / (name + ".gdr")));
+        log::info("[TR-FMT][I001] saved legacy GDR replay: {}", toasty::pathToUtf8(dir / (name + extension)));
     }
 
     static MacroSequence* loadFromDisk(std::string const& filename) {

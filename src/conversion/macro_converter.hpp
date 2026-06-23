@@ -235,8 +235,18 @@ inline TTRMacro buildTTR3FromImported(
     macro.levelId = imported.levelId;
     macro.framerate = fps;
     macro.duration = std::max(0.0, imported.duration);
-    macro.accuracyMode = AccuracyMode::CBS;
-    macro.exactCbsTiming = true;
+    bool const hasSubTickPrecision = std::any_of(
+        imported.inputs.begin(),
+        imported.inputs.end(),
+        [](ImportedInput const& input) {
+            bool const offsetNonzero = std::isfinite(input.stepOffset) && input.stepOffset > 0.0f;
+            bool const absoluteTime = std::isfinite(input.time)
+                && std::isfinite(input.sourceFrame)
+                && input.time - input.sourceFrame * (1.0 / 240.0) > 1e-6;
+            return offsetNonzero || absoluteTime;
+        });
+    macro.accuracyMode = hasSubTickPrecision ? AccuracyMode::CBS : AccuracyMode::Vanilla;
+    macro.exactCbsTiming = hasSubTickPrecision;
     macro.platformerMode = imported.platformerMode;
     macro.twoPlayerMode = imported.twoPlayerMode;
     macro.anchors = imported.anchors;
@@ -273,6 +283,25 @@ inline TTRMacro buildTTR3FromImported(
         macro.twoPlayerMode = macro.twoPlayerMode || input.player2;
         macro.duration = std::max(macro.duration, timeSeconds);
         macro.inputs.push_back(out);
+    }
+
+    if (macro.accuracyMode == AccuracyMode::Vanilla) {
+        for (auto& input : macro.inputs) {
+            input.stepOffset = 0.0f;
+            input.cbsTimeOffset = -1.0;
+            input.timeSeconds = -1.0;
+            input.swiftPairAnchor = false;
+        }
+        if (macro.anchors.size() > 1) {
+            macro.anchors.erase(macro.anchors.begin() + 1, macro.anchors.end());
+        }
+        macro.checkpoints.clear();
+        for (auto& attempt : macro.persistenceAttempts) {
+            if (attempt.anchors.size() > 1) {
+                attempt.anchors.erase(attempt.anchors.begin() + 1, attempt.anchors.end());
+            }
+        }
+        macro.macroConverted = false;
     }
 
     return macro;

@@ -222,6 +222,8 @@ namespace {
         return engine.tickStepping
             || engine.singleTickStep
             || engine.renderer.recording
+            || engine.engineMode == MODE_CAPTURE
+            || engine.engineMode == MODE_EXECUTE
             || !nearlyEqual(engine.runtimeTickRate(), ReplayEngine::kBaseTickRate, 0.01)
             || !nearlyEqual(engine.gameSpeed, 1.0, 0.0001)
             || Autoclicker::get()->enabled;

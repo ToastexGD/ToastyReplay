@@ -2501,10 +2501,9 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
             clockPrimed = true;
             if (leadInFixEligible) {
                 leadInSeconds = renderTime;
-                lastFrame_t = renderTime - s_renderClock.frameDelta;
-                extra_t = 0.0;
-
             }
+            lastFrame_t = renderTime - s_renderClock.frameDelta;
+            extra_t = 0.0;
         }
         double time = renderTime + extra_t - lastFrame_t;
         if (time >= s_renderClock.frameDelta) {

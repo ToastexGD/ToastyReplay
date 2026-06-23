@@ -243,7 +243,8 @@ bool ReplayEngine::saveActiveMacro() {
             return false;
         }
 
-        activeMacro->persist(activeMacro->accuracyMode, static_cast<int>(tickRate));
+        bool const useJson = selectedRecordingFormat == RecordingFormat::GDR;
+        activeMacro->persist(activeMacro->accuracyMode, static_cast<int>(tickRate), useJson);
         dataModified = false;
         reloadMacroList();
         return true;

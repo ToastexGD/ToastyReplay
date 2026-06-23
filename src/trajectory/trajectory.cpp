@@ -1378,6 +1378,9 @@ class $modify(TrajectoryPreviewPlayLayer, PlayLayer) {
 
     void setupHasCompleted() {
         PlayLayer::setupHasCompleted();
+        if (!this || !m_objectLayer) {
+            return;
+        }
         auto& service = TrajectoryPredictionService::get();
         service.attach(this);
         service.markDirty();

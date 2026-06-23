@@ -2408,7 +2408,18 @@ ConversionResult convertNativeGDRToTTRDuplicate(
         auto outputPath = outputDirectory / (outputName + ".ttr3");
         double fps = safeFps(imported->framerate);
         AccuracyMode importedMode = writableAccuracyMode(imported->accuracyMode);
-        bool isTimedSource = usesTimedAccuracy(importedMode);
+        bool const dataIsVanilla = std::none_of(
+            imported->inputs.begin(),
+            imported->inputs.end(),
+            [](MacroAction const& input) {
+                bool const offsetNonzero = std::isfinite(input.stepOffset) && input.stepOffset > 0.0f;
+                bool const absoluteTime = input.hasAbsoluteTime();
+                return offsetNonzero || absoluteTime;
+            });
+        AccuracyMode resolvedMode = (importedMode == AccuracyMode::Vanilla || dataIsVanilla)
+            ? AccuracyMode::Vanilla
+            : importedMode;
+        bool isTimedSource = usesTimedAccuracy(resolvedMode);
         bool hasPlayer2Inputs = std::any_of(imported->inputs.begin(), imported->inputs.end(), [](MacroAction const& input) {
             return input.player2;
         });
@@ -2425,13 +2436,13 @@ ConversionResult convertNativeGDRToTTRDuplicate(
         macro.levelId = imported->levelInfo.id;
         macro.framerate = fps;
         macro.duration = nativeGDRDuration(*imported, fps);
-        macro.accuracyMode = AccuracyMode::CBS;
+        macro.accuracyMode = resolvedMode;
         macro.platformerMode = imported->platformerMode;
         macro.twoPlayerMode = hasPlayer2Inputs;
         macro.recordedFromStartPos = imported->recordedFromStartPos;
         macro.startPosX = imported->startPosX;
         macro.startPosY = imported->startPosY;
-        macro.exactCbsTiming = true;
+        macro.exactCbsTiming = isTimedSource;
         macro.anchors = imported->anchors;
         macro.tpsEvents = {{0.0, fps}};
         macro.recordTimestamp = static_cast<int64_t>(std::time(nullptr));
@@ -2455,6 +2466,19 @@ ConversionResult convertNativeGDRToTTRDuplicate(
                 stepOffset,
                 cbsTimeOffset
             );
+        }
+
+        if (resolvedMode == AccuracyMode::Vanilla) {
+            if (macro.anchors.size() > 1) {
+                macro.anchors.erase(macro.anchors.begin() + 1, macro.anchors.end());
+            }
+            macro.checkpoints.clear();
+            for (auto& attempt : macro.persistenceAttempts) {
+                if (attempt.anchors.size() > 1) {
+                    attempt.anchors.erase(attempt.anchors.begin() + 1, attempt.anchors.end());
+                }
+            }
+            macro.macroConverted = false;
         }
 
         auto outputBytes = macro.serialize();

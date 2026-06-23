@@ -123,6 +123,8 @@ public:
     bool noMirrorEffect = false;
     bool noMirrorRecordingOnly = false;
     bool fastPlayback = false;
+    bool respawnTimeOverrideEnabled = false;
+    int respawnTimeOverrideMs = 1000;
     bool layoutMode = false;
     bool disableShaders = false;
     bool macroInputActive = false;
@@ -170,6 +172,17 @@ public:
 
     TTRMacro* activeTTR = nullptr;
     bool ttrMode = true;
+
+    enum class RecordingFormat : uint8_t {
+        TTR3 = 0,
+        GDR2 = 1,
+        GDR = 2,
+    };
+    RecordingFormat selectedRecordingFormat = RecordingFormat::TTR3;
+
+    void applyRecordingFormatSelection() {
+        ttrMode = (selectedRecordingFormat == RecordingFormat::TTR3);
+    }
 
     std::unordered_map<CheckpointObject*, CheckpointStateBundle> storedRestorePoints;
     int lastTickIndex = 0;
@@ -365,6 +378,21 @@ public:
                 return static_cast<char>(std::tolower(ch));
             });
 
+            bool isGdrJson = false;
+            if (extension == ".json") {
+                auto filename = toasty::pathToUtf8(path.filename());
+                std::string lowerFilename = filename;
+                std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+                static constexpr std::string_view kGdrJsonSuffix = ".gdr.json";
+                if (lowerFilename.size() > kGdrJsonSuffix.size() &&
+                    lowerFilename.compare(lowerFilename.size() - kGdrJsonSuffix.size(), kGdrJsonSuffix.size(), kGdrJsonSuffix) == 0) {
+                    isGdrJson = true;
+                    stem = filename.substr(0, filename.size() - kGdrJsonSuffix.size());
+                }
+            }
+
             if (extension == ".ttr2" || extension == ".ttr") {
                 bool isTTR2 = extension == ".ttr2";
                 uint32_t flags = 0;
@@ -391,7 +419,7 @@ public:
                 continue;
             }
 
-            if (extension != ".gdr") {
+            if (extension != ".gdr" && !isGdrJson) {
                 foreignCandidates.push_back(path);
                 continue;
             }

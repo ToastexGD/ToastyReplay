@@ -11,6 +11,9 @@
 #include <Geode/Bindings.hpp>
 #include <Geode/modify/LoadingLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/CCMouseDispatcher.hpp>
+#include <Geode/utils/file.hpp>
+#include <Geode/utils/async.hpp>
 #include <filesystem>
 #include <array>
 #include <charconv>
@@ -61,6 +64,40 @@ static ImU32 toU32(const ImVec4& c) {
 static ImVec2 snapPos(ImVec2 p) {
     return ImVec2(std::round(p.x), std::round(p.y));
 }
+
+#ifndef GEODE_IS_IOS
+class $modify(ToastyReplayMouseDispatcher, CCMouseDispatcher) {
+    static void onModify(auto& self) {
+        (void)self.setHookPriorityPre("CCMouseDispatcher::dispatchScrollMSG", Priority::FirstPre);
+    }
+
+    bool dispatchScrollMSG(float y, float x) {
+        if (!ImGui::GetCurrentContext()) {
+            return CCMouseDispatcher::dispatchScrollMSG(y, x);
+        }
+        auto* ui = MenuInterface::get();
+        bool const menuOverlayActive = ui
+            && (ui->shown || ui->anim.openProgress > 0.0f || ui->anim.opening || ui->anim.closing);
+        auto& io = ImGui::GetIO();
+        bool cursorOverMenu = false;
+        if (menuOverlayActive) {
+            ImVec2 const mp = io.MousePos;
+            ImVec2 const wp = ui->windowPos;
+            ImVec2 const ws = ui->windowSize;
+            cursorOverMenu = mp.x >= wp.x && mp.x <= wp.x + ws.x
+                && mp.y >= wp.y && mp.y <= wp.y + ws.y;
+        }
+        bool const imguiWantsMouse = io.WantCaptureMouse;
+        if (cursorOverMenu || imguiWantsMouse) {
+            io.AddMouseWheelEvent(x * (1.f / 10.f), -y * (1.f / 10.f));
+            io.WantCaptureMouse = true;
+            ImGui::SetNextFrameWantCaptureMouse(true);
+            return true;
+        }
+        return CCMouseDispatcher::dispatchScrollMSG(y, x);
+    }
+};
+#endif
 
 static size_t countMacroClicks(const MacroSequence* macro) {
     if (!macro) return 0;
@@ -820,7 +857,7 @@ bool StyledSliderFloat(const char* label, float* value, float vmin, float vmax, 
     ImGui::PushID(label);
     ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    float availWidth = ImGui::GetContentRegionAvail().x - 10.0f;
+    float availWidth = ImGui::GetContentRegionAvail().x - 18.0f;
     float dt = ImGui::GetIO().DeltaTime;
     ImVec4 accent = theme.getAccent();
     std::string displayLabel = getLocalizedDisplayLabel(label);
@@ -1026,7 +1063,18 @@ bool ModuleCard(const char* name, const char* description, bool* enabled,
     dl->AddText(ImVec2(pos.x + 14.0f, pos.y + (description ? 9.0f : 12.0f)), nameCol, displayName.c_str());
 
     if (description) {
-        dl->AddText(ImVec2(pos.x + 14.0f, pos.y + 31.0f), theme.getTextSecondaryU32(), displayDescription.c_str());
+        float const maxDescWidth = width - 14.0f - 40.0f - 12.0f - 8.0f;
+        std::string truncated = displayDescription;
+        if (ImGui::CalcTextSize(truncated.c_str()).x > maxDescWidth) {
+            std::string const ellipsis = "...";
+            float const ellipsisWidth = ImGui::CalcTextSize(ellipsis.c_str()).x;
+            while (truncated.size() > 1
+                && ImGui::CalcTextSize(truncated.c_str()).x + ellipsisWidth > maxDescWidth) {
+                truncated.pop_back();
+            }
+            truncated += ellipsis;
+        }
+        dl->AddText(ImVec2(pos.x + 14.0f, pos.y + 31.0f), theme.getTextSecondaryU32(), truncated.c_str());
     }
 
     float toggleW = 40.0f, toggleH = 20.0f;
@@ -1070,6 +1118,13 @@ bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
     float t = anim.easeOutCubic(data.progress);
 
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, t);
+
+    if (keybind) {
+        ImGui::Dummy(ImVec2(0, 4));
+        Widgets::KeybindButton("Keybind", keybind, theme, anim);
+        ImGui::Dummy(ImVec2(0, 6));
+    }
+
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     char childId[128];
     snprintf(childId, sizeof(childId), "##mod_%s", name);
@@ -1077,11 +1132,6 @@ bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
     ImGui::BeginChild(childId, ImVec2(-1, childH), ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::Indent(14);
     ImGui::Dummy(ImVec2(0, 4));
-
-    if (keybind) {
-        Widgets::KeybindButton("Keybind", keybind, theme, anim);
-        ImGui::Dummy(ImVec2(0, 6));
-    }
 
     return true;
 }
@@ -1721,7 +1771,7 @@ void MenuInterface::drawReplayTab() {
         if (engine->engineMode != MODE_CAPTURE) {
             auto startCapture = [engine]() {
                 bool previousTTRMode = engine->ttrMode;
-                engine->ttrMode = true;
+                engine->applyRecordingFormatSelection();
                 if (PlayLayer::get()) {
                     if (!engine->beginCapture(PlayLayer::get()->m_level)) {
                         engine->ttrMode = previousTTRMode;
@@ -2397,10 +2447,80 @@ void MenuInterface::drawReplayTab() {
     }
 
     ImGui::SameLine(0, 10);
-    if (Widgets::StyledButton("Open Folder", ImVec2(btnW, 28), theme, anim)) {
-        auto dir = getReplayDirectoryPath();
-        if (std::filesystem::exists(dir) || std::filesystem::create_directory(dir))
-            utils::file::openFolder(dir);
+    {
+        auto replayDir = getReplayDirectoryPath();
+        if (Widgets::StyledButton("Import", ImVec2(btnW, 28), theme, anim)) {
+            geode::utils::file::FilePickOptions options;
+            options.filters = {
+                geode::utils::file::FilePickOptions::Filter {
+                    "All ToastyReplay-compatible macros",
+                    {
+                        "*.ttr3", "*.ttr2", "*.ttr",
+                        "*.gdr", "*.gdr.json", "*.gdr2",
+                        "*.mhr", "*.mhr.json", "*.echo", "*.echo.json",
+                        "*.zbf", "*.ybf", "*.ybot", "*.thyst", "*.osr",
+                        "*.macro", "*.replaybot", "*.rsh", "*.kd", "*.txt",
+                        "*.re", "*.re2", "*.re3", "*.ddhor",
+                        "*.xbot", "*.xd", "*.qb", "*.rbot",
+                        "*.zr", "*.slc", "*.slc2", "*.slc3",
+                        "*.uv", "*.tcm", "*.json", "*.replay"
+                    }
+                },
+                geode::utils::file::FilePickOptions::Filter { "All files", { "*" } }
+            };
+            auto destDir = replayDir;
+            geode::async::spawn(
+                geode::utils::file::pick(geode::utils::file::PickMode::OpenFile, std::move(options)),
+                [destDir](geode::Result<std::optional<std::filesystem::path>> result) {
+                    if (!result.isOk()) {
+                        Notification::create(
+                            fmt::format("Import failed: {}", result.unwrapErr()),
+                            NotificationIcon::Error
+                        )->show();
+                        return;
+                    }
+                    auto picked = result.unwrap();
+                    if (!picked.has_value()) {
+                        return;
+                    }
+                    auto sourcePath = picked.value();
+                    std::error_code ec;
+                    if (!std::filesystem::exists(destDir, ec)) {
+                        std::filesystem::create_directories(destDir, ec);
+                    }
+                    auto destPath = destDir / sourcePath.filename();
+                    if (std::filesystem::exists(destPath, ec)) {
+                        int suffix = 1;
+                        auto stem = sourcePath.stem();
+                        auto ext = sourcePath.extension();
+                        while (std::filesystem::exists(destDir / (stem.string() + "_" + std::to_string(suffix) + ext.string()), ec)) {
+                            ++suffix;
+                        }
+                        destPath = destDir / (stem.string() + "_" + std::to_string(suffix) + ext.string());
+                    }
+                    std::filesystem::copy_file(sourcePath, destPath, std::filesystem::copy_options::overwrite_existing, ec);
+                    if (ec) {
+                        Notification::create(
+                            fmt::format("Import failed: {}", ec.message()),
+                            NotificationIcon::Error
+                        )->show();
+                        return;
+                    }
+                    Notification::create(
+                        fmt::format("Imported {}", toasty::pathToUtf8(destPath.filename())),
+                        NotificationIcon::Success
+                    )->show();
+                    if (auto* eng = ReplayEngine::get()) {
+                        eng->reloadMacroList();
+                    }
+                }
+            );
+        }
+
+        if (Widgets::StyledButton("Open Folder", ImVec2(-1, 28), theme, anim)) {
+            if (std::filesystem::exists(replayDir) || std::filesystem::create_directory(replayDir))
+                utils::file::openFolder(replayDir);
+        }
     }
 
     if (replayConvertRunning && replayConvertFuture.valid() &&
@@ -2781,6 +2901,31 @@ void MenuInterface::drawToolsTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 8));
+    Widgets::SectionHeader("Respawn", theme);
+    ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+    ImGui::TextWrapped("Set delay in milliseconds between death and respawn. 0 = instant. Max 10000 ms (10s).");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 4));
+    {
+        bool changed = Widgets::ToggleSwitch("Override Respawn Delay", &engine->respawnTimeOverrideEnabled, theme, anim);
+        if (changed) {
+            Mod::get()->setSavedValue("hack_respawn_override_enabled", engine->respawnTimeOverrideEnabled);
+        }
+    }
+    if (!engine->respawnTimeOverrideEnabled) ImGui::BeginDisabled();
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
+    if (ImGui::InputInt("##respawn_ms", &engine->respawnTimeOverrideMs, 50, 250)) {
+        engine->respawnTimeOverrideMs = std::clamp(engine->respawnTimeOverrideMs, 0, 10000);
+    }
+    ImGui::SameLine(0, 6);
+    if (Widgets::StyledButton("Apply###respawn", ImVec2(78, 28), theme, anim)) {
+        engine->respawnTimeOverrideMs = std::clamp(engine->respawnTimeOverrideMs, 0, 10000);
+        Mod::get()->setSavedValue("hack_respawn_ms", engine->respawnTimeOverrideMs);
+    }
+    if (!engine->respawnTimeOverrideEnabled) ImGui::EndDisabled();
+
+    ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Speed Control", theme);
     auto currentSpeedText = trFormat("Current: {value}x", fmt::arg("value", fmt::format("{:.2f}", engine->gameSpeed)));
     ImGui::TextColored(theme.getAccent(), "%s", currentSpeedText.c_str());
@@ -2835,8 +2980,9 @@ void MenuInterface::drawHacksTab() {
     if (Widgets::ModuleCardBegin("Safe Mode", "Prevents stats and percentage gain",
         &engine->protectedMode, theme, anim, &keybinds.safeMode)) {
         Widgets::ToggleSwitch("Auto-Enable While Recording / Playing", &engine->autoSafeMode, theme, anim);
-        ImGui::TextColored(ImVec4(theme.textSecondary),
-            "Force Safe Mode on whenever a macro is recording or playing back, even if the toggle above is off.");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
+        ImGui::TextWrapped("Force Safe Mode on whenever a macro is recording or playing back, even if the toggle above is off.");
+        ImGui::PopStyleColor();
         Widgets::ModuleCardEnd();
     }
 
@@ -4377,6 +4523,45 @@ void MenuInterface::drawSettingsTab() {
     Widgets::ToggleSwitch("Ambient Background", &ambientWavesEnabled, theme, anim);
 
     ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Recording Format", theme);
+    {
+        auto chooseRecordingFormat = [&](ReplayEngine::RecordingFormat format) {
+            if (eng->selectedRecordingFormat == format) {
+                return;
+            }
+            eng->selectedRecordingFormat = format;
+            eng->applyRecordingFormatSelection();
+            Mod::get()->setSavedValue("eng_recording_format", static_cast<int>(format));
+        };
+
+        if (eng->engineMode != MODE_DISABLED) ImGui::BeginDisabled();
+        float formatPillGap = 6.0f;
+        float formatPillW = std::max(84.0f, (ImGui::GetContentRegionAvail().x - formatPillGap * 2.0f) / 3.0f);
+        if (Widgets::PillButton("TTR3", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::TTR3, formatPillW, theme, anim)) {
+            chooseRecordingFormat(ReplayEngine::RecordingFormat::TTR3);
+        }
+        ImGui::SameLine(0, formatPillGap);
+        if (Widgets::PillButton("GDR2", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDR2, formatPillW, theme, anim)) {
+            chooseRecordingFormat(ReplayEngine::RecordingFormat::GDR2);
+        }
+        ImGui::SameLine(0, formatPillGap);
+        if (Widgets::PillButton("GDR", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDR, formatPillW, theme, anim)) {
+            chooseRecordingFormat(ReplayEngine::RecordingFormat::GDR);
+        }
+        if (eng->engineMode != MODE_DISABLED) ImGui::EndDisabled();
+
+        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
+        char const* formatHint =
+            eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::TTR3
+                ? "Native format (.ttr3). Lossless, supports all accuracy modes and persistence attempts."
+                : (eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDR2
+                    ? "Binary GDR (.gdr). Compatible with xdBot / MegaHack / Silicate."
+                    : "JSON GDR (.gdr.json). Human-readable, larger file size.");
+        imguiTextWrappedTr(formatHint);
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Input Accuracy", theme);
 
     bool cbsEnabled = eng->selectedAccuracyMode == AccuracyMode::CBS;
@@ -4446,7 +4631,7 @@ void MenuInterface::drawSettingsTab() {
     ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Advanced", theme);
 
-    Widgets::ModuleCard("FastPlayback", "Start playback without restarting the level", &eng->fastPlayback, theme, anim);
+    Widgets::ModuleCard("Instant Reset", "Reset the level and start playback immediately. When off, playback waits until the player dies.", &eng->fastPlayback, theme, anim);
     if (Widgets::ModuleCard("Autosave", "Automatically save completed recordings", &eng->completionAutosave, theme, anim)) {
         if (eng->completionAutosave && eng->persistenceMode) {
             eng->setPersistenceMode(false);
@@ -5156,6 +5341,8 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("hack_disable_shaders", eng->disableShaders);
     mod->setSavedValue("hack_no_mirror_rec_only", eng->noMirrorRecordingOnly);
     mod->setSavedValue("hack_fast_playback", eng->fastPlayback);
+    mod->setSavedValue("hack_respawn_override_enabled", eng->respawnTimeOverrideEnabled);
+    mod->setSavedValue("hack_respawn_ms", eng->respawnTimeOverrideMs);
 
     auto* ac = Autoclicker::get();
     mod->setSavedValue("ac_enabled", ac->enabled);
@@ -5173,6 +5360,7 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("eng_tick_rate", (float)eng->tickRate);
     mod->setSavedValue("eng_speed", (float)eng->gameSpeed);
     mod->setSavedValue("eng_ttr_mode", eng->ttrMode);
+    mod->setSavedValue("eng_recording_format", static_cast<int>(eng->selectedRecordingFormat));
     mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
     mod->setSavedValue("eng_persistence_mode", eng->persistenceMode);
 
@@ -6578,11 +6766,27 @@ void MenuInterface::loadSettings() {
     eng->disableShaders = mod->getSavedValue<bool>("hack_disable_shaders", false);
     eng->noMirrorRecordingOnly = mod->getSavedValue<bool>("hack_no_mirror_rec_only", false);
     eng->fastPlayback = mod->getSavedValue<bool>("hack_fast_playback", false);
+    eng->respawnTimeOverrideEnabled = mod->getSavedValue<bool>("hack_respawn_override_enabled", false);
+    eng->respawnTimeOverrideMs = std::clamp(mod->getSavedValue<int>("hack_respawn_ms", 1000), 0, 10000);
     eng->selectedAccuracyMode = sanitizeAccuracyMode(mod->getSavedValue<int>("eng_accuracy_mode", 0));
     eng->tickRate = mod->getSavedValue<float>("eng_tick_rate", 240.f);
     eng->gameSpeed = mod->getSavedValue<float>("eng_speed", 1.0f);
     eng->pulseFix = mod->getSavedValue<bool>("render_pulse_fix", false);
     eng->ttrMode = mod->getSavedValue<bool>("eng_ttr_mode", true);
+    {
+        int savedFormat = mod->getSavedValue<int>("eng_recording_format", static_cast<int>(ReplayEngine::RecordingFormat::TTR3));
+        switch (savedFormat) {
+            case static_cast<int>(ReplayEngine::RecordingFormat::GDR2):
+                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::GDR2;
+                break;
+            case static_cast<int>(ReplayEngine::RecordingFormat::GDR):
+                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::GDR;
+                break;
+            default:
+                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::TTR3;
+                break;
+        }
+    }
     eng->completionAutosave = mod->getSavedValue<bool>("eng_completion_autosave", true);
     eng->persistenceMode = mod->getSavedValue<bool>("eng_persistence_mode", false);
     if (eng->persistenceMode) {

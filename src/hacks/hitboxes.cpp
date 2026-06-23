@@ -274,9 +274,8 @@ namespace {
             size_t count = m_count[slot];
             if (count == 0) return;
 
-            size_t start = (count >= kMaxTrailBuffer)
-                ? m_head[slot]
-                : 0;
+            size_t const head = m_head[slot];
+            size_t const start = (head + kMaxTrailBuffer - count) % kMaxTrailBuffer;
 
             for (size_t i = 0; i < count; ++i) {
                 size_t idx = (start + i) % kMaxTrailBuffer;

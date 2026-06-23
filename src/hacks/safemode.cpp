@@ -51,7 +51,13 @@ class $modify(GuardedEndLevelLayer, EndLevelLayer) {
         container->setCascadeOpacityEnabled(true);
         container->setOpacity(180);
 
-        auto* icon = CCSprite::createWithSpriteFrameName("GJ_lockIcon_001.png");
+        auto* icon = CCSprite::createWithSpriteFrameName("GJ_lock_001.png");
+        if (!icon || icon->getContentSize().width <= 0.f) {
+            icon = CCSprite::createWithSpriteFrameName("GJ_padlockOpen_001.png");
+        }
+        if (!icon || icon->getContentSize().width <= 0.f) {
+            icon = CCSprite::create("GJ_lockGray_001.png");
+        }
         icon->setAnchorPoint({ 0.f, 0.5f });
         icon->setPosition({ 0.f, 10.f });
         container->addChild(icon);
@@ -79,6 +85,11 @@ class $modify(GuardedEndLevelLayer, EndLevelLayer) {
 };
 
 class $modify(GuardedPlayLayer, PlayLayer) {
+    struct Fields {
+        float respawnTimer = -1.0f;
+        bool respawnScheduled = false;
+    };
+
     void showNewBest(bool p0, int p1, int p2, bool p3, bool p4, bool p5) {
         if (!safeModeEnabled())
             PlayLayer::showNewBest(p0, p1, p2, p3, p4, p5);
@@ -94,5 +105,52 @@ class $modify(GuardedPlayLayer, PlayLayer) {
         if (engine && engine->completionAutosave && engine->engineMode == MODE_CAPTURE) {
             engine->saveActiveMacro();
         }
+    }
+
+    void destroyPlayer(PlayerObject* player, GameObject* obj) {
+        PlayLayer::destroyPlayer(player, obj);
+        auto* engine = ReplayEngine::get();
+        if (!engine || !engine->respawnTimeOverrideEnabled) {
+            return;
+        }
+        if (this->m_isPracticeMode || this->m_hasCompletedLevel || this->m_levelEndAnimationStarted) {
+            return;
+        }
+        if (this->m_player1 && !this->m_player1->m_isDead) {
+            return;
+        }
+        float const delaySeconds = std::clamp(engine->respawnTimeOverrideMs, 0, 10000) / 1000.0f;
+        m_fields->respawnTimer = delaySeconds;
+        m_fields->respawnScheduled = true;
+        if (delaySeconds <= 0.0f) {
+            m_fields->respawnTimer = -1.0f;
+            m_fields->respawnScheduled = false;
+            this->resetLevel();
+        }
+    }
+
+    void delayedResetLevel() {
+        if (m_fields->respawnScheduled) {
+            return;
+        }
+        PlayLayer::delayedResetLevel();
+    }
+
+    void update(float dt) {
+        PlayLayer::update(dt);
+        if (m_fields->respawnScheduled && m_fields->respawnTimer >= 0.0f) {
+            m_fields->respawnTimer -= dt;
+            if (m_fields->respawnTimer <= 0.0f) {
+                m_fields->respawnScheduled = false;
+                m_fields->respawnTimer = -1.0f;
+                this->resetLevel();
+            }
+        }
+    }
+
+    void resetLevel() {
+        m_fields->respawnScheduled = false;
+        m_fields->respawnTimer = -1.0f;
+        PlayLayer::resetLevel();
     }
 };

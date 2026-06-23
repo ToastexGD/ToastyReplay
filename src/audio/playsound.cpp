@@ -66,8 +66,9 @@ void ReplayEngine::triggerAudio(bool secondPlayer, int actionType, bool pressed)
 class $modify(ClickPlayLayer, PlayLayer) {
     void setupHasCompleted() {
         PlayLayer::setupHasCompleted();
+        if (!this) return;
         auto* csm = ClickSoundManager::get();
-        if (csm->enabled && csm->backgroundNoiseEnabled)
+        if (csm && csm->enabled && csm->backgroundNoiseEnabled)
             csm->startBackgroundNoise();
     }
 
