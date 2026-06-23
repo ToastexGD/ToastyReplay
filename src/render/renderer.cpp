@@ -1863,6 +1863,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         settings.m_outputFile = path;
         encodeSession.outputFile = path;
         settings.m_colorspaceFilters = "";
+        settings.m_doVerticalFlip = false;
 
         auto availableCodecs = ffmpeg::events::Recorder::getAvailableCodecs();
 
