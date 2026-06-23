@@ -190,6 +190,8 @@ public:
     void captureFrame(bool reuseLastScene = false);
     void changeRes(bool original);
 
+    static void detectGpuVendor();
+
     void start();
     void start(const RenderConfig& config);
     void stop(int frame = 0);

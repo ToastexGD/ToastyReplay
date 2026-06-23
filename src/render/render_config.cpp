@@ -12,34 +12,38 @@
 
 using namespace geode::prelude;
 
+static GpuVendor g_gpuVendor = GpuVendor::Unknown;
+
+void setDetectedGpuVendor(GpuVendor vendor) { g_gpuVendor = vendor; }
+GpuVendor detectedGpuVendor() { return g_gpuVendor; }
+
+static std::string pickVendorEncoder(const std::vector<std::string>& codecs,
+                                     const char* nvenc, const char* amf, const char* qsv) {
+    auto has = [&](const char* c) {
+        return c && std::find(codecs.begin(), codecs.end(), std::string(c)) != codecs.end();
+    };
+    switch (g_gpuVendor) {
+        case GpuVendor::Nvidia: return has(nvenc) ? std::string(nvenc) : std::string{};
+        case GpuVendor::Amd:    return has(amf)   ? std::string(amf)   : std::string{};
+        case GpuVendor::Intel:  return has(qsv)   ? std::string(qsv)   : std::string{};
+        case GpuVendor::Unknown: break;
+    }
+    for (const char* c : { nvenc, amf, qsv })
+        if (has(c)) return c;
+    return {};
+}
+
 std::string probeGpuEncoder(RenderCodecFamily family) {
     auto codecs = ffmpeg::events::Recorder::getAvailableCodecs();
-    if (family == RenderCodecFamily::AV1) {
-        for (const char* candidate : { "av1_nvenc", "av1_amf", "av1_qsv" }) {
-            if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
-                return candidate;
-        }
-        return {};
-    }
-    if (family == RenderCodecFamily::H265) {
-        for (const char* candidate : { "hevc_nvenc", "hevc_amf", "hevc_qsv" }) {
-            if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
-                return candidate;
-        }
-        return {};
-    }
-    if (family == RenderCodecFamily::VP9) {
-        if (std::find(codecs.begin(), codecs.end(), std::string("vp9_qsv")) != codecs.end())
-            return "vp9_qsv";
-        return {};
-    }
+    if (family == RenderCodecFamily::AV1)
+        return pickVendorEncoder(codecs, "av1_nvenc", "av1_amf", "av1_qsv");
+    if (family == RenderCodecFamily::H265)
+        return pickVendorEncoder(codecs, "hevc_nvenc", "hevc_amf", "hevc_qsv");
+    if (family == RenderCodecFamily::VP9)
+        return pickVendorEncoder(codecs, nullptr, nullptr, "vp9_qsv");
     if (family == RenderCodecFamily::VP8 || family == RenderCodecFamily::VVC)
         return {};
-    for (const char* candidate : { "h264_nvenc", "h264_amf", "h264_qsv" }) {
-        if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
-            return candidate;
-    }
-    return {};
+    return pickVendorEncoder(codecs, "h264_nvenc", "h264_amf", "h264_qsv");
 }
 
 static std::vector<std::string> probeEncodersByType(const std::filesystem::path& ffmpegExe, char type) {

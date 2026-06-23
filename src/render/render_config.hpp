@@ -10,6 +10,10 @@
 enum class RenderCodecFamily { H264, AV1, H265, VP9, VP8, VVC };
 enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
 
+enum class GpuVendor { Unknown, Intel, Amd, Nvidia };
+void      setDetectedGpuVendor(GpuVendor vendor);
+GpuVendor detectedGpuVendor();
+
 inline constexpr const char* kDefaultVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
 inline constexpr const char* kFastColorTags = "-colorspace bt709 -color_primaries bt709 -color_trc bt709";
 struct RenderConfig {

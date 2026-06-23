@@ -3320,6 +3320,8 @@ void MenuInterface::drawRenderDisplaySection() {
 }
 
 void MenuInterface::drawRenderTab() {
+    Renderer::detectGpuVendor();
+
     if (ReplayEngine::get()->useNewRenderer) {
         drawExpRenderTab();
     }
@@ -5105,8 +5107,12 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
     mod->setSavedValue("eng_persistence_mode", eng->persistenceMode);
 
-    mod->setSavedValue("render_width", (int64_t)std::atoi(renderWidthBuf));
-    mod->setSavedValue("render_height", (int64_t)std::atoi(renderHeightBuf));
+    int renderW = std::max(2, std::atoi(renderWidthBuf) & ~1);
+    int renderH = std::max(2, std::atoi(renderHeightBuf) & ~1);
+    snprintf(renderWidthBuf, sizeof(renderWidthBuf), "%d", renderW);
+    snprintf(renderHeightBuf, sizeof(renderHeightBuf), "%d", renderH);
+    mod->setSavedValue("render_width", (int64_t)renderW);
+    mod->setSavedValue("render_height", (int64_t)renderH);
     mod->setSavedValue("render_fps", (int64_t)std::atoi(renderFpsBuf));
     mod->setSavedValue("render_codec", std::string(renderCodecBuf));
     mod->setSavedValue("render_bitrate", std::string(renderBitrateBuf));

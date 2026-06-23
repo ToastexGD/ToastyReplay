@@ -1181,6 +1181,36 @@ Renderer::~Renderer() {
     if (m_encodeThread.joinable()) m_encodeThread.join();
 }
 
+void Renderer::detectGpuVendor() {
+#ifdef GEODE_IS_WINDOWS
+    static bool done = false;
+    if (done) return;
+
+    const char* vendor   = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    if (!vendor && !renderer) return;
+    done = true;
+
+    std::string id;
+    if (vendor)   id += vendor;
+    if (renderer) { id += ' '; id += renderer; }
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    GpuVendor v = GpuVendor::Unknown;
+    if (id.find("intel") != std::string::npos)
+        v = GpuVendor::Intel;
+    else if (id.find("nvidia") != std::string::npos || id.find("geforce") != std::string::npos)
+        v = GpuVendor::Nvidia;
+    else if (id.find("amd") != std::string::npos || id.find("radeon") != std::string::npos
+             || id.find("ati ") != std::string::npos)
+        v = GpuVendor::Amd;
+
+    setDetectedGpuVendor(v);
+    log::info("Render: detected GPU vendor {} from \"{}\"", static_cast<int>(v), id);
+#endif
+}
+
 void Renderer::captureFrame(bool reuseLastScene) {
     if (!recording) {
         return;
@@ -1813,6 +1843,10 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         ffmpeg::RenderSettings settings;
         settings.m_pixelFormat = ffmpeg::PixelFormat::RGB24;
+        // the API mod's vflip defaults to true 
+        // (it expects raw bottom-up GL frames), so leaving it on
+        // double-flips and renders upside down on the API path. You can comment this out if you want
+        settings.m_doVerticalFlip = false;
         settings.m_codec = codec;
         settings.m_bitrate = bitrateApi;
         settings.m_width = width;
