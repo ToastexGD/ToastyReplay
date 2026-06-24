@@ -3,6 +3,8 @@
 #include <Geode/modify/EndLevelLayer.hpp>
 #include <Geode/modify/GJGameLevel.hpp>
 
+#include <algorithm>
+
 using namespace geode::prelude;
 
 namespace {
