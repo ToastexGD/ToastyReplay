@@ -6,9 +6,8 @@
 #include <string>
 #include <vector>
 
-// appended in saved order: H264=0, AV1=1, H265=2, VP9=3, VP8=4, VVC=5
-enum class RenderCodecFamily { H264, AV1, H265, VP9, VP8, VVC };
-enum class RenderQualityTier { Fast, Balanced, Quality, Lossless };
+enum class RenderCodecFamily { H264 = 0, AV1 = 1, H265 = 2, VP9 = 3, VP8 = 4, VVC = 5 };
+enum class RenderQualityTier { Fast = 0, Balanced = 1, Quality = 2, Lossless = 3 };
 
 enum class GpuVendor { Unknown, Intel, Amd, Nvidia };
 void      setDetectedGpuVendor(GpuVendor vendor);
@@ -64,7 +63,8 @@ struct ResolvedEncodeParams {
     int64_t     apiBitrate;  // bps for API path
 };
 
-std::string              probeGpuEncoder(RenderCodecFamily family = RenderCodecFamily::H264);
+std::string              probeGpuEncoder(RenderCodecFamily family = RenderCodecFamily::H264,
+                                          const std::filesystem::path& ffmpegExe = {});
 std::vector<std::string> probeAudioCodecs(const std::filesystem::path& ffmpegExe);
 std::vector<std::string> probeVideoCodecs(const std::filesystem::path& ffmpegExe);
 ResolvedEncodeParams     resolve(const RenderConfig&);

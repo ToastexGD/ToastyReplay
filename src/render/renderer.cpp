@@ -409,6 +409,47 @@ static std::filesystem::path resolveUsableFfmpegExecutable(std::filesystem::path
     return resolvedPath;
 }
 
+static bool isValidCodecName(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') return false;
+    return true;
+}
+
+static std::string extractAudioFilterArg(std::string& args) {
+    static constexpr const char* kFlags[] = { "-filter:a", "-af:a", "-af" };
+    for (const char* flag : kFlags) {
+        size_t flagLen = std::strlen(flag);
+        size_t pos = 0;
+        while ((pos = args.find(flag, pos)) != std::string::npos) {
+            bool boundedLeft  = pos == 0 || std::isspace(static_cast<unsigned char>(args[pos - 1]));
+            size_t after = pos + flagLen;
+            bool boundedRight = after >= args.size() || std::isspace(static_cast<unsigned char>(args[after]));
+            if (!boundedLeft || !boundedRight) { pos = after; continue; }
+
+            size_t valStart = after;
+            while (valStart < args.size() && std::isspace(static_cast<unsigned char>(args[valStart]))) ++valStart;
+            std::string value;
+            size_t valEnd;
+            if (valStart < args.size() && args[valStart] == '"') {
+                size_t q = args.find('"', valStart + 1);
+                valEnd = q == std::string::npos ? args.size() : q + 1;
+                value  = args.substr(valStart + 1, (q == std::string::npos ? args.size() : q) - valStart - 1);
+            } else {
+                valEnd = valStart;
+                while (valEnd < args.size() && !std::isspace(static_cast<unsigned char>(args[valEnd]))) ++valEnd;
+                value = args.substr(valStart, valEnd - valStart);
+            }
+            args.erase(pos, valEnd - pos);
+            // collapse any whitespace the erase left behind
+            while (!args.empty() && std::isspace(static_cast<unsigned char>(args.front()))) args.erase(args.begin());
+            while (!args.empty() && std::isspace(static_cast<unsigned char>(args.back())))  args.pop_back();
+            return value;
+        }
+    }
+    return {};
+}
+
 static bool tryMuxAudioWithExe(
     std::filesystem::path const& ffmpegPath,
     std::filesystem::path const& audioInput,
@@ -442,8 +483,16 @@ static bool tryMuxAudioWithExe(
         fadeOutString = fmt::format(",afade=t=out:d=2:st={:.3f}", fadeOutStart);
     }
 
+    std::string userAudioFilter = extractAudioFilterArg(extraAudioArgs);
+    std::string userFilterChain = userAudioFilter.empty() ? std::string{} : "," + userAudioFilter;
+
     if (!extraAudioArgs.empty()) {
         extraAudioArgs += " ";
+    }
+
+    if (!audioCodec.empty() && !isValidCodecName(audioCodec)) {
+        log::warn("Ignoring invalid audio codec name '{}', falling back to aac", audioCodec);
+        audioCodec.clear();
     }
 
     bool isAac = audioCodec.empty() || audioCodec == "aac";
@@ -459,7 +508,7 @@ static bool tryMuxAudioWithExe(
     }
 
     std::string command = fmt::format(
-        "\"{}\" -y -ss {:.6f} -i \"{}\" -i \"{}\" -t {:.6f} -map 1:v -map 0:a -c:v copy {} {}-af \"adelay=0|0{}{},volume={:.2f}\" \"{}\"",
+        "\"{}\" -y -ss {:.6f} -i \"{}\" -i \"{}\" -t {:.6f} -map 1:v -map 0:a -c:v copy {} {}-af \"adelay=0|0{}{},volume={:.2f}{}\" \"{}\"",
         toasty::pathToUtf8(ffmpegPath),
         audioOffset,
         toasty::pathToUtf8(audioInput),
@@ -470,6 +519,7 @@ static bool tryMuxAudioWithExe(
         fadeInString,
         fadeOutString,
         audioVolume,
+        userFilterChain,
         toasty::pathToUtf8(outputPath)
     );
 
@@ -643,6 +693,7 @@ void FrameCaptureService::releasePool() {
 }
 
 void FrameCaptureService::notifyStop() {
+    std::lock_guard lock(m_lock);
     m_pendingChanged.notify_all();
 }
 
@@ -988,22 +1039,28 @@ void RenderTexture::startCopyWorker(FrameCaptureService& frameCapture) {
                 job = m_copyJobs.front();
                 m_copyJobs.pop_front();
             }
-            auto frame = m_copyTarget->acquireBuffer();
-            auto copyStart = std::chrono::steady_clock::now();
-            if (!frame.empty()) {
-                if (job.nv12)
-                    std::memcpy(frame.data(), job.src, job.size);
-                else
-                    copyFlippedRows(frame.data(), job.src, job.w, job.h);
-            }
-            double copySec = std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
-            {
+            try {
+                auto frame = m_copyTarget->acquireBuffer();
+                auto copyStart = std::chrono::steady_clock::now();
+                if (!frame.empty()) {
+                    if (job.nv12)
+                        std::memcpy(frame.data(), job.src, job.size);
+                    else
+                        copyFlippedRows(frame.data(), job.src, job.w, job.h);
+                }
+                double copySec = std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
+                {
+                    std::lock_guard<std::mutex> lk(m_copyMutex);
+                    m_pboCopyBusy[job.pboIndex] = false;
+                    m_dbgCopySec += copySec;
+                }
+                m_copyCv.notify_all();
+                if (!frame.empty()) m_copyTarget->submit(std::move(frame));
+            } catch (...) {
+                log::error("RenderTexture copy worker: exception during frame copy, dropping frame");
                 std::lock_guard<std::mutex> lk(m_copyMutex);
                 m_pboCopyBusy[job.pboIndex] = false;
-                m_dbgCopySec += copySec;
             }
-            m_copyCv.notify_all();
-            if (!frame.empty()) m_copyTarget->submit(std::move(frame));
             {
                 std::lock_guard<std::mutex> lk(m_copyMutex);
                 --m_copyInFlight;
@@ -1287,8 +1344,8 @@ bool Renderer::shouldUseAPI() {
 bool Renderer::resolveEncoder() {
 #ifdef GEODE_IS_WINDOWS
     auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
-    auto resolved = resolveUsableFfmpegExecutable(exePath);
-    if (!resolved.empty()) { ffmpegPath = resolved; return true; }
+    ffmpegPath = resolveUsableFfmpegExecutable(exePath);
+    if (!ffmpegPath.empty()) return true;
     if (Loader::get()->isModLoaded("eclipse.ffmpeg-api")) return true;
     return false;
 #else
@@ -1383,13 +1440,6 @@ void Renderer::startFromPending() {
 }
 
 #ifdef GEODE_IS_WINDOWS
-static bool isValidCodecName(const std::string& s) {
-    if (s.empty()) return false;
-    for (char c : s)
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') return false;
-    return true;
-}
-
 // builds the rate-control / quality flags for a resolved encode. NVENC uses -cq, 
 // AMF uses CQP (-qp_i/p/b; AMF has no -cq and -b:v 0 doesn't mean "pure CQ" to it),
 // QSV uses -global_quality. Tuff fix.
@@ -2431,6 +2481,7 @@ void Renderer::runEncodeLoopBody(std::filesystem::path songFile, float songOffse
                 auto ok    = trString("Ok");
                 FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
             });
+            clearInflightFiles();
             return;
         }
 
@@ -2468,6 +2519,8 @@ void Renderer::runEncodeLoopBody(std::filesystem::path songFile, float songOffse
                     }
                 }
             } else {
+                if (includeClickSounds)
+                    log::warn("API audio mux: click sounds were enabled but no audio was produced to mix");
                 auto fileRes = ffmpeg::events::AudioMixer::mixVideoAudio(path, songFile, tempPath);
                 if (fileRes.isOk()) {
                     audioMuxed = apiMuxed = true;
@@ -2533,6 +2586,8 @@ void Renderer::runEncodeLoopBody(std::filesystem::path songFile, float songOffse
                 FLAlertLayer::create(errorTitle.c_str(), errorMessage.c_str(), okText.c_str())->show();
             });
             if (!rawAudioPath.empty()) cleanupTempFile(rawAudioPath, "temporary render audio");
+            cleanupTempFile(tempPath, "partial muxed render");
+            clearInflightFiles();
             return;
         }
 
@@ -2873,9 +2928,10 @@ class $modify(RenderFMOD, FMODAudioEngine) {
                 auto resolved = cocos2d::CCFileUtils::sharedFileUtils()->fullPathForFilename(
                     std::string(path).c_str(), false
                 );
+                float currentTime = static_cast<float>(engine->renderTimelineTick()) / r.getTPS();
                 r.m_capturedSounds.push_back({
                     resolved.empty() ? std::string(path) : resolved,
-                    static_cast<float>(r.lastFrame_t),
+                    currentTime,
                     volume,
                     speed
                 });

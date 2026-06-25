@@ -33,8 +33,14 @@ static std::string pickVendorEncoder(const std::vector<std::string>& codecs,
     return {};
 }
 
-std::string probeGpuEncoder(RenderCodecFamily family) {
-    auto codecs = ffmpeg::events::Recorder::getAvailableCodecs();
+std::string probeGpuEncoder(RenderCodecFamily family, const std::filesystem::path& ffmpegExe) {
+    std::vector<std::string> codecs;
+#ifdef GEODE_IS_WINDOWS
+    if (!ffmpegExe.empty() && std::filesystem::exists(ffmpegExe))
+        codecs = probeVideoCodecs(ffmpegExe);
+    else
+#endif
+        codecs = ffmpeg::events::Recorder::getAvailableCodecs();
     if (family == RenderCodecFamily::AV1)
         return pickVendorEncoder(codecs, "av1_nvenc", "av1_amf", "av1_qsv");
     if (family == RenderCodecFamily::H265)
@@ -360,9 +366,12 @@ RenderConfig loadRenderConfig() {
                     : (family == 4) ? RenderCodecFamily::VP8
                     : (family == 5) ? RenderCodecFamily::VVC
                                     : RenderCodecFamily::H264;
-    cfg.width     = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_width", 1920));
-    cfg.height    = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_height", 1080));
-    cfg.fps       = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_fps", 60));
+    int64_t savedWidth  = mod->getSavedValue<int64_t>("exp_render_width", 1920);
+    int64_t savedHeight = mod->getSavedValue<int64_t>("exp_render_height", 1080);
+    int64_t savedFps    = mod->getSavedValue<int64_t>("exp_render_fps", 60);
+    cfg.width     = static_cast<unsigned>(std::clamp<int64_t>(savedWidth, 1, 16384));
+    cfg.height    = static_cast<unsigned>(std::clamp<int64_t>(savedHeight, 1, 16384));
+    cfg.fps       = static_cast<unsigned>(std::clamp<int64_t>(savedFps, 1, 1000));
     cfg.includeAudio    = mod->getSavedValue<bool>("exp_render_include_audio", true);
     cfg.includeClicks   = mod->getSavedValue<bool>("exp_render_include_clicks", false);
     cfg.musicVol        = static_cast<float>(mod->getSavedValue<double>("exp_render_music_vol", 1.0));

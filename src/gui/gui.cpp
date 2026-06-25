@@ -3055,6 +3055,20 @@ static bool videoCodecIsGpu(const std::string& codec) {
         || codec.find("_qsv")  != std::string::npos;
 }
 
+static std::filesystem::path resolveProbeFfmpegPath() {
+    auto ffmpegSetting = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
+    if (!ffmpegSetting.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(ffmpegSetting, ec)) return ffmpegSetting;
+    }
+#ifdef GEODE_IS_WINDOWS
+    wchar_t found[MAX_PATH] = {};
+    if (SearchPathW(nullptr, L"ffmpeg.exe", nullptr, MAX_PATH, found, nullptr) > 0)
+        return std::filesystem::path(found);
+#endif
+    return {};
+}
+
 struct KnownVideoEncoder {
     const char*       name;
     RenderCodecFamily family;
@@ -3127,7 +3141,7 @@ void MenuInterface::drawRenderPresetsSection() {
             if (preset) {
                 if (isExp) {
                     expConfig = preset->toRenderConfig();
-                    expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+                    expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily, resolveProbeFfmpegPath());
                     snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
                     {
                         auto rp = resolve(expConfig);
@@ -5382,7 +5396,7 @@ void MenuInterface::loadExpRenderSettings() {
         if (expProbedVideoCodecs.empty()) {
             for (auto fam : { RenderCodecFamily::H264, RenderCodecFamily::H265,
                               RenderCodecFamily::AV1, RenderCodecFamily::VP9 }) {
-                auto gpu = probeGpuEncoder(fam);
+                auto gpu = probeGpuEncoder(fam, probeExe);
                 if (!gpu.empty()) expProbedVideoCodecs.push_back(gpu);
             }
             for (const char* c : { "libx264", "libx264rgb", "libx265", "libsvtav1" })
@@ -5701,7 +5715,7 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
                         expConfig.useGpu     = true;
                         expConfig.codec      = std::nullopt;
                     } else {
-                        expConfig.gpuEncoder = probeGpuEncoder(f.fam);
+                        expConfig.gpuEncoder = probeGpuEncoder(f.fam, resolveProbeFfmpegPath());
                         expConfig.useGpu     = false;
                         expConfig.codec      = std::string(e->name);
                     }
@@ -5750,7 +5764,7 @@ void MenuInterface::drawExpRenderTab() {
         loadExpRenderSettings();
 
     if (!expGpuProbed) {
-        expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+        expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily, resolveProbeFfmpegPath());
         expGpuProbed = true;
     }
 
