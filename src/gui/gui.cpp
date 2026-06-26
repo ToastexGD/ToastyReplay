@@ -3587,6 +3587,14 @@ void MenuInterface::drawRenderTab() {
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Encoding", theme);
 
+    bool exeAvailable = !resolveProbeFfmpegPath().empty();
+    if (!exeAvailable) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+        imguiTextWrappedTr("[!] No ffmpeg.exe found. Built-in FFmpeg API is limited to MP4, H.264/H.265/AV1, and AAC audio. Others are unavailable. Set an ffmpeg.exe path for full features.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4));
+    }
+
     imguiTextTr("Codec");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
@@ -3649,6 +3657,7 @@ void MenuInterface::drawRenderTab() {
         imguiTextTr("Audio Codec");
         ImGui::SameLine(inputW);
         ImGui::SetNextItemWidth(-1);
+        ImGui::BeginDisabled(!exeAvailable);
         if (ImGui::BeginCombo("##renderACodecCombo", kAudioCodecLabels[acodecIdx])) {
             for (int i = 0; kAudioCodecIds[i]; ++i) {
                 bool sel = (acodecIdx == i);
@@ -3670,6 +3679,7 @@ void MenuInterface::drawRenderTab() {
             }
             ImGui::EndCombo();
         }
+        ImGui::EndDisabled();
     }
 
     imguiTextTr("Audio Args");
@@ -5256,12 +5266,19 @@ void MenuInterface::loadRenderSettings() {
 // has to make another one (this is exprimental render engine)
 void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
     auto* mod = Mod::get();
+    std::string effCodec   = preset.codec;
+    std::string effBitrate = preset.bitrate;
+    if (effCodec.empty() || effBitrate.empty()) {
+        auto rp = resolve(preset.toRenderConfig());
+        if (effCodec.empty())   effCodec   = rp.codec;
+        if (effBitrate.empty()) effBitrate = std::to_string(std::max<int64_t>(1, rp.apiBitrate / 1000000));
+    }
 
     snprintf(renderWidthBuf,      sizeof(renderWidthBuf),      "%d",  preset.width);
     snprintf(renderHeightBuf,     sizeof(renderHeightBuf),     "%d",  preset.height);
     snprintf(renderFpsBuf,        sizeof(renderFpsBuf),        "%d",  preset.fps);
-    snprintf(renderCodecBuf,      sizeof(renderCodecBuf),      "%s",  preset.codec.c_str());
-    snprintf(renderBitrateBuf,    sizeof(renderBitrateBuf),    "%s",  preset.bitrate.c_str());
+    snprintf(renderCodecBuf,      sizeof(renderCodecBuf),      "%s",  effCodec.c_str());
+    snprintf(renderBitrateBuf,    sizeof(renderBitrateBuf),    "%s",  effBitrate.c_str());
     snprintf(renderExtBuf,        sizeof(renderExtBuf),        "%s",  preset.ext.c_str());
     snprintf(renderArgsBuf,       sizeof(renderArgsBuf),       "%s",  preset.extraArgs.c_str());
     snprintf(renderVideoArgsBuf,  sizeof(renderVideoArgsBuf),  "%s",  preset.videoArgs.c_str());
@@ -5280,8 +5297,8 @@ void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
     mod->setSavedValue("render_width",              (int64_t)preset.width);
     mod->setSavedValue("render_height",             (int64_t)preset.height);
     mod->setSavedValue("render_fps",                (int64_t)preset.fps);
-    mod->setSavedValue("render_codec",              preset.codec);
-    mod->setSavedValue("render_bitrate",            preset.bitrate);
+    mod->setSavedValue("render_codec",              effCodec);
+    mod->setSavedValue("render_bitrate",            effBitrate);
     mod->setSavedValue("render_file_extension",     preset.ext);
     mod->setSavedValue("render_args",               preset.extraArgs);
     mod->setSavedValue("render_video_args",         preset.videoArgs);
@@ -5924,9 +5941,9 @@ void MenuInterface::drawExpRenderTab() {
     bool apiLimited = !ffmpegAvail;
     if (apiLimited) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.78f, 0.15f, 1.0f));
-        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control. CRF, max bitrate, "
-                           "filters, speed tuning and custom audio (AAC only) are disabled; resolution, "
-                           "FPS, quality, codec and container still apply.");
+        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control. Extra Args, Video "
+                           "Filter and Audio Args are ignored, CRF and speed tuning don't apply, and audio "
+                           "is AAC only. Resolution, FPS, quality, codec, container and Max Bitrate apply.");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
     }
@@ -6118,7 +6135,7 @@ void MenuInterface::drawExpRenderTab() {
             else expConfig.crf = std::nullopt;
             saveRenderConfig(expConfig);
         }
-        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf), apiLimited);
+        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.maxBitrate = expAdvMaxBitrateBuf[0] ? std::optional<std::string>(expAdvMaxBitrateBuf) : std::nullopt;
             saveRenderConfig(expConfig);
@@ -6133,12 +6150,12 @@ void MenuInterface::drawExpRenderTab() {
             ImGui::TextWrapped("[!] Unrecognized container. Supported: .mp4  .mkv  .wmv  .mov  .m4v");
             ImGui::PopStyleColor();
         }
-        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf), apiLimited);
+        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.extraArgs = expAdvExtraArgsBuf[0] ? std::optional<std::string>(expAdvExtraArgsBuf) : std::nullopt;
             saveRenderConfig(expConfig);
         }
-        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf), apiLimited);
+        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             if (!expAdvVideoArgsBuf[0] && expConfig.qualityColorspace)
                 snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s", kDefaultVideoArgs);
@@ -6204,7 +6221,7 @@ void MenuInterface::drawExpRenderTab() {
 
             drawExpAudioCodecPicker(ffmpegAvail);
         }
-        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf), apiLimited);
+        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.audioArgs = expAdvAudioArgsBuf[0] ? std::optional<std::string>(expAdvAudioArgsBuf) : std::nullopt;
             saveRenderConfig(expConfig);

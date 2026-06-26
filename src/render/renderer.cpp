@@ -36,6 +36,29 @@ static constexpr int kMobileMp4AudioBitrateKbps = 192;
 static constexpr double kRenderAudioFadeDuration = 2.0;
 static constexpr double kRenderAudioFadeOutLead = 3.5;
 
+static int64_t parseBitrateToBps(const std::string& s) {
+    int64_t num = 0;
+    size_t i = 0;
+    bool any = false;
+    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
+        num = num * 10 + (s[i] - '0');
+        ++i;
+        any = true;
+    }
+    if (!any) return 0;
+    while (i < s.size() && s[i] == ' ') ++i;
+    int64_t mult = 1;
+    if (i < s.size()) {
+        switch (std::tolower(static_cast<unsigned char>(s[i]))) {
+            case 'g': mult = 1000000000LL; break;
+            case 'm': mult = 1000000LL;    break;
+            case 'k': mult = 1000LL;       break;
+            default: break;
+        }
+    }
+    return num * mult;
+}
+
 struct RenderClock {
     double accumulated = 0.0;
     double frameDelta = 0.0;
@@ -1622,9 +1645,6 @@ void Renderer::start(const RenderConfig& config) {
     audioCodec      = m_resolvedParams->audioCodec;
     m_extOverride   = m_resolvedParams->ext;
 
-    if (config.codecFamily == RenderCodecFamily::H265 && usingApi)
-        m_extOverride = ".mkv";
-
     start();
 }
 
@@ -1663,6 +1683,14 @@ void Renderer::start() {
                 loadSavedValueWithFallback<std::string>(mod, "render_seconds_after", "3", {"render_after_seconds"})
             ).unwrapOr(3.f));
         extension = loadSavedValueWithFallback<std::string>(mod, "render_file_extension", ".mp4", {"render_extension"});
+        {
+            auto trimmed = extension;
+            trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+            trimmed.erase(trimmed.find_last_not_of(" \t") + 1);
+            if (trimmed.empty()) trimmed = ".mp4";
+            else if (trimmed.front() != '.') trimmed = "." + trimmed;
+            extension = trimmed;
+        }
         if (extension == ".mp4") {
             for (const char* c : { "libopus", "flac" })
                 if (audioCodec == c) { extension = ".mkv"; break; }
@@ -1677,6 +1705,17 @@ void Renderer::start() {
     } else {
         extension = m_extOverride;
         m_extOverride.clear();
+    }
+
+    if (usingApi) {
+        std::string lowerExt = extension;
+        std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowerExt != ".mp4") {
+            if (!extension.empty())
+                log::warn("FFmpeg API only supports MP4 output; '{}' overridden to .mp4", extension);
+            extension = ".mp4";
+        }
     }
 
     //log::info("Render audio: musicVolume={:.3f}, clickVolume={:.3f}, includeAudio={}, includeClicks={}",
@@ -2013,11 +2052,15 @@ void Renderer::runEncodeLoopBody(std::filesystem::path songFile, float songOffse
                 //log::info("Using first available codec: {}", settings.m_codec);
             }
         }
-
+        
         if (m_resolvedParams.has_value()) {
             if (!usingApi)
                 settings.m_codec = m_resolvedParams->codec;
             settings.m_bitrate = m_resolvedParams->apiBitrate;
+            if (usingApi && !m_resolvedParams->maxBitrate.empty()) {
+                if (int64_t bps = parseBitrateToBps(m_resolvedParams->maxBitrate); bps > 0)
+                    settings.m_bitrate = bps;
+            }
         }
 
         std::string localCodec = codec;
@@ -2058,7 +2101,11 @@ void Renderer::runEncodeLoopBody(std::filesystem::path songFile, float songOffse
             if (res.isErr()) {
                 log::error("FFmpeg init error: {}", res.unwrapErr());
 #ifdef GEODE_IS_WINDOWS
-                if (pathExists(ffmpegPath)) {
+                if (!pathExists(ffmpegPath)) {
+                    auto exePath = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
+                    ffmpegPath = resolveUsableFfmpegExecutable(exePath);
+                }
+                if (!ffmpegPath.empty()) {
                     useApiForEncoding = false;
                     Loader::get()->queueInMainThread([] {
                         Notification::create(trString("FFmpeg API not loaded - falling back to ffmpeg.exe"), NotificationIcon::Warning)->show();
