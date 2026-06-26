@@ -6053,13 +6053,17 @@ void MenuInterface::drawExpRenderTab() {
         expGpuProbed = true;
     }
 
-    struct ResOption { const char* label; unsigned width; unsigned height; };
+    struct ResOption { const char* label; unsigned width; unsigned height; bool proOnly; };
     static constexpr ResOption kResOptions[] = {
-        { "720p  (1280x720)",   1280,  720 },
-        { "1080p (1920x1080)",  1920, 1080 },
-        { "1440p (2560x1440)",  2560, 1440 },
-        { "4K    (3840x2160)",  3840, 2160 },
+        { "720p  (1280x720)",   1280,  720, false },
+        { "1080p (1920x1080)",  1920, 1080, false },
+        { "1440p (2560x1440)",  2560, 1440, false },
+        { "4K    (3840x2160)",  3840, 2160, false },
+        { "8K    (7680x4320)",  7680, 4320, true  },
     };
+    constexpr int kResOptionCount = static_cast<int>(sizeof(kResOptions) / sizeof(kResOptions[0]));
+
+    bool render8kUnlocked = false;
     static constexpr const char* kTierLabels[] = { "Fast", "Balanced", "Quality", "Lossless" };
 
     float inputW = ImGui::GetContentRegionAvail().x * 0.45f;
@@ -6113,19 +6117,27 @@ void MenuInterface::drawExpRenderTab() {
     Widgets::SectionHeader("Resolution", theme);
 
     int resIndex = 1;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < kResOptionCount; i++) {
         if (kResOptions[i].width == expConfig.width && kResOptions[i].height == expConfig.height) {
             resIndex = i;
             break;
         }
     }
-    imguiTextTr("Resolution");
+    imguiTextTrTip("Resolution", "Output video resolution. 8K is Pro only.");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##expResCombo", kResOptions[resIndex].label)) {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < kResOptionCount; i++) {
             bool sel = (resIndex == i);
-            if (ImGui::Selectable(kResOptions[i].label, sel)) {
+            if (kResOptions[i].proOnly && !render8kUnlocked) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.62f, 1.0f));
+                std::string lockedLabel = std::string(kResOptions[i].label) + "  (Pro)";
+                if (ImGui::Selectable(lockedLabel.c_str(), false))
+                    geode::utils::web::openLinkInBrowser("https://toastyreplay.xyz/");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", trString("8K rendering requires ToastyReplay Pro.").c_str());
+                ImGui::PopStyleColor();
+            } else if (ImGui::Selectable(kResOptions[i].label, sel)) {
                 expConfig.width  = kResOptions[i].width;
                 expConfig.height = kResOptions[i].height;
                 saveRenderConfig(expConfig);
@@ -6148,7 +6160,7 @@ void MenuInterface::drawExpRenderTab() {
     Widgets::SectionHeader("Encoding", theme);
 
     int tierIdx = static_cast<int>(expConfig.tier);
-    imguiTextTr("Quality");
+    imguiTextTrTip("Quality", "Encoder quality tier. Higher tiers look better but render slower.");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::BeginCombo("##expQuality", kTierLabels[tierIdx])) {
@@ -6218,7 +6230,7 @@ void MenuInterface::drawExpRenderTab() {
     {
         bool gpuEncoding  = expConfig.useGpu && gpuAvail && !isLossless;
         bool speedApplies = !isLossless && !apiLimited;
-        imguiTextTr("Prefer Speed");
+        imguiTextTrTip("Prefer Speed", "Trade some quality for faster encoding.");
         ImGui::SameLine(inputW);
         ImGui::BeginDisabled(!speedApplies);
         if (Widgets::ToggleSwitch("##preferSpeedToggle", &expConfig.preferSpeed, theme, anim))
@@ -6245,7 +6257,7 @@ void MenuInterface::drawExpRenderTab() {
         ImGui::PopStyleColor();
     }
 
-    imguiTextTr("Use GPU");
+    imguiTextTrTip("Use GPU", "Encode on the GPU when available. Much faster than CPU.");
     ImGui::SameLine(inputW);
     ImGui::BeginDisabled(!gpuAvail || isLossless || av1NeedsExe);
     if (Widgets::ToggleSwitch("##gpuToggle", &expConfig.useGpu, theme, anim)) {
@@ -6320,7 +6332,7 @@ void MenuInterface::drawExpRenderTab() {
         bool customVideoFilter = expAdvVideoArgsBuf[0]
             && strcmp(expAdvVideoArgsBuf, kDefaultVideoArgs) != 0;
         bool overridden = customVideoFilter || isLossless;
-        imguiTextTr("Quality Colorspace");
+        imguiTextTrTip("Quality Colorspace", "Apply accurate BT.709 colorspace conversion. Needs ffmpeg.exe.");
         ImGui::SameLine(inputW);
         ImGui::BeginDisabled(overridden || apiLimited);
         if (Widgets::ToggleSwitch("##qualityCsToggle", &expConfig.qualityColorspace, theme, anim)) {

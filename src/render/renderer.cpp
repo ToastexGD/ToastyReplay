@@ -1162,6 +1162,8 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
 
     if (!reuseLastScene) {
         auto visitStart = std::chrono::steady_clock::now();
+        glClearColor(0.f, 0.f, 0.f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT);
         pl->visit();
         if (overlay) overlay->visit();
 
@@ -1329,8 +1331,9 @@ void RenderTexture::flushPbo(FrameCaptureService& frameCapture) {
 #endif
 }
 
-static cocos2d::CCSize computeRenderResolution(unsigned w, unsigned h) {
-    return CCSize(320.f * (static_cast<float>(w) / static_cast<float>(h)), 320.f);
+static cocos2d::CCSize computeRenderResolution(unsigned w, unsigned h, float baseHeight) {
+    float base = baseHeight > 1.f ? baseHeight : 320.f;
+    return CCSize(base * (static_cast<float>(w) / static_cast<float>(h)), base);
 }
 
 void Renderer::changeRes(bool og) {
@@ -1344,7 +1347,7 @@ void Renderer::changeRes(bool og) {
         view->m_fScaleX = ogScaleX;
         view->m_fScaleY = ogScaleY;
     } else {
-        cocos2d::CCSize res = computeRenderResolution(width, height);
+        cocos2d::CCSize res = computeRenderResolution(width, height, ogRes.height);
         float scaleX = static_cast<float>(width) / res.width;
         float scaleY = static_cast<float>(height) / res.height;
         CCDirector::sharedDirector()->m_obWinSizeInPoints = res;
