@@ -50,14 +50,14 @@ namespace {
     };
 
     static constexpr SlopeVertexMapping kSlopeLookup[8] = {
-        /* 0 */ { -1, 1, -1 },
-        /* 1 */ { 0, -1, -1 },
-        /* 2 */ { -1, -1, -1 },
-        /* 3 */ { -1, -1, 2 },
-        /* 4 */ { -1, -1, -1 },
-        /* 5 */ { 0, -1, -1 },
-        /* 6 */ { -1, -1, 2 },
-        /* 7 */ { -1, 1, -1 },
+         { -1, 1, -1 },
+         { 0, -1, -1 },
+         { -1, -1, -1 },
+         { -1, -1, 2 },
+         { -1, -1, -1 },
+         { 0, -1, -1 },
+         { -1, -1, 2 },
+         { -1, 1, -1 },
     };
 
     struct ShapeDescriptor {
@@ -274,9 +274,8 @@ namespace {
             size_t count = m_count[slot];
             if (count == 0) return;
 
-            size_t start = (count >= kMaxTrailBuffer)
-                ? m_head[slot]
-                : 0;
+            size_t const head = m_head[slot];
+            size_t const start = (head + kMaxTrailBuffer - count) % kMaxTrailBuffer;
 
             for (size_t i = 0; i < count; ++i) {
                 size_t idx = (start + i) % kMaxTrailBuffer;

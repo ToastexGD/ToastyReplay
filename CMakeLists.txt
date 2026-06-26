@@ -1,13 +1,15 @@
 cmake_minimum_required(VERSION 3.25)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 project(ToastyReplay VERSION 2.1.1 LANGUAGES CXX)
 
 set(TOASTYREPLAY_SOURCES
-    src/ttr_format.cpp
+    src/format/ttr_format.cpp
+    src/format/ttr3_format.cpp
     src/conversion/macro_converter.cpp
     src/core/checkpoint_handler.cpp
     src/core/replay_engine.cpp
@@ -16,6 +18,12 @@ set(TOASTYREPLAY_SOURCES
     src/core/frame_stepper.cpp
     src/core/keybinds.cpp
     src/gui/gui.cpp
+    src/gui/cocos/frontend.cpp
+    src/gui/cocos/tr_menu_popup.cpp
+    src/gui/cocos/tr_frame_editor_popup.cpp
+    src/gui/cocos/tr_replay_actions_popup.cpp
+    src/gui/cocos/mobile_float.cpp
+    src/gui/cocos/cells/cells.cpp
     src/gui/frame_editor.cpp
     src/tools/layoutmode.cpp
     src/tools/nomirror.cpp
@@ -109,10 +117,25 @@ function(patch_gd_imgui_cocos_backend backend_file)
         "auto static read = geode::utils::clipboard::read();"
         "auto static read = new std::string();"
     )
-    toastyreplay_replace_once_or_verify(
+    set(toastyreplay_clipboard_read_block [=[#if defined(GEODE_IS_WINDOWS)
+		*read = readClipboardText();
+#else
+		*read = geode::utils::clipboard::read();
+#endif]=])
+    toastyreplay_replace_if_present(
         backend_content
         "read = geode::utils::clipboard::read();"
+        "${toastyreplay_clipboard_read_block}"
+    )
+    toastyreplay_replace_if_present(
+        backend_content
         "*read = readClipboardText();"
+        "${toastyreplay_clipboard_read_block}"
+    )
+    toastyreplay_replace_once_or_verify(
+        backend_content
+        "${toastyreplay_clipboard_read_block}"
+        "${toastyreplay_clipboard_read_block}"
     )
     toastyreplay_replace_once_or_verify(
         backend_content

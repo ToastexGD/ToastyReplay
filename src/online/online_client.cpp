@@ -1,21 +1,3 @@
-// ToastyReplay online client.
-//
-// Talks to the macro backend (/api/macros/*) using a refresh-token device-code
-// flow. The flow from the user's perspective:
-//
-//   1. They click "Link Discord Account" in the GUI.
-//   2. We POST /api/macros/auth/start and receive a 6-char pairing code plus
-//      a poll token. A browser window opens at /macros/approve?code=XXXXXX.
-//   3. The user signs in to Discord and approves the device.
-//   4. We poll /api/macros/auth/poll every ~3 seconds. On approval the server
-//      returns both a short-lived access_token and a long-lived refresh_token.
-//   5. Uploads and issue submissions use the bearer access_token. When it
-//      expires (1 hour), we transparently refresh via /api/macros/auth/refresh
-//      before retrying the user's action once.
-//
-// The refresh token is DPAPI-encrypted on Windows (CryptProtectData), so even
-// with filesystem access an attacker can't just copy the user's save.json and
-// resume their session from a different machine.
 
 #include "online/online_client.hpp"
 #include "lang/localization.hpp"
@@ -49,14 +31,10 @@ using namespace geode::prelude;
 namespace {
     constexpr char BASE64_TABLE[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    // Save-file keys. We keep the legacy field names so older installs that
-    // already had a Discord link don't suddenly appear unlinked; the refresh
-    // token is a new value with its own key.
     constexpr char const* KEY_DISCORD_USERNAME = "online_discord_username";
     constexpr char const* KEY_DISCORD_ID = "online_discord_id";
     constexpr char const* KEY_DISCORD_AVATAR = "online_discord_avatar";
     constexpr char const* KEY_REFRESH_TOKEN = "online_refresh_token_dpapi";
-    // Legacy key — kept around so we can clear it on upgrade.
     constexpr char const* KEY_LEGACY_SESSION_CODE = "online_session_code";
     constexpr char const* KEY_LEGACY_API_BASE = "online_api_base";
 
@@ -179,9 +157,6 @@ namespace {
     }
 
 #ifdef GEODE_IS_WINDOWS
-    // Encrypt a string with the current Windows user's key. An attacker who
-    // steals save.json but doesn't have the user's Windows login can't read
-    // the refresh token.
     bool dpapiProtect(std::string const& plain, std::string& encrypted) {
         DATA_BLOB input{};
         input.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()));
@@ -238,8 +213,8 @@ struct OnlineClientImpl {
     geode::async::TaskHolder<web::WebResponse> avatarTask;
     geode::async::TaskHolder<web::WebResponse> issueTask;
     geode::async::TaskHolder<web::WebResponse> uploadTask;
-    geode::async::TaskHolder<web::WebResponse> authStartTask;  // device-code start
-    geode::async::TaskHolder<web::WebResponse> authPollTask;   // device-code poll
+    geode::async::TaskHolder<web::WebResponse> authStartTask;
+    geode::async::TaskHolder<web::WebResponse> authPollTask;
     geode::async::TaskHolder<web::WebResponse> authRefreshTask;
     geode::async::TaskHolder<web::WebResponse> statusTask;
 };
@@ -292,14 +267,11 @@ $on_mod(Loaded) {
     }, 50).leak();
 }
 
-// --- persistence ---
-
 void OnlineClient::save() {
     auto* mod = Mod::get();
     mod->setSavedValue<std::string>(KEY_DISCORD_USERNAME, discordUsername);
     mod->setSavedValue<std::string>(KEY_DISCORD_ID, discordId);
     mod->setSavedValue<std::string>(KEY_DISCORD_AVATAR, discordAvatar);
-    // Refresh token has its own save/clear helpers.
 }
 
 void OnlineClient::saveRefreshToken(std::string const& token) {
@@ -331,8 +303,6 @@ std::string OnlineClient::loadRefreshToken() const {
     }
     return plain;
 }
-
-// --- blacklist queries ---
 
 bool OnlineClient::canUploadMacros() const {
     return hasValidSession() &&
@@ -374,8 +344,6 @@ std::string OnlineClient::getBlacklistStatusText() const {
             return "";
     }
 }
-
-// --- auth state ---
 
 void OnlineClient::clearAuthState(bool cancelTasks) {
     authPolling = false;
@@ -435,8 +403,6 @@ void OnlineClient::setLinkedState(
     }
 }
 
-// --- boot ---
-
 void OnlineClient::load() {
     alive = true;
 
@@ -446,16 +412,9 @@ void OnlineClient::load() {
     discordAvatar = mod->getSavedValue<std::string>(KEY_DISCORD_AVATAR, "");
     blacklistState = BlacklistState::None;
 
-    // Migrate off the legacy self-minted session code. Any install that had
-    // one is now unlinked until they click "Link Discord Account" again —
-    // the old /auth/status endpoint no longer exists on the backend, and
-    // there's no safe way to reuse a client-generated code in the new flow.
     auto legacySession = mod->getSavedValue<std::string>(KEY_LEGACY_SESSION_CODE, "");
     if (!legacySession.empty()) {
         mod->setSavedValue<std::string>(KEY_LEGACY_SESSION_CODE, "");
-        // Keep their Discord display info so the GUI doesn't flash empty; it
-        // will re-appear after relinking anyway. But force a re-link by
-        // treating them as missing a refresh token.
     }
     mod->setSavedValue<std::string>(KEY_LEGACY_API_BASE, "");
 
@@ -465,9 +424,6 @@ void OnlineClient::load() {
     m_accessTokenExpiresAt = 0;
 
     if (!m_refreshToken.empty()) {
-        // Validate the refresh token up front so the GUI reflects the real
-        // state (blacklist updates, revocations). If it's bad, refreshAuthStatus
-        // will clear us out.
         refreshAuthStatus();
     }
 
@@ -551,12 +507,7 @@ void OnlineClient::fetchAvatar() {
     });
 }
 
-// --- device-code activation ---
-
 static std::string generateDeviceFingerprint() {
-    // Per-install random stable ID. Persisted so the server can track the same
-    // device across relinks. Not a hardware fingerprint (that's a Pro-only
-    // concern); this is just a tie-breaker for per-device audit logs.
     static constexpr char const* KEY = "online_device_fingerprint";
     auto* mod = Mod::get();
     auto existing = mod->getSavedValue<std::string>(KEY, "");
@@ -580,12 +531,11 @@ static std::string generateDeviceFingerprint() {
 void OnlineClient::startAuthFlow() {
     if (authPolling || m_impl->authStartTask.isPending()) return;
 
-    // Clear any residual state from a previous failed attempt.
     sessionCode.clear();
     m_pollToken.clear();
     m_activationExpiresAt = 0;
 
-    authPolling = true;  // Flip early so the GUI shows "waiting for approval"
+    authPolling = true;
     authPollTimer = 0.0f;
 
     web::WebRequest req;
@@ -626,7 +576,6 @@ void OnlineClient::startAuthFlow() {
             m_pollToken = pollToken;
             m_activationExpiresAt = epochSecondsNow() + expiresIn;
 
-            // Open the approval page with the pairing code prefilled.
             auto base = approveUrl.empty() ? getApiBase() + "/macros/approve" : approveUrl;
             auto sep = base.find('?') == std::string::npos ? "?" : "&";
             geode::utils::web::openLinkInBrowser(base + sep + "code=" + code);
@@ -638,7 +587,6 @@ void OnlineClient::pollAuthStatus() {
     if (m_pollToken.empty() || m_impl->authPollTask.isPending()) return;
 
     if (m_activationExpiresAt > 0 && epochSecondsNow() > m_activationExpiresAt) {
-        // The pairing code expired before the user approved. Drop state.
         authPolling = false;
         authPollTimer = 0.0f;
         m_pollToken.clear();
@@ -679,7 +627,7 @@ void OnlineClient::pollAuthStatus() {
             auto status = data.contains("status") ? data["status"].asString().unwrapOr("") : "";
 
             if (status == "pending") {
-                return;  // Keep polling.
+                return;
             }
             if (status == "approved") {
                 onActivationApproved(data);
@@ -710,7 +658,6 @@ void OnlineClient::onActivationApproved(matjson::Value const& data) {
     m_accessTokenExpiresAt = epochSecondsNow() + accessExp;
     saveRefreshToken(refresh);
 
-    // Clear activation state — we're fully linked now.
     authPolling = false;
     authPollTimer = 0.0f;
     m_pollToken.clear();
@@ -720,11 +667,8 @@ void OnlineClient::onActivationApproved(matjson::Value const& data) {
     setLinkedState(username, id, avatar, blacklist);
 }
 
-// --- token refresh / re-validation ---
-
 bool OnlineClient::accessTokenExpired() const {
     if (m_accessToken.empty()) return true;
-    // Refresh 60 seconds early to avoid racing an in-flight upload.
     return epochSecondsNow() + 60 >= m_accessTokenExpiresAt;
 }
 
@@ -752,12 +696,8 @@ void OnlineClient::performAuthRefresh() {
             if (!res.ok()) {
                 auto payload = parseErrorPayload(res);
                 if (isAuthErrorCode(payload.code) || res.code() == 401 || res.code() == 403) {
-                    // Refresh token is dead. Drop everything and force re-link.
                     clearAuthState(false);
                 }
-                // On transient errors, keep the refresh token and let the next
-                // action retry. But clear any queued intent so we don't retry
-                // forever on a broken network.
                 clearPendingIntent();
                 return;
             }
@@ -787,15 +727,11 @@ void OnlineClient::onRefreshSuccess(matjson::Value const& data) {
     m_accessTokenExpiresAt = epochSecondsNow() + accessExp;
     saveRefreshToken(refresh);
 
-    // If an upload or issue was queued while we refreshed, run it now.
     dispatchPendingIntent();
 }
 
 void OnlineClient::refreshAuthStatus() {
-    // Called by the GUI on open, and by load() on boot, to re-check linkage.
-    // If we have a refresh token but no valid access token, refresh first.
     if (m_refreshToken.empty()) {
-        // Nothing to check — either unlinked or mid-activation.
         return;
     }
 
@@ -815,7 +751,6 @@ void OnlineClient::refreshAuthStatus() {
             if (!res.ok()) {
                 auto payload = parseErrorPayload(res);
                 if (isAuthErrorCode(payload.code) || res.code() == 401) {
-                    // Access token invalid but refresh might still be good.
                     performAuthRefresh();
                 }
                 return;
@@ -852,21 +787,17 @@ void OnlineClient::stopAuthPolling() {
 }
 
 void OnlineClient::unlinkAccount() {
-    // Best-effort server-side revocation. We don't care about the result —
-    // the local state is authoritative for UI purposes.
     if (!m_accessToken.empty()) {
         web::WebRequest req;
         req.header("Authorization", "Bearer " + m_accessToken);
-        m_impl->authRefreshTask.spawn(  // reusing a holder is fine; it just owns the task
+        m_impl->authRefreshTask.spawn(
             "ToastyReplay Auth Logout",
             req.post(getApiBase() + "/api/macros/auth/logout"),
-            [](web::WebResponse) { /* ignore */ }
+            [](web::WebResponse) {  }
         );
     }
     clearAuthState(true);
 }
-
-// --- intent queue (used while waiting on a token refresh) ---
 
 void OnlineClient::clearPendingIntent() {
     m_pendingIntent = PendingIntent::None;
@@ -891,8 +822,6 @@ void OnlineClient::dispatchPendingIntent() {
     }
 }
 
-// --- submit issue ---
-
 void OnlineClient::submitIssue(std::string const& title, std::string const& description) {
     if (issueState == PENDING) return;
     if (!hasValidSession()) return;
@@ -906,7 +835,6 @@ void OnlineClient::submitIssue(std::string const& title, std::string const& desc
     issueState = PENDING;
     issueResultMsg = trString("Submitting...");
 
-    // If our access token is stale, refresh first and queue this intent.
     if (accessTokenExpired()) {
         m_pendingIntent = PendingIntent::SubmitIssue;
         m_pendingIssueTitle = title;
@@ -942,8 +870,6 @@ void OnlineClient::doSubmitIssue(std::string const& title, std::string const& de
             }
 
             auto payload = parseErrorPayload(res);
-            // A single 401 means the server rejected our access token even
-            // though we thought it was fresh. Refresh once and retry.
             if (isAuthErrorCode(payload.code) || res.code() == 401) {
                 if (!m_refreshToken.empty() && m_pendingIntent == PendingIntent::None) {
                     m_pendingIntent = PendingIntent::SubmitIssue;
@@ -964,8 +890,6 @@ void OnlineClient::doSubmitIssue(std::string const& title, std::string const& de
         }
     );
 }
-
-// --- upload macro ---
 
 void OnlineClient::uploadMacro(std::string const& macroName, std::string const& comment) {
     if (uploadState == PENDING) return;
@@ -1116,8 +1040,6 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         }
     );
 }
-
-// --- per-frame tick (GUI drives this) ---
 
 void OnlineClient::update(float dt) {
     if (authPolling && !m_pollToken.empty()) {

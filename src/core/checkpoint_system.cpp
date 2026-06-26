@@ -243,7 +243,8 @@ bool ReplayEngine::saveActiveMacro() {
             return false;
         }
 
-        activeMacro->persist(activeMacro->accuracyMode, static_cast<int>(tickRate));
+        bool const useJson = selectedRecordingFormat == RecordingFormat::GDR;
+        activeMacro->persist(activeMacro->accuracyMode, static_cast<int>(tickRate), useJson);
         dataModified = false;
         reloadMacroList();
         return true;
@@ -640,7 +641,7 @@ void ReplayEngine::runWithUnsavedMacroGuard(std::function<void()> continueAction
 }
 
 class $modify(RestorePointHandler, CheckpointObject) {
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
     bool init() {
         bool result = CheckpointObject::init();
         CheckpointObject* checkpoint = this;

@@ -256,6 +256,13 @@ private:
     std::string replayConvertSourceKeyOnComplete;
     bool replayConversionsExpanded = false;
 
+    char replaySearchBuffer[64] = "";
+    int replayCurrentPage = 0;
+    static constexpr int replayPageSize = 6;
+    static constexpr int replayPageSizeConversion = 4;
+    char foreignSearchBuffer[64] = "";
+    int foreignCurrentPage = 0;
+
     std::vector<std::string> presetNames;
     int presetSelectedIndex = -1;
     bool presetListDirty = true;

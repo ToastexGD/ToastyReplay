@@ -1,6 +1,6 @@
 #pragma once
 
-#include "replay.hpp"
+#include "format/replay.hpp"
 
 #include <Geode/Geode.hpp>
 

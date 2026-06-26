@@ -3,7 +3,7 @@
 #include "gui/gui.hpp"
 #include "lang/localization.hpp"
 #include "ToastyReplay.hpp"
-#include "ttr_format.hpp"
+#include "format/ttr_format.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -486,6 +486,13 @@ void FrameEditor::redo() {
     rebuildSegments();
     dirty = true;
     clearSelection();
+}
+
+void FrameEditor::save() {
+    commitPendingSelectionEdits();
+    if (!dirty) return;
+    if (format == EditorFormat::TTR) applyToTTR();
+    else applyToGDR();
 }
 
 void FrameEditor::applyToTTR() {

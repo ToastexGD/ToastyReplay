@@ -113,7 +113,6 @@ void ReplayEngine::setFrameStepEnabled(bool enabled, PlayLayer* playLayer) {
     syncFrameStepAudio(FMODAudioEngine::sharedEngine());
 }
 
-
 namespace {
     static bool playerWantsHold(PlayerObject* player) {
         if (!player) return false;

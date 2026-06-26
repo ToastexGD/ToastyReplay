@@ -4,8 +4,8 @@
 #include "utils.hpp"
 #include "lang/localization.hpp"
 #include "conversion/macro_converter.hpp"
-#include "replay.hpp"
-#include "ttr_format.hpp"
+#include "format/replay.hpp"
+#include "format/ttr_format.hpp"
 #include "hacks/autoclicker.hpp"
 #include "trajectory/trajectory.hpp"
 #include "render/renderer.hpp"
@@ -123,6 +123,8 @@ public:
     bool noMirrorEffect = false;
     bool noMirrorRecordingOnly = false;
     bool fastPlayback = false;
+    bool respawnTimeOverrideEnabled = false;
+    int respawnTimeOverrideMs = 1000;
     bool layoutMode = false;
     bool disableShaders = false;
     bool macroInputActive = false;
@@ -170,6 +172,17 @@ public:
 
     TTRMacro* activeTTR = nullptr;
     bool ttrMode = true;
+
+    enum class RecordingFormat : uint8_t {
+        TTR3 = 0,
+        GDR2 = 1,
+        GDR = 2,
+    };
+    RecordingFormat selectedRecordingFormat = RecordingFormat::TTR3;
+
+    void applyRecordingFormatSelection() {
+        ttrMode = (selectedRecordingFormat == RecordingFormat::TTR3);
+    }
 
     std::unordered_map<CheckpointObject*, CheckpointStateBundle> storedRestorePoints;
     int lastTickIndex = 0;
@@ -237,6 +250,7 @@ public:
     std::unordered_set<std::string> platformerMacros;
     std::unordered_set<std::string> ttrMacros;
     std::unordered_set<std::string> ttr2Macros;
+    std::unordered_set<std::string> ttr3Macros;
     std::unordered_set<std::string> legacyTtrMacros;
     std::unordered_set<std::string> legacyCbsMacros;
     std::vector<toasty::conversion::DetectedReplay> foreignReplays;
@@ -312,6 +326,7 @@ public:
         platformerMacros.clear();
         ttrMacros.clear();
         ttr2Macros.clear();
+        ttr3Macros.clear();
         legacyTtrMacros.clear();
         legacyCbsMacros.clear();
         foreignReplays.clear();
@@ -363,6 +378,21 @@ public:
                 return static_cast<char>(std::tolower(ch));
             });
 
+            bool isGdrJson = false;
+            if (extension == ".json") {
+                auto filename = toasty::pathToUtf8(path.filename());
+                std::string lowerFilename = filename;
+                std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+                static constexpr std::string_view kGdrJsonSuffix = ".gdr.json";
+                if (lowerFilename.size() > kGdrJsonSuffix.size() &&
+                    lowerFilename.compare(lowerFilename.size() - kGdrJsonSuffix.size(), kGdrJsonSuffix.size(), kGdrJsonSuffix) == 0) {
+                    isGdrJson = true;
+                    stem = filename.substr(0, filename.size() - kGdrJsonSuffix.size());
+                }
+            }
+
             if (extension == ".ttr2" || extension == ".ttr") {
                 bool isTTR2 = extension == ".ttr2";
                 uint32_t flags = 0;
@@ -389,7 +419,7 @@ public:
                 continue;
             }
 
-            if (extension != ".gdr") {
+            if (extension != ".gdr" && !isGdrJson) {
                 foreignCandidates.push_back(path);
                 continue;
             }
@@ -530,6 +560,15 @@ public:
             return false;
         }
 
+        if (hasTTR && activeTTR->loadedFromTTR3()) {
+            double requiredTps = activeTTR->maxSourceTps();
+            double runtimeTps = runtimeTickRate();
+            if (std::isfinite(requiredTps) && std::isfinite(runtimeTps) && requiredTps > runtimeTps + 1e-6) {
+                log::warn("Playback aborted: macro requires a higher TPS than the current runtime.");
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -554,6 +593,10 @@ public:
         resetTimingTracking();
         clearQueuedSubstepState();
         beginReplayAccuracyEnvironment(runtimeAccuracyModeFor(activeMacroAccuracyMode()), true);
+
+        if (ttrMode && activeTTR && activeTTR->loadedFromTTR3()) {
+            activeTTR->materializeTTR3RuntimeTicks(runtimeTickRate());
+        }
 
         if (!ttrMode && activeMacro) {
             anchorInterval = activeMacro->savedAnchorInterval > 0
