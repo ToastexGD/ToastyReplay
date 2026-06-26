@@ -1702,6 +1702,30 @@ void Renderer::start() {
         height = static_cast<unsigned>(mod->getSavedValue<int64_t>("render_height", 1080));
         hideEndscreen     = mod->getSavedValue<bool>("render_hide_endscreen", false);
         hideLevelComplete = mod->getSavedValue<bool>("render_hide_levelcomplete", false);
+
+#ifdef GEODE_IS_WINDOWS
+        if (!usingApi && !ffmpegPath.empty() && !testCodec(ffmpegPath, codec)) {
+            bool isGpuCodec = codec.find("nvenc") != std::string::npos
+                           || codec.find("amf")   != std::string::npos
+                           || codec.find("qsv")   != std::string::npos;
+            std::string failedCodec = codec;
+            if (isGpuCodec && testCodec(ffmpegPath, "libx264")) {
+                codec = "libx264";
+                Loader::get()->queueInMainThread([failedCodec] {
+                    auto msg = fmt::format("GPU encoder {} not supported, using libx264", failedCodec);
+                    Notification::create(msg, NotificationIcon::Warning)->show();
+                });
+            } else {
+                Loader::get()->queueInMainThread([failedCodec] {
+                    auto title = trString("Error");
+                    auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", failedCodec);
+                    auto ok = trString("Ok");
+                    FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
+                });
+                return;
+            }
+        }
+#endif
     } else {
         extension = m_extOverride;
         m_extOverride.clear();

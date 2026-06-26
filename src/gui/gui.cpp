@@ -3515,6 +3515,7 @@ void MenuInterface::drawRenderDisplaySection() {
         bool isLossless = expConfig.tier == RenderQualityTier::Lossless;
         bool customVideoFilter = expAdvVideoArgsBuf[0]
             && strcmp(expAdvVideoArgsBuf, kDefaultVideoArgs) != 0;
+        bool apiLimited = resolveProbeFfmpegPath().empty();
 
         ImGui::BeginDisabled(rendering);
         if (Widgets::ToggleSwitch("Pulse Fix", &engine->pulseFix, theme, anim))
@@ -3528,17 +3529,24 @@ void MenuInterface::drawRenderDisplaySection() {
             ImGui::EndTooltip();
         }
 
-        ImGui::BeginDisabled(rendering || isLossless || customVideoFilter);
+        ImGui::BeginDisabled(rendering || isLossless || customVideoFilter || apiLimited);
         if (Widgets::ToggleSwitch("Color Fix", &expConfig.colorFix, theme, anim))
             saveRenderConfig(expConfig);
         ImGui::EndDisabled();
+        if (apiLimited) {
+            ImGui::SameLine(0, 8.0f);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+            ImGui::TextUnformatted("[needs ffmpeg.exe]");
+            ImGui::PopStyleColor();
+        }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(320.0f);
             ImGui::TextUnformatted("Tags the video with the BT.709 color matrix so players and YouTube "
                                    "don't misread it as BT.601 (which dulls/shifts colors, greens especially). "
                                    "Makes the recording match in-game colors. Works on the GPU (NV12) path "
-                                   "with no speed cost. Enable before rendering.");
+                                   "with no speed cost. Enable before rendering. Needs ffmpeg.exe - the "
+                                   "FFmpeg API mod always uses the RGB path, where this has no effect.");
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
@@ -3962,10 +3970,11 @@ void MenuInterface::drawRenderTab() {
         ImGui::PopStyleColor();
     }
 
-    for (auto& entry : renderFiles) {
+    for (int i = 0; i < (int)renderFiles.size(); i++) {
+        auto& entry = renderFiles[i];
         std::string name = toasty::pathToUtf8(entry.path().stem());
         std::string ext = toasty::pathToUtf8(entry.path().extension());
-        ImGui::PushID(name.c_str());
+        ImGui::PushID(i);
 
         float rowH = ImGui::GetTextLineHeight() + 8.0f;
         float fullRowW = ImGui::GetContentRegionAvail().x;
@@ -6200,9 +6209,7 @@ void MenuInterface::drawExpRenderTab() {
     bool apiLimited = !ffmpegAvail;
     if (apiLimited) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.78f, 0.15f, 1.0f));
-        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control. Extra Args, Video "
-                           "Filter and Audio Args are ignored, CRF and speed tuning don't apply, and audio "
-                           "is AAC only. Resolution, FPS, quality, codec, container and Max Bitrate apply.");
+        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
     }
@@ -6507,7 +6514,7 @@ void MenuInterface::drawExpRenderTab() {
                 ImGui::TextUnformatted("Tip: Install ffmpeg.exe for a better experience");
                 ImGui::PopStyleColor();
                 ImGui::Dummy(ImVec2(0, 2));
-                ImGui::TextWrapped("ffmpeg.exe enables custom audio codecs during rendering.\nSet the path in Settings > ffmpeg_path.");
+                ImGui::TextWrapped("ffmpeg.exe enables custom audio codecs during rendering.\nAlso more features!");
                 ImGui::EndPopup();
             }
         }
