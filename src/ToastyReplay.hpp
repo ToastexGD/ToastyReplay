@@ -1150,6 +1150,9 @@ public:
     }
 
     std::vector<PlaybackAnchor>* activeAnchors() {
+        if (!usesTimedAccuracy(activeMacroAccuracyMode())) {
+            return nullptr;
+        }
         if (ttrMode) {
             if (auto* attempt = activePersistencePlaybackAttempt()) {
                 return &attempt->anchors;
@@ -1160,6 +1163,9 @@ public:
     }
 
     std::vector<PlaybackAnchor> const* activeAnchors() const {
+        if (!usesTimedAccuracy(activeMacroAccuracyMode())) {
+            return nullptr;
+        }
         if (ttrMode) {
             if (auto const* attempt = activePersistencePlaybackAttempt()) {
                 return &attempt->anchors;

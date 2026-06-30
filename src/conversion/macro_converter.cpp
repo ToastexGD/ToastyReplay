@@ -871,6 +871,7 @@ static ImportedReplay parseYBot2(std::vector<uint8_t> const& data) {
     }
     ImportTimeline timeline(replay.fps);
     replay.fps = timeline.initialFps();
+    replay.ybot2SourceTpsHighEnough = replay.fps >= 240.0;
 
     reader.seek(16 + metaLength);
     for (uint32_t i = 0; i < blobs; ++i) {
@@ -969,6 +970,9 @@ static ImportedReplay parsePlaintext(std::vector<uint8_t> const& data) {
         int p2Flag = 1;
         stream >> frame >> down >> button >> p2Flag;
         if (!stream) continue;
+        if (std::abs(frame - std::round(frame)) > 0.000001) {
+            replay.hasFractionalPlaintextFrames = true;
+        }
         bool player2 = p2Flag == 0;
         addInput(replay, frame / replay.fps, static_cast<int64_t>(std::llround(frame)), button, player2, down == 1);
     }
@@ -1103,6 +1107,7 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
     ImportedReplay replay;
     replay.format = ReplayFormat::TCBot;
     replay.fps = static_cast<double>(tps);
+    replay.hasTcbotV2VersionByte = version == 2;
 
     if (version == 1) {
         uint32_t count = readLEB128(reader);
@@ -1979,6 +1984,7 @@ static ImportedReplay parseUvBot(std::vector<uint8_t> const& data) {
         readUvBotPhysicsAnchor(reader, replay, true);
     }
     if (totalPhysics != 0) {
+        replay.hasUvBotPhysicsAnchors = true;
         addWarningOnce(replay, "Converted uvBot physics data into Toasty anchors.");
     }
     finishImport(replay);
@@ -2284,8 +2290,11 @@ ConversionResult convertReplay(
 
         if (target == ConversionTarget::TTR3) {
             TTR3InspectionFacts facts;
+            facts.hasTcbotV2VersionByte = imported->hasTcbotV2VersionByte;
             facts.hasFractionalPlaintextFrames = imported->hasFractionalPlaintextFrames;
             facts.hasDecodedGdr2Extensions = imported->hasDecodedGdr2Extensions;
+            facts.hasUvBotPhysicsAnchors = imported->hasUvBotPhysicsAnchors;
+            facts.ybot2SourceTpsHighEnough = imported->ybot2SourceTpsHighEnough;
             auto eligibility = inspectTTR3Eligibility(imported->format, facts);
             if (!eligibility.lossless || eligibility.route != TTR3Route::LosslessTTR3) {
                 addWarningOnce(*imported, eligibility.message);
@@ -2335,7 +2344,9 @@ ConversionResult convertReplay(
         macro.accuracyMode = outputAccuracy;
         macro.platformerMode = imported->platformerMode;
         macro.hasPlatformerModeMetadata = true;
-        macro.anchors = imported->anchors;
+        macro.anchors = outputAccuracy == AccuracyMode::Vanilla
+            ? std::vector<PlaybackAnchor>{}
+            : imported->anchors;
         macro.inputs.reserve(inputs.size());
         for (auto const& input : inputs) {
             macro.inputs.emplace_back(
@@ -2469,16 +2480,7 @@ ConversionResult convertNativeGDRToTTRDuplicate(
         }
 
         if (resolvedMode == AccuracyMode::Vanilla) {
-            if (macro.anchors.size() > 1) {
-                macro.anchors.erase(macro.anchors.begin() + 1, macro.anchors.end());
-            }
-            macro.checkpoints.clear();
-            for (auto& attempt : macro.persistenceAttempts) {
-                if (attempt.anchors.size() > 1) {
-                    attempt.anchors.erase(attempt.anchors.begin() + 1, attempt.anchors.end());
-                }
-            }
-            macro.macroConverted = false;
+            stripVanillaPlaybackFixups(macro);
         }
 
         auto outputBytes = macro.serialize();

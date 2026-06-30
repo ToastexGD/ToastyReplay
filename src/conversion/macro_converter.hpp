@@ -113,8 +113,11 @@ struct ImportedReplay {
     std::vector<ImportedTpsEvent> tpsEvents;
     std::vector<std::string> warnings;
     bool sourceLosslessVerified = false;
+    bool hasTcbotV2VersionByte = false;
     bool hasFractionalPlaintextFrames = false;
     bool hasDecodedGdr2Extensions = false;
+    bool hasUvBotPhysicsAnchors = false;
+    bool ybot2SourceTpsHighEnough = false;
     bool convertedForTTR3 = false;
 };
 
@@ -215,6 +218,27 @@ inline void finishImportForTarget(ImportedReplay& replay, ConversionTarget targe
     }
 }
 
+inline void stripVanillaPlaybackFixups(TTRMacro& macro) {
+    for (auto& input : macro.inputs) {
+        input.stepOffset = 0.0f;
+        input.cbsTimeOffset = -1.0;
+        input.timeSeconds = -1.0;
+        input.swiftPairAnchor = false;
+    }
+    macro.anchors.clear();
+    macro.checkpoints.clear();
+    for (auto& attempt : macro.persistenceAttempts) {
+        for (auto& input : attempt.inputs) {
+            input.stepOffset = 0.0f;
+            input.cbsTimeOffset = -1.0;
+            input.timeSeconds = -1.0;
+            input.swiftPairAnchor = false;
+        }
+        attempt.anchors.clear();
+    }
+    macro.exactCbsTiming = false;
+}
+
 inline TTRMacro buildTTR3FromImported(
     ImportedReplay const& imported,
     std::string outputName,
@@ -286,22 +310,7 @@ inline TTRMacro buildTTR3FromImported(
     }
 
     if (macro.accuracyMode == AccuracyMode::Vanilla) {
-        for (auto& input : macro.inputs) {
-            input.stepOffset = 0.0f;
-            input.cbsTimeOffset = -1.0;
-            input.timeSeconds = -1.0;
-            input.swiftPairAnchor = false;
-        }
-        if (macro.anchors.size() > 1) {
-            macro.anchors.erase(macro.anchors.begin() + 1, macro.anchors.end());
-        }
-        macro.checkpoints.clear();
-        for (auto& attempt : macro.persistenceAttempts) {
-            if (attempt.anchors.size() > 1) {
-                attempt.anchors.erase(attempt.anchors.begin() + 1, attempt.anchors.end());
-            }
-        }
-        macro.macroConverted = false;
+        stripVanillaPlaybackFixups(macro);
     }
 
     return macro;

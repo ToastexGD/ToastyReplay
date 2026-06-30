@@ -470,10 +470,13 @@ public:
     gdr::json::object_t saveExtension() const override {
         gdr::json::object_t ext;
         AccuracyMode storedAccuracyMode = writableAccuracyMode(accuracyMode);
+        bool const writeAnchorData = storedAccuracyMode != AccuracyMode::Vanilla;
         if (storedAccuracyMode != AccuracyMode::Vanilla) {
             ext["accuracy_mode"] = static_cast<int>(storedAccuracyMode);
         }
-        ext["anchor_interval"] = getPersistedAnchorStride();
+        if (writeAnchorData) {
+            ext["anchor_interval"] = getPersistedAnchorStride();
+        }
         ext["platformer_mode"] = platformerMode;
 
         if (recordedFromStartPos) {
@@ -482,7 +485,7 @@ public:
             ext["start_pos_y"] = startPosY;
         }
 
-        if (!anchors.empty()) {
+        if (writeAnchorData && !anchors.empty()) {
             auto arr = gdr::json::array();
             for (auto const& anchor : buildPersistedAnchorSlice()) {
                 arr.push_back(exportAnchor(anchor));
@@ -501,7 +504,10 @@ public:
         if (!usesTimedAccuracy(accuracyMode)) {
             for (auto& input : inputs) {
                 input.stepOffset = 0.0f;
+                input.timeSeconds = -1.0;
+                input.swiftPairAnchor = false;
             }
+            anchors.clear();
         }
 
         auto dir = ReplayStorage::getReplayDirectoryPath();

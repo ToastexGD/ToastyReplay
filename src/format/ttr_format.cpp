@@ -995,12 +995,17 @@ void TTRMacro::persistToDirectory(std::filesystem::path const& directory) {
         for (auto& input : inputList) {
             input.stepOffset = 0.0f;
             input.cbsTimeOffset = -1.0;
+            input.timeSeconds = -1.0;
+            input.swiftPairAnchor = false;
         }
     };
     if (!usesTimedAccuracy(accuracyMode)) {
         stripTimedOffsets(inputs);
+        anchors.clear();
+        checkpoints.clear();
         for (auto& attempt : persistenceAttempts) {
             stripTimedOffsets(attempt.inputs);
+            attempt.anchors.clear();
         }
         exactCbsTiming = false;
     } else {
