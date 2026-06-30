@@ -76,7 +76,7 @@ public:
     void scanClickPacks();
     void scanClickPacksP2();
     void loadClickPack(const std::string& packName, ClickPack& target, bool isP2 = false);
-    void playClick(bool pressed, bool isPlayer2);
+    void playClick(bool pressed, bool isPlayer2, int button = static_cast<int>(PlayerButton::Jump));
     void startBackgroundNoise();
     void stopBackgroundNoise();
     void shutdown();
@@ -103,6 +103,7 @@ private:
     struct PendingClick {
         bool pressed = false;
         bool isPlayer2 = false;
+        int button = static_cast<int>(PlayerButton::Jump);
         std::chrono::steady_clock::time_point playAt;
     };
 
@@ -125,7 +126,7 @@ private:
     bool shouldUseP2Pack(bool requestedPlayer2, bool trueTwoPlayerMode) const;
     std::string pickRandomFile(const std::vector<std::string>& files);
     void playFile(const std::string& path, float volume, float pitchJitter, float panOffset);
-    void playResolvedClick(bool pressed, bool isPlayer2);
+    void playResolvedClick(bool pressed, bool isPlayer2, int button);
     void cullExpiredVoices();
     void enforcePolyphonyLimit();
     FMOD::Sound* getCachedSound(const std::string& path);

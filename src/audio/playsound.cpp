@@ -10,23 +10,18 @@ namespace {
     std::chrono::steady_clock::time_point g_nextRealtimeClickAudio{};
 
     bool isClickAudioButton(int actionType) {
-        if (actionType == static_cast<int>(PlayerButton::Jump)) {
-            return true;
-        }
-
-        if (actionType != static_cast<int>(PlayerButton::Left) &&
-            actionType != static_cast<int>(PlayerButton::Right)) {
+        if (actionType < static_cast<int>(PlayerButton::Jump) ||
+            actionType > static_cast<int>(PlayerButton::Right)) {
             return false;
         }
 
-        if (ClickSoundManager::get()->muteLeftRightClicks) {
+        if ((actionType == static_cast<int>(PlayerButton::Left) ||
+            actionType == static_cast<int>(PlayerButton::Right)) &&
+            ClickSoundManager::get()->muteLeftRightClicks) {
             return false;
         }
 
-        auto* playLayer = PlayLayer::get();
-        return playLayer &&
-            playLayer->m_levelSettings &&
-            playLayer->m_levelSettings->m_platformerMode;
+        return true;
     }
 
     bool shouldThrottleRealtimeClickAudio(ReplayEngine const* engine) {
@@ -60,7 +55,7 @@ void ReplayEngine::triggerAudio(bool secondPlayer, int actionType, bool pressed)
         g_nextRealtimeClickAudio = now;
     }
 
-    csm->playClick(pressed, secondPlayer);
+    csm->playClick(pressed, secondPlayer, actionType);
 }
 
 class $modify(ClickPlayLayer, PlayLayer) {

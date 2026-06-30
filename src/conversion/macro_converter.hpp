@@ -5,6 +5,7 @@
 #include "format/ttr_format.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <ctime>
 #include <cmath>
@@ -174,10 +175,9 @@ inline void finishImportForTTR3(ImportedReplay& replay) {
         return a.sequence < b.sequence;
     });
 
-    constexpr double kDuplicateEpsilon = 0.000001;
-    std::unordered_map<int, double> lastTransitionTime;
     std::vector<ImportedInput> normalized;
     normalized.reserve(replay.inputs.size());
+    std::array<bool, 6> held = { false, false, false, false, false, false };
 
     for (auto input : replay.inputs) {
         input.button = sanitizeTTR3Button(input.button);
@@ -190,23 +190,76 @@ inline void finishImportForTTR3(ImportedReplay& replay) {
             input.sourceFrame = input.time * replay.fps;
         }
 
-        int transitionKey = input.button
-            | (input.player2 ? 0x100 : 0)
-            | (input.pressed ? 0x200 : 0);
-        auto last = lastTransitionTime.find(transitionKey);
-        if (last != lastTransitionTime.end() && std::abs(input.time - last->second) <= kDuplicateEpsilon) {
+        size_t holdIndex = (input.player2 ? 3u : 0u) + static_cast<size_t>(input.button - 1);
+        if (!input.swift && held[holdIndex] == input.pressed) {
             continue;
         }
-        lastTransitionTime[transitionKey] = input.time;
+        held[holdIndex] = input.pressed;
 
         input.tick = materializeTTR3Tick(input.time, replay.fps);
-        input.cbsTimeOffset = std::max(0.0, input.time - static_cast<double>(input.tick) / replay.fps);
-        input.stepOffset = static_cast<float>(std::clamp(input.cbsTimeOffset * replay.fps, 0.0, 0.999999));
         input.sequence = static_cast<uint64_t>(normalized.size());
         normalized.push_back(input);
     }
 
     replay.inputs = std::move(normalized);
+    bool adjustedSameTickInputs = false;
+    if (replay.inputs.size() > 1) {
+        double const tickDuration = 1.0 / replay.fps;
+        size_t i = 0;
+        while (i < replay.inputs.size()) {
+            int64_t const tick = replay.inputs[i].tick;
+            size_t tickEnd = i + 1;
+            while (tickEnd < replay.inputs.size() && replay.inputs[tickEnd].tick == tick) {
+                ++tickEnd;
+            }
+
+            if (tickEnd - i > 1) {
+                std::unordered_map<int, std::vector<size_t>> groups;
+                for (size_t j = i; j < tickEnd; ++j) {
+                    if (replay.inputs[j].swift) {
+                        continue;
+                    }
+                    int const key = replay.inputs[j].button | (replay.inputs[j].player2 ? 0x100 : 0);
+                    groups[key].push_back(j);
+                }
+
+                for (auto const& entry : groups) {
+                    auto const& indices = entry.second;
+                    if (indices.size() < 2 || !replay.inputs[indices.front()].pressed) {
+                        continue;
+                    }
+
+                    double const baseTime = static_cast<double>(tick) / replay.fps;
+                    double const fractionStep = 1.0 / static_cast<double>(indices.size());
+                    for (size_t k = 0; k < indices.size(); ++k) {
+                        double const fraction = static_cast<double>(k) * fractionStep;
+                        replay.inputs[indices[k]].time = baseTime + fraction * tickDuration;
+                    }
+                    adjustedSameTickInputs = true;
+                }
+            }
+
+            i = tickEnd;
+        }
+    }
+
+    if (adjustedSameTickInputs) {
+        replay.needsCbsTiming = true;
+        std::stable_sort(replay.inputs.begin(), replay.inputs.end(), [](ImportedInput const& a, ImportedInput const& b) {
+            if (a.time != b.time) return a.time < b.time;
+            if (a.sourceFrame != b.sourceFrame) return a.sourceFrame < b.sourceFrame;
+            return a.sequence < b.sequence;
+        });
+    }
+
+    for (size_t i = 0; i < replay.inputs.size(); ++i) {
+        auto& input = replay.inputs[i];
+        input.tick = materializeTTR3Tick(input.time, replay.fps);
+        input.cbsTimeOffset = std::max(0.0, input.time - static_cast<double>(input.tick) / replay.fps);
+        input.stepOffset = static_cast<float>(std::clamp(input.cbsTimeOffset * replay.fps, 0.0, 0.999999));
+        input.sequence = static_cast<uint64_t>(i);
+    }
+
     if (!replay.inputs.empty()) {
         replay.duration = std::max(replay.duration, replay.inputs.back().time);
     }

@@ -29,7 +29,8 @@ ClickSoundManager* ClickSoundManager::get() {
 }
 
 bool ClickSoundManager::shouldUseP2Pack(bool requestedPlayer2, bool trueTwoPlayerMode) const {
-    return separateP2Clicks && requestedPlayer2 && trueTwoPlayerMode;
+    static_cast<void>(trueTwoPlayerMode);
+    return separateP2Clicks && requestedPlayer2;
 }
 
 std::filesystem::path ClickSoundManager::getClicksDir() const {
@@ -424,8 +425,9 @@ void ClickSoundManager::playFile(const std::string& path, float volume, float pi
     }
 }
 
-void ClickSoundManager::playResolvedClick(bool pressed, bool isPlayer2) {
+void ClickSoundManager::playResolvedClick(bool pressed, bool isPlayer2, int button) {
     if (!enabled) return;
+    if (muteLeftRightClicks && isLeftRightClick(button)) return;
 
     auto* playLayer = PlayLayer::get();
     bool trueTwoPlayerMode = false;
@@ -444,7 +446,7 @@ void ClickSoundManager::playResolvedClick(bool pressed, bool isPlayer2) {
     }
 }
 
-void ClickSoundManager::playClick(bool pressed, bool isPlayer2) {
+void ClickSoundManager::playClick(bool pressed, bool isPlayer2, int button) {
     if (!enabled) return;
 
     float delayMs = 0.0f;
@@ -458,13 +460,14 @@ void ClickSoundManager::playClick(bool pressed, bool isPlayer2) {
         PendingClick pending;
         pending.pressed = pressed;
         pending.isPlayer2 = isPlayer2;
+        pending.button = button;
         pending.playAt = std::chrono::steady_clock::now()
             + std::chrono::microseconds(static_cast<int64_t>(delayMs * 1000.0f));
 
         std::lock_guard<std::mutex> lock(pendingClickMutex);
         pendingClicks.push_back(pending);
     } else {
-        playResolvedClick(pressed, isPlayer2);
+        playResolvedClick(pressed, isPlayer2, button);
     }
 }
 
@@ -484,7 +487,7 @@ void ClickSoundManager::updatePendingClicks() {
     }
 
     for (const auto& pending : readyClicks) {
-        playResolvedClick(pending.pressed, pending.isPlayer2);
+        playResolvedClick(pending.pressed, pending.isPlayer2, pending.button);
     }
 }
 
