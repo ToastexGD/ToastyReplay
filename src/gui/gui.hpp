@@ -178,6 +178,7 @@ public:
     bool mkvWarningIsExp = false;
     char mkvWarningPrevCodec[64] = "aac";
 
+    // Experimental render tab state
     RenderConfig expConfig;
     bool expConfigInit = false;
     bool expGpuProbed = false;
