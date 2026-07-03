@@ -1,8 +1,12 @@
 #include "ToastyReplay.hpp"
 
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/GJGroundLayer.hpp>
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/ShaderLayer.hpp>
+
+#include <algorithm>
 
 using namespace geode::prelude;
 
@@ -21,20 +25,6 @@ namespace {
     bool isLayoutEnabled() {
         return ReplayEngine::get()->layoutMode;
     }
-
-    struct ForcedColorEntry {
-        int channel;
-        cocos2d::ccColor3B color;
-    };
-
-    static constexpr ForcedColorEntry kDarkPalette[] = {
-        { 1000, { 30, 35, 45 } },
-        { 1001, { 55, 65, 85 } },
-        { 1002, { 200, 215, 230 } },
-        { 1009, { 55, 65, 85 } },
-        { 1013, { 35, 40, 50 } },
-        { 1014, { 35, 40, 50 } },
-    };
 
     class LayoutClassifier {
     public:
@@ -163,7 +153,18 @@ namespace {
     static const LayoutClassifier s_classifier;
 
     void normalizeVisibleObject(GameObject* object) {
+        auto* engine = ReplayEngine::get();
         object->m_hasNoGlow = true;
+        object->m_hasNoAudioScale = false;
+        object->m_isDontEnter = true;
+        object->m_isDontFade = true;
+        object->m_ignoreFade = true;
+        object->m_ignoreEnter = true;
+        object->m_hasParticles = false;
+        object->m_hasNoParticles = true;
+        object->m_hasNoEffects = engine && engine->noEffect &&
+            object->m_objectType != GameObjectType::InverseMirrorPortal &&
+            object->m_objectType != GameObjectType::NormalMirrorPortal;
         object->m_activeMainColorID = -1;
         object->m_activeDetailColorID = -1;
         object->m_baseUsesHSV = false;
@@ -171,14 +172,46 @@ namespace {
         object->setOpacity(255);
     }
 
-    static bool tryApplyForcedColor(int colorID, cocos2d::ccColor3B& color) {
-        for (auto const& entry : kDarkPalette) {
-            if (entry.channel == colorID) {
-                color = entry.color;
-                return true;
-            }
+    static cocos2d::ccColor3B sanitizeColor(int r, int g, int b) {
+        return {
+            static_cast<GLubyte>(std::clamp(r, 0, 255)),
+            static_cast<GLubyte>(std::clamp(g, 0, 255)),
+            static_cast<GLubyte>(std::clamp(b, 0, 255))
+        };
+    }
+
+    static cocos2d::ccColor3B layoutBackgroundColor() {
+        auto* engine = ReplayEngine::get();
+        if (!engine) {
+            return { 160, 160, 160 };
         }
-        return false;
+        return sanitizeColor(
+            engine->layoutModeBackgroundR,
+            engine->layoutModeBackgroundG,
+            engine->layoutModeBackgroundB
+        );
+    }
+
+    static cocos2d::ccColor3B layoutGroundColor() {
+        auto* engine = ReplayEngine::get();
+        if (!engine) {
+            return { 160, 160, 160 };
+        }
+        return sanitizeColor(
+            engine->layoutModeGroundR,
+            engine->layoutModeGroundG,
+            engine->layoutModeGroundB
+        );
+    }
+
+    static void applyLayoutColor(int colorID, cocos2d::ccColor3B& color) {
+        if (colorID == 1000) {
+            color = layoutBackgroundColor();
+        } else if (colorID == 1001) {
+            color = layoutGroundColor();
+        } else {
+            color = { 255, 255, 255 };
+        }
     }
 }
 
@@ -209,7 +242,7 @@ class $modify(LayoutBaseLayer, GJBaseGameLayer) {
         int unk2
     ) {
         if (PlayLayer::get() && isLayoutEnabled()) {
-            tryApplyForcedColor(colorID, color);
+            applyLayoutColor(colorID, color);
         }
 
         GJBaseGameLayer::updateColor(
@@ -225,6 +258,46 @@ class $modify(LayoutBaseLayer, GJBaseGameLayer) {
             unk1,
             unk2
         );
+    }
+
+    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        if (isLayoutEnabled()) {
+            toggleGlitter(false);
+        }
+        GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+    }
+
+    void createBackground(int background) {
+        if (isLayoutEnabled()) {
+            background = 13;
+        }
+        GJBaseGameLayer::createBackground(background);
+    }
+
+    void createMiddleground(int middleground) {
+        if (isLayoutEnabled()) {
+            middleground = 0;
+        }
+        GJBaseGameLayer::createMiddleground(middleground);
+    }
+};
+
+class $modify(LayoutGroundLayer, GJGroundLayer) {
+    static GJGroundLayer* create(int groundID, int lineType) {
+        if (isLayoutEnabled()) {
+            groundID = 1;
+            lineType = 1;
+        }
+        return GJGroundLayer::create(groundID, lineType);
+    }
+};
+
+class $modify(LayoutShaderLayer, ShaderLayer) {
+    void performCalculations() {
+        if (isLayoutEnabled()) {
+            return;
+        }
+        ShaderLayer::performCalculations();
     }
 };
 

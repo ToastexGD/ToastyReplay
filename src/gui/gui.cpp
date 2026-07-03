@@ -202,6 +202,31 @@ static ImVec4 sanitizeColor(ImVec4 value, ImVec4 fallback) {
     return value;
 }
 
+static bool drawRgbColorPicker(const char* label, int& red, int& green, int& blue) {
+    float value[3] = {
+        std::clamp(red, 0, 255) / 255.0f,
+        std::clamp(green, 0, 255) / 255.0f,
+        std::clamp(blue, 0, 255) / 255.0f
+    };
+
+    ImGui::PushID(label);
+    bool changed = ImGui::ColorEdit3(
+        "##rgb",
+        value,
+        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel
+    );
+    ImGui::SameLine(0, 8.0f);
+    ImGui::TextUnformatted(label);
+    ImGui::PopID();
+
+    if (changed) {
+        red = std::clamp(static_cast<int>(std::lround(value[0] * 255.0f)), 0, 255);
+        green = std::clamp(static_cast<int>(std::lround(value[1] * 255.0f)), 0, 255);
+        blue = std::clamp(static_cast<int>(std::lround(value[2] * 255.0f)), 0, 255);
+    }
+    return changed;
+}
+
 template <class T>
 static T loadSavedValueWithFallback(
     Mod* mod,
@@ -2958,11 +2983,33 @@ void MenuInterface::drawToolsTab() {
 
     if (Widgets::ModuleCardBegin("Layout Mode", "Remove all decorations",
         &engine->layoutMode, theme, anim, &keybinds.layoutMode)) {
+        drawRgbColorPicker("Background", engine->layoutModeBackgroundR, engine->layoutModeBackgroundG, engine->layoutModeBackgroundB);
+        drawRgbColorPicker("Ground", engine->layoutModeGroundR, engine->layoutModeGroundG, engine->layoutModeGroundB);
         Widgets::ModuleCardEnd();
     }
 
     if (Widgets::ModuleCardBegin("Disable Shaders", "Suppress level shader effects",
         &engine->disableShaders, theme, anim, &keybinds.disableShaders)) {
+        Widgets::ModuleCardEnd();
+    }
+
+    if (Widgets::ModuleCardBegin("No Death Effect", "Skip death burst visuals",
+        &engine->noDeathEffect, theme, anim)) {
+        Widgets::ModuleCardEnd();
+    }
+
+    if (Widgets::ModuleCardBegin("No Effects", "Suppress gameplay visual effects",
+        &engine->noEffect, theme, anim)) {
+        Widgets::ModuleCardEnd();
+    }
+
+    if (Widgets::ModuleCardBegin("Hide Endscreen", "Skip the level endscreen",
+        &engine->hideEndscreen, theme, anim)) {
+        Widgets::ModuleCardEnd();
+    }
+
+    if (Widgets::ModuleCardBegin("Hide New Best", "Skip the new best popup",
+        &engine->hideNewBest, theme, anim)) {
         Widgets::ModuleCardEnd();
     }
 
@@ -3039,6 +3086,10 @@ void MenuInterface::drawHacksTab() {
         &engine->collisionBypass, theme, anim, &keybinds.noclip)) {
         float hitRate = engine->noclipAccuracyPercent();
 
+        Widgets::ToggleSwitch("Player 1", &engine->noclipPlayer1, theme, anim);
+        Widgets::ToggleSwitch("Player 2", &engine->noclipPlayer2, theme, anim);
+
+        ImGui::Dummy(ImVec2(0, 4));
         ImVec4 hitColor;
         if (hitRate >= 90.0f) hitColor = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
         else if (hitRate >= 70.0f) hitColor = ImVec4(1.0f, 1.0f, 0.3f, 1.0f);
@@ -5328,6 +5379,8 @@ void MenuInterface::saveSettings() {
     eng->pathLength = ReplayEngine::sanitizeTrajectoryLength(eng->pathLength);
     mod->setSavedValue("hack_trajectory_len", eng->pathLength);
     mod->setSavedValue("hack_noclip", eng->collisionBypass);
+    mod->setSavedValue("hack_noclip_p1", eng->noclipPlayer1);
+    mod->setSavedValue("hack_noclip_p2", eng->noclipPlayer2);
     mod->setSavedValue("hack_noclip_flash", eng->noclipDeathFlash);
     mod->setSavedValue("hack_noclip_color_r", eng->noclipDeathColorR);
     mod->setSavedValue("hack_noclip_color_g", eng->noclipDeathColorG);
@@ -5338,7 +5391,17 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("hack_audio_pitch", eng->audioPitchEnabled);
     mod->setSavedValue("hack_no_mirror", eng->noMirrorEffect);
     mod->setSavedValue("hack_layout_mode", eng->layoutMode);
+    mod->setSavedValue("hack_layout_bg_r", eng->layoutModeBackgroundR);
+    mod->setSavedValue("hack_layout_bg_g", eng->layoutModeBackgroundG);
+    mod->setSavedValue("hack_layout_bg_b", eng->layoutModeBackgroundB);
+    mod->setSavedValue("hack_layout_ground_r", eng->layoutModeGroundR);
+    mod->setSavedValue("hack_layout_ground_g", eng->layoutModeGroundG);
+    mod->setSavedValue("hack_layout_ground_b", eng->layoutModeGroundB);
     mod->setSavedValue("hack_disable_shaders", eng->disableShaders);
+    mod->setSavedValue("hack_no_death_effect", eng->noDeathEffect);
+    mod->setSavedValue("hack_no_effects", eng->noEffect);
+    mod->setSavedValue("hack_hide_endscreen", eng->hideEndscreen);
+    mod->setSavedValue("hack_hide_new_best", eng->hideNewBest);
     mod->setSavedValue("hack_no_mirror_rec_only", eng->noMirrorRecordingOnly);
     mod->setSavedValue("hack_fast_playback", eng->fastPlayback);
     mod->setSavedValue("hack_respawn_override_enabled", eng->respawnTimeOverrideEnabled);
@@ -6752,6 +6815,8 @@ void MenuInterface::loadSettings() {
         mod->getSavedValue<int>("hack_trajectory_len", ReplayEngine::kTrajectoryLengthDefault)
     );
     eng->collisionBypass = mod->getSavedValue<bool>("hack_noclip", false);
+    eng->noclipPlayer1 = mod->getSavedValue<bool>("hack_noclip_p1", true);
+    eng->noclipPlayer2 = mod->getSavedValue<bool>("hack_noclip_p2", true);
     eng->noclipDeathFlash = mod->getSavedValue<bool>("hack_noclip_flash", true);
     eng->noclipDeathColorR = mod->getSavedValue<float>("hack_noclip_color_r", 1.0f);
     eng->noclipDeathColorG = mod->getSavedValue<float>("hack_noclip_color_g", 0.0f);
@@ -6763,7 +6828,17 @@ void MenuInterface::loadSettings() {
     eng->audioPitchEnabled = mod->getSavedValue<bool>("hack_audio_pitch", true);
     eng->noMirrorEffect = mod->getSavedValue<bool>("hack_no_mirror", false);
     eng->layoutMode = mod->getSavedValue<bool>("hack_layout_mode", false);
+    eng->layoutModeBackgroundR = std::clamp(mod->getSavedValue<int>("hack_layout_bg_r", 160), 0, 255);
+    eng->layoutModeBackgroundG = std::clamp(mod->getSavedValue<int>("hack_layout_bg_g", 160), 0, 255);
+    eng->layoutModeBackgroundB = std::clamp(mod->getSavedValue<int>("hack_layout_bg_b", 160), 0, 255);
+    eng->layoutModeGroundR = std::clamp(mod->getSavedValue<int>("hack_layout_ground_r", 160), 0, 255);
+    eng->layoutModeGroundG = std::clamp(mod->getSavedValue<int>("hack_layout_ground_g", 160), 0, 255);
+    eng->layoutModeGroundB = std::clamp(mod->getSavedValue<int>("hack_layout_ground_b", 160), 0, 255);
     eng->disableShaders = mod->getSavedValue<bool>("hack_disable_shaders", false);
+    eng->noDeathEffect = mod->getSavedValue<bool>("hack_no_death_effect", false);
+    eng->noEffect = mod->getSavedValue<bool>("hack_no_effects", false);
+    eng->hideEndscreen = mod->getSavedValue<bool>("hack_hide_endscreen", false);
+    eng->hideNewBest = mod->getSavedValue<bool>("hack_hide_new_best", false);
     eng->noMirrorRecordingOnly = mod->getSavedValue<bool>("hack_no_mirror_rec_only", false);
     eng->fastPlayback = mod->getSavedValue<bool>("hack_fast_playback", false);
     eng->respawnTimeOverrideEnabled = mod->getSavedValue<bool>("hack_respawn_override_enabled", false);
