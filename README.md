@@ -12,6 +12,7 @@ Record, playback, edit, convert, and render frame-perfect macros with 100% accur
 [![GD](https://img.shields.io/badge/GD-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
 [![Version](https://img.shields.io/badge/version-v2.1.1-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/ToastexGD/ToastyReplay/total?style=flat-square&color=6600cc)
 
 </div>
 
