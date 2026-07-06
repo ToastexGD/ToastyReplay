@@ -29,6 +29,7 @@ set(TOASTYREPLAY_SOURCES
     src/tools/nomirror.cpp
     src/tools/speedhackaudio.cpp
     src/tools/disableshaders.cpp
+    src/tools/visual_suppression.cpp
     src/hacks/autoclicker.cpp
     src/hacks/physicsbypass.cpp
     src/hacks/safemode.cpp

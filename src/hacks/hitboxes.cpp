@@ -472,11 +472,19 @@ namespace {
             m_overlayNode = nullptr;
             resetAttempt();
 
-            if (!layer || !layer->m_debugDrawNode) {
+            if (!layer) {
                 return;
             }
 
-            auto* parent = layer->m_debugDrawNode->getParent();
+            CCNode* parent = nullptr;
+            int zOrder = 9999;
+            if (layer->m_debugDrawNode && layer->m_debugDrawNode->getParent()) {
+                parent = layer->m_debugDrawNode->getParent();
+                zOrder = layer->m_debugDrawNode->getZOrder() + 1;
+            } else if (layer->m_objectLayer) {
+                parent = layer->m_objectLayer;
+            }
+
             if (!parent) {
                 return;
             }
@@ -484,7 +492,7 @@ namespace {
             auto* node = CCDrawNode::create();
             node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
             node->m_bUseArea = false;
-            parent->addChild(node, layer->m_debugDrawNode->getZOrder() + 1);
+            parent->addChild(node, zOrder);
             m_overlayNode = node;
         }
 
@@ -519,7 +527,20 @@ namespace {
             m_trails.capture(layer, subtick, capacity);
         }
 
+        void ensureAttached(GJBaseGameLayer* layer) {
+            if (m_overlayNode && m_overlayNode->getParent()) {
+                return;
+            }
+
+            bool wasDead = m_dead;
+            auto* killer = m_killerObject;
+            attach(layer);
+            m_dead = wasDead;
+            m_killerObject = killer;
+        }
+
         void render(GJBaseGameLayer* layer) {
+            ensureAttached(layer);
             OverlayPainter painter(m_overlayNode);
             painter.clearAndReset();
 
@@ -555,7 +576,10 @@ class $modify(HitboxBGL, GJBaseGameLayer) {
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
         if (!PlayLayer::get()) return;
-        HitboxOverlayState::get().captureTrail(this, isHalfTick);
+        auto& overlay = HitboxOverlayState::get();
+        overlay.captureTrail(this, isHalfTick);
+        overlay.markDead(m_player1 && m_player1->m_isDead);
+        overlay.render(this);
     }
 };
 

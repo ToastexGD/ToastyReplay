@@ -66,6 +66,9 @@ namespace {
         if (!playLayer || !engine || !engine->collisionBypass) {
             return false;
         }
+        if (!engine->noclipPlayer1 && !engine->noclipPlayer2) {
+            return false;
+        }
         if (TrajectoryPredictionService::get().isActiveSimulation()) {
             return false;
         }
@@ -73,6 +76,19 @@ namespace {
         bool playerDead = (playLayer->m_player1 && playLayer->m_player1->m_isDead)
             || (playLayer->m_player2 && playLayer->m_player2->m_isDead);
         return !playerDead && !playLayer->m_hasCompletedLevel && !playLayer->m_levelEndAnimationStarted;
+    }
+
+    bool shouldNoclipPlayer(PlayLayer* playLayer, PlayerObject* player, ReplayEngine* engine) {
+        if (!playLayer || !player || !engine || !engine->collisionBypass) {
+            return false;
+        }
+        if (player == playLayer->m_player1) {
+            return engine->noclipPlayer1;
+        }
+        if (player == playLayer->m_player2) {
+            return engine->noclipPlayer2;
+        }
+        return false;
     }
 
     void clearPendingNoclipFrame(ReplayEngine* engine) {
@@ -928,7 +944,7 @@ class $modify(MacroPlayLayer, PlayLayer) {
             engine->markPersistencePlaybackDeathPending();
         }
 
-        if (engine->collisionBypass && !persistenceDeath) {
+        if (shouldNoclipPlayer(this, player, engine) && !persistenceDeath) {
             if (object == m_anticheatSpike) {
                 engine->clearFrameStepState();
                 PlayLayer::destroyPlayer(player, object);
