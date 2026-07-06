@@ -20,6 +20,10 @@
 #include <windows.h>
 #endif
 
+#ifdef GEODE_IS_INTEL_MAC
+#include <mach-o/loader.h>
+#endif
+
 using namespace geode::prelude;
 
 namespace {
@@ -36,26 +40,12 @@ namespace {
         }
     };
 
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_INTEL_MAC)
     using ExpectedTicksType = uint32_t;
 
     static ExpectedTicksType g_expectedTicks = 0;
     static geode::Patch* g_expectedTicksPatch = nullptr;
     static bool g_expectedTicksPatchAttempted = false;
-
-    static size_t getModuleSize(uint8_t* base) {
-        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
-        if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE) {
-            return 0;
-        }
-
-        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-        if (!nt || nt->Signature != IMAGE_NT_SIGNATURE) {
-            return 0;
-        }
-
-        return static_cast<size_t>(nt->OptionalHeader.SizeOfImage);
-    }
 
     static std::optional<size_t> findHexPattern(uint8_t* base, size_t size, std::string_view textPattern) {
         std::vector<uint8_t> bytes;
@@ -98,6 +88,21 @@ namespace {
         }
 
         return std::nullopt;
+    }
+
+#ifdef GEODE_IS_WINDOWS
+    static size_t getModuleSize(uint8_t* base) {
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+        if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return 0;
+        }
+
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        if (!nt || nt->Signature != IMAGE_NT_SIGNATURE) {
+            return 0;
+        }
+
+        return static_cast<size_t>(nt->OptionalHeader.SizeOfImage);
     }
 
 #pragma pack(push, 1)
@@ -166,6 +171,91 @@ namespace {
         log::info("TPS bypass: installed expected-ticks patch at 0x{:X}", patchAddress - reinterpret_cast<uintptr_t>(base));
         return true;
     }
+#else
+    static size_t getModuleSize(uint8_t* base) {
+        auto* header = reinterpret_cast<mach_header_64*>(base);
+        if (!header || header->magic != MH_MAGIC_64) {
+            return 0;
+        }
+
+        auto* cursor = base + sizeof(mach_header_64);
+        for (uint32_t i = 0; i < header->ncmds; ++i) {
+            auto* command = reinterpret_cast<load_command*>(cursor);
+            if (command->cmd == LC_SEGMENT_64) {
+                auto* segment = reinterpret_cast<segment_command_64*>(cursor);
+                if (std::strcmp(segment->segname, "__TEXT") == 0) {
+                    return static_cast<size_t>(segment->vmsize);
+                }
+            }
+            cursor += command->cmdsize;
+        }
+
+        return 0;
+    }
+
+#pragma pack(push, 1)
+    struct PatchPayload {
+        uint8_t movRaxOpcode[2];
+        uint64_t pointer;
+        uint8_t xorpsOpcode[3];
+        uint8_t cvtsi2ssOpcode[4];
+    };
+#pragma pack(pop)
+
+    static std::vector<uint8_t> buildExpectedTicksPatch() {
+        PatchPayload payload;
+        payload.movRaxOpcode[0] = 0x48;
+        payload.movRaxOpcode[1] = 0xB8;
+        payload.pointer = reinterpret_cast<uint64_t>(&g_expectedTicks);
+        payload.xorpsOpcode[0] = 0x0F;
+        payload.xorpsOpcode[1] = 0x57;
+        payload.xorpsOpcode[2] = 0xC0;
+        payload.cvtsi2ssOpcode[0] = 0xF3;
+        payload.cvtsi2ssOpcode[1] = 0x0F;
+        payload.cvtsi2ssOpcode[2] = 0x2A;
+        payload.cvtsi2ssOpcode[3] = 0x00;
+
+        std::vector<uint8_t> result(sizeof(payload));
+        std::memcpy(result.data(), &payload, sizeof(payload));
+        return result;
+    }
+
+    static bool ensureExpectedTicksPatch() {
+        if (g_expectedTicksPatchAttempted) {
+            return g_expectedTicksPatch != nullptr;
+        }
+
+        g_expectedTicksPatchAttempted = true;
+
+        auto* base = reinterpret_cast<uint8_t*>(geode::base::get());
+        size_t size = getModuleSize(base);
+        if (!base || size == 0) {
+            log::error("[TR-HACK][E002] TPS bypass: failed to read module size");
+            return false;
+        }
+
+        static constexpr std::string_view kExpectedTicksSig =
+            "F3 0F 58 C8 0F 57 C0 66 0F 3A 0A C1 0B F3 0F 5F C2 0F 29 45 ?? F3 44 0F 2C F8";
+
+        auto match = findHexPattern(base, size, kExpectedTicksSig);
+        if (!match) {
+            log::error("[TR-HACK][E003] TPS bypass: pattern scan miss for expected-ticks");
+            return false;
+        }
+
+        uintptr_t patchAddress = reinterpret_cast<uintptr_t>(base) + *match;
+        auto patchBytes = buildExpectedTicksPatch();
+        auto result = Mod::get()->patch(reinterpret_cast<void*>(patchAddress), patchBytes);
+        if (!result) {
+            log::error("[TR-HACK][E004] TPS bypass: patch write failed: {}", result.unwrapErr());
+            return false;
+        }
+
+        g_expectedTicksPatch = result.unwrap();
+        log::info("[TR-HACK][I003] TPS bypass: patch installed at 0x{:X}", patchAddress - reinterpret_cast<uintptr_t>(base));
+        return true;
+    }
+#endif
 
     static bool setExpectedTicksPatchEnabled(bool enabled) {
         if (enabled && !ensureExpectedTicksPatch()) {
@@ -410,7 +500,13 @@ namespace {
         setExpectedTicks(steps);
         engine->tickAccumulator = static_cast<float>(std::max(0.0, *extraDelta));
 
+#if defined(GEODE_IS_ARM_MAC)
+        for (int64_t i = 0; i < steps; ++i) {
+            layer->GJBaseGameLayer::update(static_cast<float>(timestep));
+        }
+#else
         layer->GJBaseGameLayer::update(static_cast<float>(totalDelta));
+#endif
     }
 }
 

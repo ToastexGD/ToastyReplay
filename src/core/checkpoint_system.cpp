@@ -1034,8 +1034,15 @@ class $modify(RecordingGuardPauseLayer, PauseLayer) {
 };
 
 class $modify(NoclipBaseLayer, GJBaseGameLayer) {
+#ifdef GEODE_IS_MACOS
+    void update(float dt) {
+        GJBaseGameLayer::update(dt);
+        processNoclipAccuracyFrame(PlayLayer::get());
+    }
+#else
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
         processNoclipAccuracyFrame(PlayLayer::get());
     }
+#endif
 };

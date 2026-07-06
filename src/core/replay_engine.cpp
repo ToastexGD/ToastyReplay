@@ -675,6 +675,49 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
     }
 
+#ifdef GEODE_IS_MACOS
+    void update(float dt) {
+        auto* engine = ReplayEngine::get();
+        auto* playLayer = PlayLayer::get();
+        if (!playLayer || !engine || engine->engineMode == MODE_DISABLED) {
+            return GJBaseGameLayer::update(dt);
+        }
+
+        refreshRngState();
+        int tick = tick_util::current(this, engine);
+        bool newTick = tick != engine->lastTickIndex;
+
+        if (engine->shouldResetAfterPersistencePlaybackDeath(playLayer)) {
+            if (m_levelSettings->m_platformerMode) return playLayer->resetLevelFromStart();
+            return playLayer->resetLevel();
+        }
+
+        if (tick > 2 && engine->initialRun && engine->hasMacro() && !m_levelEndAnimationStarted) {
+            engine->initialRun = false;
+            if (m_levelSettings->m_platformerMode) playLayer->resetLevelFromStart();
+            else playLayer->resetLevel();
+            return GJBaseGameLayer::update(dt);
+        }
+
+        if (newTick) {
+            engine->tickStartStep = m_currentStep;
+            engine->tickStartTimestamp = m_timestamp;
+            engine->clearQueuedSubstepState();
+            queueAutoclickerInputs();
+            if (engine->hasMacro() && engine->levelRestarting && !m_levelEndAnimationStarted) {
+                if (m_levelSettings->m_platformerMode) playLayer->resetLevelFromStart();
+                else playLayer->resetLevel();
+                return GJBaseGameLayer::update(dt);
+            }
+        }
+
+        GJBaseGameLayer::update(dt);
+
+        engine->lastTickIndex = tick;
+        engine->lastStepDelta = std::max(0, m_currentStep - engine->tickStartStep);
+    }
+#endif
+
     void dispatchDeferredActions(int tick) {
         auto* engine = ReplayEngine::get();
 
@@ -878,6 +921,19 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
     }
 
+#ifdef GEODE_IS_MACOS
+    void macSubstepDispatch() {
+        auto* engine = ReplayEngine::get();
+        if (!engine || engine->engineMode != MODE_EXECUTE || !engine->hasMacro()) {
+            return;
+        }
+        int tick = tick_util::current(this, engine);
+        executeTick(tick, 0);
+        processInputOnly(shouldUseInputOnlyTTRPlayback(), [&](int p) { dispatchInputOnlyTTRInputs(p); });
+        processInputOnly(shouldUseInputOnlyGDRPlayback(), [&](int p) { dispatchGDRInputsOnly(p); });
+    }
+#endif
+
     void processQueuedButtons(float dt, bool clearInputQueue) {
         auto* engine = ReplayEngine::get();
         bool executingCBS = engine->engineMode == MODE_EXECUTE &&
@@ -932,6 +988,11 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         m_fields->macroInput = previousMacroInput ||
             (executingCBS && engine->manualInputIgnoredActive() && !queuedSnapshot.empty());
         engine->cbsPlaybackProcessingQueue = executingCBS;
+#ifdef GEODE_IS_MACOS
+        if (!engine->simulatingPath && !engine->substepMidStep) {
+            macSubstepDispatch();
+        }
+#endif
         GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
 
         processInputOnly(shouldUseInputOnlyTTRPlayback(), [&](int p) { dispatchInputOnlyTTRInputs(p); });
@@ -939,6 +1000,11 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
         m_fields->macroInput = previousMacroInput;
         engine->cbsPlaybackProcessingQueue = previousCbsPlaybackProcessingQueue;
+#ifdef GEODE_IS_MACOS
+        if (engine->engineMode == MODE_CAPTURE && !engine->simulatingPath && !engine->substepMidStep) {
+            captureTick(tick_util::current(this, engine));
+        }
+#endif
         engine->cbsCaptureProcessingQueue = false;
         engine->queuedCaptureCommands.clear();
 
