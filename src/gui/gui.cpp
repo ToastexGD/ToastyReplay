@@ -1127,6 +1127,14 @@ bool ModuleCard(const char* name, const char* description, bool* enabled,
 
 static const void* activeModuleKey = nullptr;
 
+static float moduleContentHeightForProgress(float measuredHeight, float easedProgress) {
+    float const targetHeight = measuredHeight > 0.0f ? measuredHeight : 96.0f;
+    if (easedProgress >= 0.995f) {
+        return targetHeight;
+    }
+    return std::max(1.0f, targetHeight * easedProgress);
+}
+
 bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
                      ThemeEngine& theme, AnimationState& anim, int* keybind) {
     bool clicked = ModuleCard(name, description, enabled, theme, anim, keybind);
@@ -1153,8 +1161,8 @@ bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     char childId[128];
     snprintf(childId, sizeof(childId), "##mod_%s", name);
-    float childH = (data.progress >= 0.99f) ? 0.0f : (data.height > 0.0f ? data.height * t : 280.0f * t);
-    ImGui::BeginChild(childId, ImVec2(-1, childH), ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    float childH = moduleContentHeightForProgress(data.height, t);
+    ImGui::BeginChild(childId, ImVec2(-1, childH), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::Indent(14);
     ImGui::Dummy(ImVec2(0, 4));
 
@@ -1170,8 +1178,9 @@ void ModuleCardEnd() {
         auto it = iface.anim.moduleAnims.find(activeModuleKey);
         if (it != iface.anim.moduleAnims.end()) {
             float measured = ImGui::GetCursorPosY();
-            if (it->second.progress >= 0.99f)
+            if (measured > 0.0f) {
                 it->second.height = measured;
+            }
         }
         activeModuleKey = nullptr;
     }
@@ -4211,7 +4220,7 @@ void MenuInterface::drawClicksTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 4));
-    if (Widgets::ModuleCard("Click Sounds", "Play click and release sounds on input", &csm->enabled, theme, anim))
+    if (Widgets::ModuleCard("Click Sounds", "Play click and release sounds on input", &csm->enabled, theme, anim, &keybinds.clickSounds))
         mod->setSavedValue("click_enabled", csm->enabled);
 
     ImGui::Dummy(ImVec2(0, 6));

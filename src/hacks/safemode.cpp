@@ -88,7 +88,6 @@ class $modify(GuardedEndLevelLayer, EndLevelLayer) {
 
 class $modify(GuardedPlayLayer, PlayLayer) {
     struct Fields {
-        float respawnTimer = -1.0f;
         bool respawnScheduled = false;
     };
 
@@ -122,12 +121,12 @@ class $modify(GuardedPlayLayer, PlayLayer) {
             return;
         }
         float const delaySeconds = std::clamp(engine->respawnTimeOverrideMs, 0, 10000) / 1000.0f;
-        m_fields->respawnTimer = delaySeconds;
         m_fields->respawnScheduled = true;
+        this->unschedule(schedule_selector(GuardedPlayLayer::applyRespawnOverride));
         if (delaySeconds <= 0.0f) {
-            m_fields->respawnTimer = -1.0f;
-            m_fields->respawnScheduled = false;
-            this->resetLevel();
+            this->applyRespawnOverride(0.0f);
+        } else {
+            this->scheduleOnce(schedule_selector(GuardedPlayLayer::applyRespawnOverride), delaySeconds);
         }
     }
 
@@ -138,21 +137,17 @@ class $modify(GuardedPlayLayer, PlayLayer) {
         PlayLayer::delayedResetLevel();
     }
 
-    void update(float dt) {
-        PlayLayer::update(dt);
-        if (m_fields->respawnScheduled && m_fields->respawnTimer >= 0.0f) {
-            m_fields->respawnTimer -= dt;
-            if (m_fields->respawnTimer <= 0.0f) {
-                m_fields->respawnScheduled = false;
-                m_fields->respawnTimer = -1.0f;
-                this->resetLevel();
-            }
+    void applyRespawnOverride(float) {
+        if (!m_fields->respawnScheduled) {
+            return;
         }
+        m_fields->respawnScheduled = false;
+        this->resetLevel();
     }
 
     void resetLevel() {
         m_fields->respawnScheduled = false;
-        m_fields->respawnTimer = -1.0f;
+        this->unschedule(schedule_selector(GuardedPlayLayer::applyRespawnOverride));
         PlayLayer::resetLevel();
     }
 };

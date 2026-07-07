@@ -2,8 +2,27 @@
 
 #include <cassert>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 using namespace toasty::conversion;
+
+static std::string readProjectFile(char const* relativePath) {
+    static constexpr char const* prefixes[] = { "", "../", "../../", "../../../" };
+    for (auto const* prefix : prefixes) {
+        auto path = std::filesystem::path(prefix) / relativePath;
+        if (!std::filesystem::exists(path)) {
+            continue;
+        }
+        std::ifstream in(path, std::ios::binary);
+        assert(in.good());
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    assert(!"missing project file for source regression test");
+    return {};
+}
 
 static void test_conditional_source_signatures_allow_ttr3() {
     {
@@ -178,11 +197,45 @@ static void test_ttr3_same_tick_non_swift_taps_preserve_edges_with_cbs_offsets()
     assert(macro.inputs[2].stepOffset > macro.inputs[1].stepOffset);
 }
 
+static void test_respawn_override_uses_scheduler_not_dead_update_polling() {
+    auto source = readProjectFile("src/hacks/safemode.cpp");
+    assert(source.find("scheduleOnce(schedule_selector(GuardedPlayLayer::applyRespawnOverride)") != std::string::npos);
+    assert(source.find("unschedule(schedule_selector(GuardedPlayLayer::applyRespawnOverride)") != std::string::npos);
+    assert(source.find("respawnTimer") == std::string::npos);
+}
+
+static void test_module_card_animation_uses_measured_height_without_snap() {
+    auto source = readProjectFile("src/gui/gui.cpp");
+    assert(source.find("moduleContentHeightForProgress") != std::string::npos);
+    assert(source.find("ImGuiChildFlags_None") != std::string::npos);
+    assert(source.find("280.0f * t") == std::string::npos);
+    assert(source.find("it->second.height = measured;") != std::string::npos);
+}
+
+static void test_dispatch_keybinds_are_visible_on_module_cards() {
+    auto source = readProjectFile("src/gui/gui.cpp");
+    assert(source.find("Widgets::ModuleCard(\"Autoclicker\", \"Auto-click at configurable intervals\", &ac->enabled, theme, anim, &keybinds.autoclicker)") != std::string::npos);
+    assert(source.find("Widgets::ModuleCard(\"Click Sounds\", \"Play click and release sounds on input\", &csm->enabled, theme, anim, &keybinds.clickSounds)") != std::string::npos);
+}
+
+static void test_cocos_menu_warning_is_registered_for_frontend_setting() {
+    auto frontend = readProjectFile("src/gui/cocos/frontend.cpp");
+    auto popup = readProjectFile("src/gui/cocos/tr_menu_popup.cpp");
+    assert(frontend.find("listenForSettingChanges<std::string>(\"menu_frontend\"") != std::string::npos);
+    assert(frontend.find("my cocos menu and structuring sucks") != std::string::npos);
+    assert(frontend.find("FLAlertLayer::create(\"Warning\"") != std::string::npos);
+    assert(popup.find("toasty::frontend::setMenuFrontend(idx == 1)") != std::string::npos);
+}
+
 int main() {
     test_conditional_source_signatures_allow_ttr3();
     test_vanilla_ttr3_conversion_strips_playback_fixups_but_keeps_source_signature();
     test_cbs_ttr3_conversion_keeps_authoritative_anchors();
     test_vanilla_ttr3_swift_clicks_keep_every_edge();
     test_ttr3_same_tick_non_swift_taps_preserve_edges_with_cbs_offsets();
+    test_respawn_override_uses_scheduler_not_dead_update_polling();
+    test_module_card_animation_uses_measured_height_without_snap();
+    test_dispatch_keybinds_are_visible_on_module_cards();
+    test_cocos_menu_warning_is_registered_for_frontend_setting();
     return 0;
 }

@@ -3,16 +3,52 @@
 #include "gui/cocos/tr_menu_popup.hpp"
 #include "gui/gui.hpp"
 
+#include <Geode/binding/FLAlertLayer.hpp>
 #include <Geode/loader/Mod.hpp>
+#include <Geode/loader/SettingV3.hpp>
+#include <mutex>
 #include <string>
 
 using namespace geode::prelude;
 
 namespace toasty::frontend {
+namespace {
+    constexpr char const* kCocosMenuWarningText =
+        "my cocos menu and structuring sucks, if you find any bugs please report it in my discord, believe me, there are bugs. Thanks!";
+
+    std::once_flag g_frontendWarningInit;
+    bool g_lastFrontendWasCocos = false;
+
+    bool isCocosValue(std::string const& value) {
+        return value == "Cocos2d";
+    }
+
+    void showCocosMenuWarning() {
+        FLAlertLayer::create("Warning", kCocosMenuWarningText, "OK")->show();
+    }
+
+    void handleMenuFrontendChanged(std::string const& value) {
+        bool const nowCocos = isCocosValue(value);
+        if (nowCocos && !g_lastFrontendWasCocos) {
+            showCocosMenuWarning();
+        }
+        g_lastFrontendWasCocos = nowCocos;
+    }
+
+    void initializeFrontendWarningListener() {
+        std::call_once(g_frontendWarningInit, [] {
+            g_lastFrontendWasCocos = isCocosValue(Mod::get()->getSettingValue<std::string>("menu_frontend"));
+            listenForSettingChanges<std::string>("menu_frontend", [](std::string const& value) {
+                handleMenuFrontendChanged(value);
+            });
+        });
+    }
+}
 
 MenuFrontend current() {
+    initializeFrontendWarningListener();
     auto value = Mod::get()->getSettingValue<std::string>("menu_frontend");
-    if (value == "Cocos2d") {
+    if (isCocosValue(value)) {
         return MenuFrontend::Cocos;
     }
     return MenuFrontend::ImGui;
@@ -20,6 +56,11 @@ MenuFrontend current() {
 
 bool isCocos() {
     return current() == MenuFrontend::Cocos;
+}
+
+void setMenuFrontend(bool useCocos) {
+    initializeFrontendWarningListener();
+    Mod::get()->setSettingValue<std::string>("menu_frontend", useCocos ? std::string("Cocos2d") : std::string("ImGui"));
 }
 
 void toggleMenu() {

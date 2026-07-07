@@ -15,6 +15,8 @@ MenuFrontend current();
 
 bool isCocos();
 
+void setMenuFrontend(bool useCocos);
+
 void toggleMenu();
 
 void persistSettings();

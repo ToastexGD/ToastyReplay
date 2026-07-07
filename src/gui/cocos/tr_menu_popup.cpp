@@ -1131,7 +1131,7 @@ void TRMenuPopup::buildOnlineTab(CCNode* content) {
 void TRMenuPopup::buildSettingsTab(CCNode* content) {
     content->addChild(SectionHeaderCell::create("General"));
     content->addChild(ComboCell::create("Menu Style", { "ImGui", "Cocos2d" }, toasty::frontend::isCocos() ? 1 : 0, [](int idx) {
-        Mod::get()->setSettingValue<std::string>("menu_frontend", idx == 1 ? std::string("Cocos2d") : std::string("ImGui"));
+        toasty::frontend::setMenuFrontend(idx == 1);
         Notification::create("Reopen the menu to apply", NotificationIcon::Info, 1.0f)->show();
     }));
 
