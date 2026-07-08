@@ -3215,15 +3215,15 @@ static const char* audioCodecRecommendation(const std::string& c) {
 
 static bool audioCodecIsOffered(const std::string& c) {
     static constexpr const char* kOffered[] = {
-
+        // lossy
         "aac", "libfdk_aac", "ac3", "eac3", "mp3", "libmp3lame", "mp2", "libtwolame",
         "libopus", "opus", "libvorbis", "vorbis", "dca", "wmav2", "wmapro",
-
+        // lossless
         "flac", "alac", "truehd", "tta", "wavpack", "libwavpack",
         "pcm_s16le", "pcm_s24le", "pcm_f32le",
-
+        // voice / speech
         "speex", "libspeex", "nellymoser", "wmavoice",
-
+        // experimental
         "sonic", "sonic_ls",
     };
     for (auto n : kOffered) if (c == n) return true;
@@ -3249,44 +3249,44 @@ static constexpr AudioContainerLabel kAudioContainerLabels[] = {
 };
 
 static unsigned audioCodecContainerMask(const std::string& codec) {
-    constexpr unsigned MP4FAM = AC_MP4 | AC_MOV | AC_M4V;
-    constexpr unsigned ISOALL = MP4FAM | AC_MKV;
-    constexpr unsigned EVERY  = kAllAudioContainers;
-
+    constexpr unsigned MP4FAM = AC_MP4 | AC_MOV | AC_M4V;        // ISO-BMFF / QuickTime family
+    constexpr unsigned ISOALL = MP4FAM | AC_MKV;                 // ISO family + Matroska
+    constexpr unsigned EVERY  = kAllAudioContainers;             // all five, including WMV/ASF
+    // M4V uses ffmpeg's ipod muxer which only accepts AAC/ALAC/AC-3, MPEG audio layers are rejected
     constexpr unsigned NOIPOD = kAllAudioContainers & ~AC_M4V;
 
     struct Entry { const char* codec; unsigned containers; };
     static constexpr Entry kCompat[] = {
-
+        // AAC / Apple Lossless: every container except ASF/WMV
         { "aac",        ISOALL }, { "aac_mf",   ISOALL }, { "aac_at", ISOALL },
         { "libfdk_aac", ISOALL }, { "alac",     ISOALL },
-
+        // Dolby AC-3 muxes everywhere; E-AC-3 stays in the ISO family + Matroska
         { "ac3",        EVERY  }, { "ac3_fixed", EVERY }, { "ac3_mf", EVERY },
         { "eac3",       ISOALL },
-
+        // MPEG-1/2 audio layers: broadly supported, but the ipod/m4v muxer rejects them
         { "mp3",        NOIPOD }, { "mp3_mf", NOIPOD }, { "libmp3lame", NOIPOD }, { "libshine", NOIPOD },
         { "mp2",        NOIPOD }, { "mp2fixed", NOIPOD }, { "libtwolame", NOIPOD },
-
+        // DTS: ISO family + Matroska
         { "dca",        ISOALL },
-
+        // Opus / Vorbis / Speex: Matroska only among these containers
         { "opus",       AC_MKV }, { "libopus",   AC_MKV },
         { "vorbis",     AC_MKV }, { "libvorbis", AC_MKV },
         { "speex",      AC_MKV }, { "libspeex",  AC_MKV },
         { "nellymoser", AC_MKV },
-
+        // Lossless / niche: Matroska only
         { "flac",       AC_MKV }, { "truehd",  AC_MKV }, { "mlp",     AC_MKV },
         { "tta",        AC_MKV }, { "wavpack", AC_MKV }, { "libwavpack", AC_MKV },
         { "sonic",      AC_MKV }, { "sonic_ls", AC_MKV }, { "ralf",   AC_MKV },
-
+        // Windows Media Audio: ASF/WMV only
         { "wmav1",      AC_WMV }, { "wmav2",   AC_WMV },
         { "wmapro",     AC_WMV }, { "wmavoice", AC_WMV },
     };
     for (auto const& e : kCompat)
         if (codec == e.codec) return e.containers;
-
+    // QuickTime + Matroska take raw PCM and ADPCM families
     if (codec.rfind("pcm_", 0) == 0 || codec.rfind("adpcm_", 0) == 0)
         return AC_MKV | AC_MOV;
-    return 0;
+    return 0;  // unknown / telephony codec
 }
 
 static unsigned extContainerFlag(const std::string& ext) {
@@ -3317,7 +3317,7 @@ static unsigned videoFamilyContainerMask(RenderCodecFamily family) {
     switch (family) {
         case RenderCodecFamily::H265: return AC_MP4 | AC_MKV | AC_MOV;
         case RenderCodecFamily::AV1:  return AC_MP4 | AC_MKV | AC_WMV;
-        case RenderCodecFamily::VP9:  return AC_MKV;
+        case RenderCodecFamily::VP9:  return AC_MKV;  // Matroska/WebM (WebM not modeled)
         case RenderCodecFamily::VP8:  return AC_MKV;
         case RenderCodecFamily::VVC:  return AC_MP4 | AC_MKV | AC_MOV;
         default:                      return kAllAudioContainers;
@@ -3339,6 +3339,20 @@ static bool videoCodecIsGpu(const std::string& codec) {
     return codec.find("nvenc") != std::string::npos
         || codec.find("_amf")  != std::string::npos
         || codec.find("_qsv")  != std::string::npos;
+}
+
+static std::filesystem::path resolveProbeFfmpegPath() {
+    auto ffmpegSetting = Mod::get()->getSettingValue<std::filesystem::path>("ffmpeg_path");
+    if (!ffmpegSetting.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(ffmpegSetting, ec)) return ffmpegSetting;
+    }
+#ifdef GEODE_IS_WINDOWS
+    wchar_t found[MAX_PATH] = {};
+    if (SearchPathW(nullptr, L"ffmpeg.exe", nullptr, MAX_PATH, found, nullptr) > 0)
+        return std::filesystem::path(found);
+#endif
+    return {};
 }
 
 struct KnownVideoEncoder {
@@ -3413,7 +3427,7 @@ void MenuInterface::drawRenderPresetsSection() {
             if (preset) {
                 if (isExp) {
                     expConfig = preset->toRenderConfig();
-                    expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+                    expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily, resolveProbeFfmpegPath());
                     snprintf(expRenderFpsBuf, sizeof(expRenderFpsBuf), "%u", expConfig.fps);
                     {
                         auto rp = resolve(expConfig);
@@ -3561,6 +3575,7 @@ void MenuInterface::drawRenderDisplaySection() {
         bool isLossless = expConfig.tier == RenderQualityTier::Lossless;
         bool customVideoFilter = expAdvVideoArgsBuf[0]
             && strcmp(expAdvVideoArgsBuf, kDefaultVideoArgs) != 0;
+        bool apiLimited = resolveProbeFfmpegPath().empty();
 
         ImGui::BeginDisabled(rendering);
         if (Widgets::ToggleSwitch("Pulse Fix", &engine->pulseFix, theme, anim))
@@ -3574,17 +3589,24 @@ void MenuInterface::drawRenderDisplaySection() {
             ImGui::EndTooltip();
         }
 
-        ImGui::BeginDisabled(rendering || isLossless || customVideoFilter);
+        ImGui::BeginDisabled(rendering || isLossless || customVideoFilter || apiLimited);
         if (Widgets::ToggleSwitch("Color Fix", &expConfig.colorFix, theme, anim))
             saveRenderConfig(expConfig);
         ImGui::EndDisabled();
+        if (apiLimited) {
+            ImGui::SameLine(0, 8.0f);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+            ImGui::TextUnformatted("[needs ffmpeg.exe]");
+            ImGui::PopStyleColor();
+        }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(320.0f);
             ImGui::TextUnformatted("Tags the video with the BT.709 color matrix so players and YouTube "
                                    "don't misread it as BT.601 (which dulls/shifts colors, greens especially). "
                                    "Makes the recording match in-game colors. Works on the GPU (NV12) path "
-                                   "with no speed cost. Enable before rendering.");
+                                   "with no speed cost. Enable before rendering. Needs ffmpeg.exe - the "
+                                   "FFmpeg API mod always uses the RGB path, where this has no effect.");
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
@@ -3606,6 +3628,8 @@ void MenuInterface::drawRenderDisplaySection() {
 }
 
 void MenuInterface::drawRenderTab() {
+    Renderer::detectGpuVendor();
+
     if (ReplayEngine::get()->useNewRenderer) {
         drawExpRenderTab();
     }
@@ -3853,6 +3877,14 @@ void MenuInterface::drawRenderTab() {
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Encoding", theme);
 
+    bool exeAvailable = !resolveProbeFfmpegPath().empty();
+    if (!exeAvailable) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.70f, 0.20f, 1.0f));
+        imguiTextWrappedTr("[!] No ffmpeg.exe found. Built-in FFmpeg API is limited to MP4, H.264/H.265/AV1, and AAC audio. Others are unavailable. Set an ffmpeg.exe path for full features.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 4));
+    }
+
     imguiTextTr("Codec");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
@@ -3915,6 +3947,7 @@ void MenuInterface::drawRenderTab() {
         imguiTextTr("Audio Codec");
         ImGui::SameLine(inputW);
         ImGui::SetNextItemWidth(-1);
+        ImGui::BeginDisabled(!exeAvailable);
         if (ImGui::BeginCombo("##renderACodecCombo", kAudioCodecLabels[acodecIdx])) {
             for (int i = 0; kAudioCodecIds[i]; ++i) {
                 bool sel = (acodecIdx == i);
@@ -3936,6 +3969,7 @@ void MenuInterface::drawRenderTab() {
             }
             ImGui::EndCombo();
         }
+        ImGui::EndDisabled();
     }
 
     imguiTextTr("Audio Args");
@@ -3996,10 +4030,11 @@ void MenuInterface::drawRenderTab() {
         ImGui::PopStyleColor();
     }
 
-    for (auto& entry : renderFiles) {
+    for (int i = 0; i < (int)renderFiles.size(); i++) {
+        auto& entry = renderFiles[i];
         std::string name = toasty::pathToUtf8(entry.path().stem());
         std::string ext = toasty::pathToUtf8(entry.path().extension());
-        ImGui::PushID(name.c_str());
+        ImGui::PushID(i);
 
         float rowH = ImGui::GetTextLineHeight() + 8.0f;
         float fullRowW = ImGui::GetContentRegionAvail().x;
@@ -5436,8 +5471,12 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
     mod->setSavedValue("eng_persistence_mode", eng->persistenceMode);
 
-    mod->setSavedValue("render_width", (int64_t)std::atoi(renderWidthBuf));
-    mod->setSavedValue("render_height", (int64_t)std::atoi(renderHeightBuf));
+    int renderW = std::max(2, std::atoi(renderWidthBuf) & ~1);
+    int renderH = std::max(2, std::atoi(renderHeightBuf) & ~1);
+    snprintf(renderWidthBuf, sizeof(renderWidthBuf), "%d", renderW);
+    snprintf(renderHeightBuf, sizeof(renderHeightBuf), "%d", renderH);
+    mod->setSavedValue("render_width", (int64_t)renderW);
+    mod->setSavedValue("render_height", (int64_t)renderH);
     mod->setSavedValue("render_fps", (int64_t)std::atoi(renderFpsBuf));
     mod->setSavedValue("render_codec", std::string(renderCodecBuf));
     mod->setSavedValue("render_bitrate", std::string(renderBitrateBuf));
@@ -5564,14 +5603,22 @@ void MenuInterface::loadRenderSettings() {
     renderBufsInit = true;
 }
 
+// has to make another one (this is exprimental render engine)
 void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
     auto* mod = Mod::get();
+    std::string effCodec   = preset.codec;
+    std::string effBitrate = preset.bitrate;
+    if (effCodec.empty() || effBitrate.empty()) {
+        auto rp = resolve(preset.toRenderConfig());
+        if (effCodec.empty())   effCodec   = rp.codec;
+        if (effBitrate.empty()) effBitrate = std::to_string(std::max<int64_t>(1, rp.apiBitrate / 1000000));
+    }
 
     snprintf(renderWidthBuf,      sizeof(renderWidthBuf),      "%d",  preset.width);
     snprintf(renderHeightBuf,     sizeof(renderHeightBuf),     "%d",  preset.height);
     snprintf(renderFpsBuf,        sizeof(renderFpsBuf),        "%d",  preset.fps);
-    snprintf(renderCodecBuf,      sizeof(renderCodecBuf),      "%s",  preset.codec.c_str());
-    snprintf(renderBitrateBuf,    sizeof(renderBitrateBuf),    "%s",  preset.bitrate.c_str());
+    snprintf(renderCodecBuf,      sizeof(renderCodecBuf),      "%s",  effCodec.c_str());
+    snprintf(renderBitrateBuf,    sizeof(renderBitrateBuf),    "%s",  effBitrate.c_str());
     snprintf(renderExtBuf,        sizeof(renderExtBuf),        "%s",  preset.ext.c_str());
     snprintf(renderArgsBuf,       sizeof(renderArgsBuf),       "%s",  preset.extraArgs.c_str());
     snprintf(renderVideoArgsBuf,  sizeof(renderVideoArgsBuf),  "%s",  preset.videoArgs.c_str());
@@ -5590,8 +5637,8 @@ void MenuInterface::applyRenderPreset(RenderPreset const& preset) {
     mod->setSavedValue("render_width",              (int64_t)preset.width);
     mod->setSavedValue("render_height",             (int64_t)preset.height);
     mod->setSavedValue("render_fps",                (int64_t)preset.fps);
-    mod->setSavedValue("render_codec",              preset.codec);
-    mod->setSavedValue("render_bitrate",            preset.bitrate);
+    mod->setSavedValue("render_codec",              effCodec);
+    mod->setSavedValue("render_bitrate",            effBitrate);
     mod->setSavedValue("render_file_extension",     preset.ext);
     mod->setSavedValue("render_args",               preset.extraArgs);
     mod->setSavedValue("render_video_args",         preset.videoArgs);
@@ -5647,7 +5694,8 @@ RenderPreset MenuInterface::captureRenderPreset() {
     p.audioCodec = (renderAudioCodecBuf[0] && std::string(renderAudioCodecBuf) != "aac")
                    ? renderAudioCodecBuf : "";
     float after = 3.0f;
-    if (auto parsed = toasty::parseFloat(renderSecondsAfterBuf)) after = *parsed;
+    auto* begin = renderSecondsAfterBuf;
+    std::from_chars(begin, begin + strlen(begin), after);
     p.secondsAfter      = after;
     p.includeAudio      = renderIncludeAudio;
     p.includeClicks     = renderIncludeClicks;
@@ -5705,7 +5753,7 @@ void MenuInterface::loadExpRenderSettings() {
         if (expProbedVideoCodecs.empty()) {
             for (auto fam : { RenderCodecFamily::H264, RenderCodecFamily::H265,
                               RenderCodecFamily::AV1, RenderCodecFamily::VP9 }) {
-                auto gpu = probeGpuEncoder(fam);
+                auto gpu = probeGpuEncoder(fam, probeExe);
                 if (!gpu.empty()) expProbedVideoCodecs.push_back(gpu);
             }
             for (const char* c : { "libx264", "libx264rgb", "libx265", "libsvtav1" })
@@ -5901,6 +5949,7 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
         unsigned curExtFlag = extContainerFlag(curExt);
         unsigned audioMask  = audioCodecContainerMask(curAudioCodec);
 
+        // current target summary
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.62f, 0.62f, 0.62f, 1.0f));
         if (curExtFlag)
             ImGui::Text("Output %s  -  audio %s", curExt.c_str(), curAudioCodec.c_str());
@@ -5967,6 +6016,7 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
             unsigned vMask = videoFamilyContainerMask(f.fam);
             bool     extOk = curExtFlag == 0 || (vMask & curExtFlag);
 
+            // family header: name + supported containers
             ImGui::Dummy(ImVec2(0, 3));
             ImGui::PushStyleColor(ImGuiCol_Text, extOk
                 ? theme.getAccent()
@@ -5987,6 +6037,14 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
                 : ImVec4(0.95f, 0.62f, 0.32f, 0.85f));
             ImGui::TextUnformatted(famInfo.c_str());
             ImGui::PopStyleColor();
+
+            if (f.fam == RenderCodecFamily::VVC) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.55f, 0.30f, 1.0f));
+                ImGui::TextWrapped("  [!] Very slow: software-only, ~30-40x slower than real-time. "
+                                   "The game will be unresponsive for the entire render. Use a GPU "
+                                   "encoder (NVENC) or H.264/H.265 for practical renders.");
+                ImGui::PopStyleColor();
+            }
 
             for (const KnownVideoEncoder* e : encs) {
                 bool sel = std::string(expAdvCodecBuf) == e->name;
@@ -6014,7 +6072,7 @@ void MenuInterface::drawExpVideoCodecPicker(bool ffmpegExeAvail, const std::stri
                         expConfig.useGpu     = true;
                         expConfig.codec      = std::nullopt;
                     } else {
-                        expConfig.gpuEncoder = probeGpuEncoder(f.fam);
+                        expConfig.gpuEncoder = probeGpuEncoder(f.fam, resolveProbeFfmpegPath());
                         expConfig.useGpu     = false;
                         expConfig.codec      = std::string(e->name);
                     }
@@ -6063,7 +6121,7 @@ void MenuInterface::drawExpRenderTab() {
         loadExpRenderSettings();
 
     if (!expGpuProbed) {
-        expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily);
+        expConfig.gpuEncoder = probeGpuEncoder(expConfig.codecFamily, resolveProbeFfmpegPath());
         expGpuProbed = true;
     }
 
@@ -6144,7 +6202,6 @@ void MenuInterface::drawExpRenderTab() {
         for (int i = 0; i < kResOptionCount; i++) {
             bool sel = (resIndex == i);
             if (kResOptions[i].proOnly && !render8kUnlocked) {
-
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.62f, 1.0f));
                 std::string lockedLabel = std::string(kResOptions[i].label) + "  (Pro)";
                 if (ImGui::Selectable(lockedLabel.c_str(), false))
@@ -6236,9 +6293,7 @@ void MenuInterface::drawExpRenderTab() {
     bool apiLimited = !ffmpegAvail;
     if (apiLimited) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.78f, 0.15f, 1.0f));
-        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control. CRF, max bitrate, "
-                           "filters, speed tuning and custom audio (AAC only) are disabled; resolution, "
-                           "FPS, quality, codec and container still apply.");
+        ImGui::TextWrapped("[i] FFmpeg API mode - install ffmpeg.exe for full control");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, 4));
     }
@@ -6374,6 +6429,19 @@ void MenuInterface::drawExpRenderTab() {
         ImGui::PopStyleColor();
     }
 
+    {
+        static int encodeTimeout = -1;
+        if (encodeTimeout < 0)
+            encodeTimeout = std::clamp(Mod::get()->getSavedValue<int>("render_encode_timeout", 30), 5, 600);
+        imguiTextTr("Render Timeout (s)");
+        ImGui::SameLine(inputW);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputInt("##renderTimeout", &encodeTimeout)) {
+            encodeTimeout = std::clamp(encodeTimeout, 5, 600);
+            Mod::get()->setSavedValue<int>("render_encode_timeout", encodeTimeout);
+        }
+    }
+
     drawRenderAudioSection();
     drawRenderDisplaySection();
 
@@ -6417,7 +6485,7 @@ void MenuInterface::drawExpRenderTab() {
             else expConfig.crf = std::nullopt;
             saveRenderConfig(expConfig);
         }
-        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf), apiLimited);
+        advInput("Max Bitrate",  "##expAdvBitrate",  expAdvMaxBitrateBuf, sizeof(expAdvMaxBitrateBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.maxBitrate = expAdvMaxBitrateBuf[0] ? std::optional<std::string>(expAdvMaxBitrateBuf) : std::nullopt;
             saveRenderConfig(expConfig);
@@ -6432,12 +6500,12 @@ void MenuInterface::drawExpRenderTab() {
             ImGui::TextWrapped("[!] Unrecognized container. Supported: .mp4  .mkv  .wmv  .mov  .m4v");
             ImGui::PopStyleColor();
         }
-        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf), apiLimited);
+        advInput("Extra Args",   "##expAdvArgs",     expAdvExtraArgsBuf,  sizeof(expAdvExtraArgsBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.extraArgs = expAdvExtraArgsBuf[0] ? std::optional<std::string>(expAdvExtraArgsBuf) : std::nullopt;
             saveRenderConfig(expConfig);
         }
-        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf), apiLimited);
+        advInput("Video Filter", "##expAdvVArgs",    expAdvVideoArgsBuf,  sizeof(expAdvVideoArgsBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             if (!expAdvVideoArgsBuf[0] && expConfig.qualityColorspace)
                 snprintf(expAdvVideoArgsBuf, sizeof(expAdvVideoArgsBuf), "%s", kDefaultVideoArgs);
@@ -6475,7 +6543,7 @@ void MenuInterface::drawExpRenderTab() {
             ImGui::SameLine(inputW);
             ImGui::SetNextItemWidth(-1);
             ImGui::BeginDisabled(apiLimited);
-
+            // the API path always outputs AAC, so show that as the locked value
             const char* shownAudioCodec = apiLimited ? "aac" : curCodec;
             if (Widgets::StyledButton((std::string(shownAudioCodec) + "##expAudioCodecBtn").c_str(),
                                       ImVec2(-1, 28.0f), theme, anim, 6.0f))
@@ -6503,7 +6571,7 @@ void MenuInterface::drawExpRenderTab() {
 
             drawExpAudioCodecPicker(ffmpegAvail);
         }
-        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf), apiLimited);
+        advInput("Audio Args",   "##expAdvAArgs",    expAdvAudioArgsBuf,  sizeof(expAdvAudioArgsBuf));
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             expConfig.audioArgs = expAdvAudioArgsBuf[0] ? std::optional<std::string>(expAdvAudioArgsBuf) : std::nullopt;
             saveRenderConfig(expConfig);
@@ -6530,7 +6598,7 @@ void MenuInterface::drawExpRenderTab() {
                 ImGui::TextUnformatted("Tip: Install ffmpeg.exe for a better experience");
                 ImGui::PopStyleColor();
                 ImGui::Dummy(ImVec2(0, 2));
-                ImGui::TextWrapped("ffmpeg.exe enables custom audio codecs during rendering.\nSet the path in Settings > ffmpeg_path.");
+                ImGui::TextWrapped("ffmpeg.exe enables custom audio codecs during rendering.\nAlso more features!");
                 ImGui::EndPopup();
             }
         }
@@ -6597,9 +6665,7 @@ void MenuInterface::drawExpRenderTab() {
             sizeStr = fmt::format("{:.0f}KB", fileSize / 1024.0);
 
         auto ftime  = entry.last_write_time();
-
-        auto stime  = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+        auto stime  = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
         auto tt     = std::chrono::system_clock::to_time_t(stime);
         std::tm tmv{};
 #ifdef GEODE_IS_WINDOWS
@@ -6681,6 +6747,7 @@ void MenuInterface::drawExpRenderTab() {
                 ImVec2(tagX + bPadX, bY + bPadY), toU32(withAlpha(badgeColor, 0.98f)), resBadge.c_str());
         }
 
+        // Open button
         ImGui::SameLine(fullRowW - btnW * 2 - 4.0f);
         ImGui::InvisibleButton("##rvopen", ImVec2(btnW, rvRowH));
         {
@@ -6703,6 +6770,7 @@ void MenuInterface::drawExpRenderTab() {
             if (hov) ImGui::SetTooltip("Open");
         }
 
+        // Delete button
         ImGui::SameLine(fullRowW - btnW);
         ImGui::InvisibleButton("##rvdel", ImVec2(btnW, rvRowH));
         {
@@ -7210,6 +7278,7 @@ void MenuInterface::ensureLogoTexture() {
 }
 
 $on_mod(Loaded) {
+    Renderer::cleanupOrphanedRenderFiles();
     ImGuiCocos::get().setup([] {
         MenuInterface::get()->initialize();
     }).draw([] {

@@ -68,7 +68,7 @@ struct RenderSoundEvent {
     std::string path;
     float time;
     float volume;
-    float speed;
+    float speed;        // pitch multiplier (1.0 = normal; ignored in mix for now)
 };
 
 class RenderTexture {
@@ -81,9 +81,11 @@ public:
     bool nv12 = false;
     cocos2d::CCTexture2D* texture = nullptr;
 
+    ~RenderTexture();
     void begin(bool wantNv12, FrameCaptureService& frameCapture);
     void end();
-
+    // reuseLastScene: skip the scene re-render and read back the existing FBO contents again,
+    // used to emit duplicate output frames (output fps > sim tps) without redoing pl->visit().
     void capture(FrameCaptureService& frameCapture, cocos2d::CCNode* overlay = nullptr, bool reuseLastScene = false);
     void flushPbo(FrameCaptureService& frameCapture);
 
@@ -93,11 +95,11 @@ private:
     int     m_pboCount      = kPboRingDepth;
     int     m_pboFrameCount = 0;
     size_t  m_pboSize       = 0;
-
+    // NV12 pass: [0] = Y plane (R8, w×h), [1] = UV plane (RG8, w/2×h/2)
     GLuint  m_prog[2]     = {};
     GLuint  m_planeFbo[2] = {};
     GLuint  m_planeTex[2] = {};
-
+    // diagnostic: per-phase capture cost, to see where 4K time goes
     double  m_dbgVisitSec = 0.0;
     double  m_dbgMapSec   = 0.0;
     double  m_dbgCopySec  = 0.0;
@@ -110,8 +112,8 @@ private:
     std::deque<CopyJob>     m_copyJobs;
     bool                    m_copyStop      = false;
     int                     m_copyInFlight  = 0;
-    bool                    m_pboCopyBusy[kPboRingDepth] = {};
-    bool                    m_pboMapped[kPboRingDepth]   = {};
+    bool                    m_pboCopyBusy[kPboRingDepth] = {};  // guarded by m_copyMutex
+    bool                    m_pboMapped[kPboRingDepth]   = {};  // render thread only
     FrameCaptureService*    m_copyTarget    = nullptr;
 
     bool initNv12Pass();
@@ -129,10 +131,11 @@ public:
         : width(1920),
           height(1080),
           fps(60) {}
+    ~Renderer();
 
     bool levelFinished = false;
-    bool recording = false;
-    bool pause = false;
+    std::atomic<bool> recording = false;
+    std::atomic<bool> pause = false;
     int audioMode = AUDIO_OFF;
     float ogMusicVol = 1.f;
     float ogSFXVol = 1.f;
@@ -147,7 +150,7 @@ public:
     bool hideLevelComplete = false;
     int finishFrame = 0;
     int levelStartFrame = 0;
-    int cadenceLogFrames = 0;
+    int cadenceLogFrames = 0;  // diagnostic: output frames emitted, for cadence logging
     int lastProgressPercent = -1;
     bool clockPrimed = false;
     bool leadInFixEligible = false;
@@ -161,8 +164,8 @@ public:
     double lastFrame_t = 0;
     double extra_t = 0;
 
-    RenderTexture renderTex;
     FrameCaptureService frameCapture;
+    RenderTexture renderTex;
     EncodeSession encodeSession;
     AudioCaptureService audioCapture;
     std::string codec;
@@ -187,6 +190,8 @@ public:
     void captureFrame(bool reuseLastScene = false);
     void changeRes(bool original);
 
+    static void detectGpuVendor();
+
     void start();
     void start(const RenderConfig& config);
     void stop(int frame = 0);
@@ -199,17 +204,46 @@ public:
     float getTPS() const;
 
     std::optional<RenderConfig> m_pendingConfig;
+    static void cleanupOrphanedRenderFiles();
 
 private:
     std::thread m_encodeThread;
-
+    // true from thread launch until runEncodeLoop fully returns (frames drained,
+    // audio muxed). A new render must not start while this is set.
     std::atomic<bool> m_encodeActive{false};
     std::optional<ResolvedEncodeParams> m_resolvedParams;
     std::string m_extOverride;
+
+    // crash handle
+    enum class EncodeCrashReason { Exception, HardwareFault, Hang };
+    std::thread       m_watchdogThread;
+    std::atomic<bool> m_watchdogStop{false};
+    std::atomic<bool> m_encodeHang{false};
+    std::atomic<bool> m_encodeFinalizing{false};
+    std::atomic<bool> m_crashHandled{false};
+    std::atomic<long long> m_blockingSinceNs{0};
+    // Raw HANDLE copies (void*) of the live ffmpeg subprocess, so the watchdog and
+    // the crash handler can terminate it without touching the owning C++ object.
+    std::atomic<void*> m_activeProcessHandle{nullptr};
+    std::atomic<void*> m_activeJobHandle{nullptr};
+    int m_encodeTimeoutSec = 30;
+    std::vector<std::filesystem::path> m_inflightFiles;
 
     bool resolveEncoder();
     void restoreAudioVolumes();
     bool isLevelComplete();
     void startFromPending();
     void runEncodeLoop(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
+#ifdef GEODE_IS_WINDOWS
+    static void encodeSehBoundary(Renderer* self, const std::filesystem::path* songFile, float songOffset, bool fadeIn, bool fadeOut, const std::string* extension, int64_t bitrateApi);
+#endif
+    void runEncodeLoopGuarded(const std::filesystem::path& songFile, float songOffset, bool fadeIn, bool fadeOut, const std::string& extension, int64_t bitrateApi);
+    void runEncodeLoopBody(std::filesystem::path songFile, float songOffset, bool fadeIn, bool fadeOut, std::string extension, int64_t bitrateApi);
+
+    void startWatchdog();
+    void stopWatchdog();
+    void watchdogLoop();
+    void onEncodeCrash(EncodeCrashReason reason);
+    void registerInflightFile(const std::filesystem::path& file);
+    void clearInflightFiles();
 };

@@ -12,34 +12,44 @@
 
 using namespace geode::prelude;
 
-std::string probeGpuEncoder(RenderCodecFamily family) {
-    auto codecs = ffmpeg::events::Recorder::getAvailableCodecs();
-    if (family == RenderCodecFamily::AV1) {
-        for (const char* candidate : { "av1_nvenc", "av1_amf", "av1_qsv" }) {
-            if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
-                return candidate;
-        }
-        return {};
+static GpuVendor g_gpuVendor = GpuVendor::Unknown;
+
+void setDetectedGpuVendor(GpuVendor vendor) { g_gpuVendor = vendor; }
+GpuVendor detectedGpuVendor() { return g_gpuVendor; }
+
+static std::string pickVendorEncoder(const std::vector<std::string>& codecs,
+                                     const char* nvenc, const char* amf, const char* qsv) {
+    auto has = [&](const char* c) {
+        return c && std::find(codecs.begin(), codecs.end(), std::string(c)) != codecs.end();
+    };
+    switch (g_gpuVendor) {
+        case GpuVendor::Nvidia: return has(nvenc) ? std::string(nvenc) : std::string{};
+        case GpuVendor::Amd:    return has(amf)   ? std::string(amf)   : std::string{};
+        case GpuVendor::Intel:  return has(qsv)   ? std::string(qsv)   : std::string{};
+        case GpuVendor::Unknown: break;
     }
-    if (family == RenderCodecFamily::H265) {
-        for (const char* candidate : { "hevc_nvenc", "hevc_amf", "hevc_qsv" }) {
-            if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
-                return candidate;
-        }
-        return {};
-    }
-    if (family == RenderCodecFamily::VP9) {
-        if (std::find(codecs.begin(), codecs.end(), std::string("vp9_qsv")) != codecs.end())
-            return "vp9_qsv";
-        return {};
-    }
+    for (const char* c : { nvenc, amf, qsv })
+        if (has(c)) return c;
+    return {};
+}
+
+std::string probeGpuEncoder(RenderCodecFamily family, const std::filesystem::path& ffmpegExe) {
+    std::vector<std::string> codecs;
+#ifdef GEODE_IS_WINDOWS
+    if (!ffmpegExe.empty() && std::filesystem::exists(ffmpegExe))
+        codecs = probeVideoCodecs(ffmpegExe);
+    else
+#endif
+        codecs = ffmpeg::events::Recorder::getAvailableCodecs();
+    if (family == RenderCodecFamily::AV1)
+        return pickVendorEncoder(codecs, "av1_nvenc", "av1_amf", "av1_qsv");
+    if (family == RenderCodecFamily::H265)
+        return pickVendorEncoder(codecs, "hevc_nvenc", "hevc_amf", "hevc_qsv");
+    if (family == RenderCodecFamily::VP9)
+        return pickVendorEncoder(codecs, nullptr, nullptr, "vp9_qsv");
     if (family == RenderCodecFamily::VP8 || family == RenderCodecFamily::VVC)
         return {};
-    for (const char* candidate : { "h264_nvenc", "h264_amf", "h264_qsv" }) {
-        if (std::find(codecs.begin(), codecs.end(), std::string(candidate)) != codecs.end())
-            return candidate;
-    }
-    return {};
+    return pickVendorEncoder(codecs, "h264_nvenc", "h264_amf", "h264_qsv");
 }
 
 static std::vector<std::string> probeEncodersByType(const std::filesystem::path& ffmpegExe, char type) {
@@ -142,7 +152,8 @@ static std::string fasterPreset(RenderCodecFamily family, const std::string& pre
         return std::to_string(std::min(p + 2, 12));
     }
     if (family == RenderCodecFamily::VP8 || family == RenderCodecFamily::VP9) {
-
+        // libvpx preset is the -cpu-used value: higher = faster. VP8 tops out at 5
+        // under -deadline good; VP9 allows up to 8.
         int p = 0;
         auto res = std::from_chars(preset.data(), preset.data() + preset.size(), p);
         if (res.ec != std::errc{}) return preset;
@@ -176,42 +187,48 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         int         crf;
         int64_t     apiBitrate;
     };
-
+    // indexed by RenderQualityTier: Fast=0, Balanced=1, Quality=2, Lossless=3
     static constexpr TierParams kH264Tiers[] = {
         { "libx264",    "veryfast",  "p1", 28,  20'000'000LL },
         { "libx264",    "medium",    "p4", 20,  30'000'000LL },
         { "libx264",    "slow",      "p7", 16,  50'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
-
+    // AV1 CRF: 0-63 scale (libsvtav1). Lossless falls back to libx264rgb (AV1 lossless is impractical)
     static constexpr TierParams kAv1Tiers[] = {
         { "libsvtav1",  "10",        "p1", 50,  20'000'000LL },
         { "libsvtav1",  "8",         "p4", 35,  30'000'000LL },
         { "libsvtav1",  "5",         "p7", 22,  50'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
-
+    // H.265/HEVC: libx265 shares x264 preset names; CRF scale ~0-51 (default 28).
+    // Slightly higher CRF than the H.264 tiers because HEVC is more efficient, so files
+    // stay reasonable at equivalent quality. Lossless falls back to libx264rgb.
     static constexpr TierParams kH265Tiers[] = {
         { "libx265",    "veryfast",  "p1", 28,  15'000'000LL },
         { "libx265",    "medium",    "p4", 23,  22'000'000LL },
         { "libx265",    "slow",      "p7", 19,  40'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
-
+    // VP9 (libvpx-vp9): constant-quality via -crf + -b:v 0 (CRF 0-63, lower = better).
+    // cpuPreset holds the -cpu-used value (higher = faster). vp9_qsv (Intel) uses the
+    // shared QSV path. nvencPreset unused. Lossless falls back to libx264rgb.
     static constexpr TierParams kVp9Tiers[] = {
         { "libvpx-vp9", "5",         "p1", 36,  15'000'000LL },
         { "libvpx-vp9", "2",         "p4", 31,  22'000'000LL },
         { "libvpx-vp9", "1",         "p7", 24,  40'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
-
+    // VP8 (libvpx): CRF 4-63 with -b:v 0; cpuPreset is -cpu-used (0-5 under -deadline good).
+    // No GPU encoder. Lossless falls back to libx264rgb.
     static constexpr TierParams kVp8Tiers[] = {
         { "libvpx",     "4",         "p1", 30,  18'000'000LL },
         { "libvpx",     "2",         "p4", 22,  28'000'000LL },
         { "libvpx",     "1",         "p7", 14,  45'000'000LL },
         { "libx264rgb", "ultrafast", "p1",  0, 100'000'000LL },
     };
-
+    // H.266/VVC (libvvenc): quality via -qp (0-63, lower = better); cpuPreset is the named
+    // libvvenc preset. CPU only, very slow. Lossless falls back to libx264rgb.
     static constexpr TierParams kVvcTiers[] = {
         { "libvvenc",   "faster",    "p1", 38,  10'000'000LL },
         { "libvvenc",   "medium",    "p4", 32,  15'000'000LL },
@@ -243,9 +260,16 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
     r.crf        = cfg.crf.value_or(td.crf);
     r.extraArgs  = cfg.extraArgs.value_or(isLossless ? "-pix_fmt rgb24" : "-pix_fmt yuv420p");
 
+    // colorspace: an explicit non-default videoArgs override always wins. Otherwise
+    // Color Fix tags the stream BT.709 so players don't misread the matrix (the actual
+    // RGB->YCbCr is already BT.709 in both the NV12 shader and the RGB path). On top of
+    // that, qualityColorspace=accurate adds the full ffmpeg colorspace conversion filter
+    // for the CPU/RGB path (the NV12 path drops it); fast leaves tagging-only. Lossless
+    // never touches color
     bool userFilter = cfg.videoArgs.has_value()
         && !cfg.videoArgs->empty()
         && *cfg.videoArgs != kDefaultVideoArgs;
+    bool needsRealRemap = cfg.qualityColorspace || cfg.height < 720;
     r.colorFix = cfg.colorFix;
     if (isLossless) {
         r.videoArgs = cfg.videoArgs.value_or("");
@@ -254,14 +278,23 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
         r.videoArgs = *cfg.videoArgs;
         r.colorTags = "";
     } else {
-        r.videoArgs = cfg.qualityColorspace ? kDefaultVideoArgs : "";
-        r.colorTags = cfg.colorFix ? kFastColorTags : "";
+        r.videoArgs = needsRealRemap ? kDefaultVideoArgs : "";
+        r.colorTags = (!needsRealRemap && cfg.colorFix) ? kFastColorTags : "";
     }
 
     r.audioArgs  = cfg.audioArgs.value_or("");
     r.audioCodec = cfg.audioCodec.value_or("aac");
 
-    bool noBitrateCap = isAv1 || isVp8 || isVp9 || isVvc;
+    bool rIsNvenc = r.codec.find("nvenc") != std::string::npos;
+    bool rIsGpu   = rIsNvenc
+                 || r.codec.find("amf")   != std::string::npos
+                 || r.codec.find("qsv")   != std::string::npos;
+    bool rIsAv1   = r.codec.find("av1")   != std::string::npos;
+    bool rIsVp9   = r.codec.find("vp9")   != std::string::npos;
+    bool rIsVp8   = r.codec == "libvpx";
+    bool rIsVvc   = r.codec.find("vvenc") != std::string::npos;
+
+    bool noBitrateCap = rIsAv1 || rIsVp8 || rIsVp9 || rIsVvc;
     r.maxBitrate = (noBitrateCap || isLossless) ? "" : cfg.maxBitrate.value_or("");
     if (!r.maxBitrate.empty() && std::all_of(r.maxBitrate.begin(), r.maxBitrate.end(),
             [](unsigned char c) { return std::isdigit(c); }))
@@ -273,14 +306,14 @@ ResolvedEncodeParams resolve(const RenderConfig& cfg) {
             if (r.audioCodec == c) { r.ext = ".mkv"; break; }
     }
 
-    if ((isVp8 || isVp9) && (r.ext == ".mp4" || r.ext == ".mov" || r.ext == ".m4v"))
+    if ((rIsVp8 || rIsVp9) && (r.ext == ".mp4" || r.ext == ".mov" || r.ext == ".m4v"))
         r.ext = ".mkv";
     r.apiBitrate = td.apiBitrate;
 
-    bool isNvenc = useGpu && cfg.gpuEncoder.find("nvenc") != std::string::npos;
-    if (isNvenc)
+    // NVENC uses -preset pN; CPU x264/svtav1 uses -preset name; AMF/QSV have no standard flag
+    if (rIsNvenc)
         r.x264Preset = td.nvencPreset;
-    else if (!useGpu) {
+    else if (!rIsGpu) {
         r.x264Preset = td.cpuPreset;
         if (cfg.preferSpeed && !isLossless)
             r.x264Preset = fasterPreset(cfg.codecFamily, r.x264Preset);
@@ -333,9 +366,12 @@ RenderConfig loadRenderConfig() {
                     : (family == 4) ? RenderCodecFamily::VP8
                     : (family == 5) ? RenderCodecFamily::VVC
                                     : RenderCodecFamily::H264;
-    cfg.width     = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_width", 1920));
-    cfg.height    = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_height", 1080));
-    cfg.fps       = static_cast<unsigned>(mod->getSavedValue<int64_t>("exp_render_fps", 60));
+    int64_t savedWidth  = mod->getSavedValue<int64_t>("exp_render_width", 1920);
+    int64_t savedHeight = mod->getSavedValue<int64_t>("exp_render_height", 1080);
+    int64_t savedFps    = mod->getSavedValue<int64_t>("exp_render_fps", 60);
+    cfg.width     = static_cast<unsigned>(std::clamp<int64_t>(savedWidth, 1, 16384));
+    cfg.height    = static_cast<unsigned>(std::clamp<int64_t>(savedHeight, 1, 16384));
+    cfg.fps       = static_cast<unsigned>(std::clamp<int64_t>(savedFps, 1, 1000));
     cfg.includeAudio    = mod->getSavedValue<bool>("exp_render_include_audio", true);
     cfg.includeClicks   = mod->getSavedValue<bool>("exp_render_include_clicks", false);
     cfg.musicVol        = static_cast<float>(mod->getSavedValue<double>("exp_render_music_vol", 1.0));
@@ -359,7 +395,7 @@ RenderConfig loadRenderConfig() {
     auto advExtraArgs = mod->getSavedValue<std::string>("exp_render_adv_extra_args", "");
     if (!advExtraArgs.empty()) cfg.extraArgs = advExtraArgs;
 
-    auto advVideoArgs = mod->getSavedValue<std::string>("exp_render_adv_video_args", kDefaultVideoArgs);
+    auto advVideoArgs = mod->getSavedValue<std::string>("exp_render_adv_video_args", "");
     if (!advVideoArgs.empty()) cfg.videoArgs = advVideoArgs;
 
     auto advAudioArgs = mod->getSavedValue<std::string>("exp_render_adv_audio_args", "");

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -41,8 +42,9 @@ static bool presetDecompress(uint8_t const* data, size_t length, std::vector<uin
 }
 
 static bool parseFloat(std::string_view text, float& out) {
-    if (auto v = toasty::parseFloat(text)) { out = *v; return true; }
-    return false;
+    auto const* begin = text.data();
+    auto result = std::from_chars(begin, begin + text.size(), out);
+    return result.ec == std::errc{} && result.ptr == begin + text.size() && std::isfinite(out);
 }
 
 static const char* familyToString(RenderCodecFamily f) {
@@ -202,8 +204,10 @@ std::optional<RenderPreset> RenderPresetIO::load(std::filesystem::path const& pa
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) return std::nullopt;
 
-    auto fileSize = static_cast<size_t>(file.tellg());
-    if (fileSize < 5) return std::nullopt;
+    auto tellPos = file.tellg();
+    if (tellPos < 0) return std::nullopt;
+    auto fileSize = static_cast<size_t>(tellPos);
+    if (fileSize < 5 || fileSize > kMaxPayloadSize * 4) return std::nullopt;
     file.seekg(0);
 
     std::vector<uint8_t> buf(fileSize);
@@ -240,9 +244,9 @@ RenderConfig RenderPreset::toRenderConfig() const {
     cfg.qualityColorspace = qualityColorspace;
     cfg.colorFix = colorFix;
     cfg.preferSpeed = preferSpeed;
-    cfg.width  = static_cast<unsigned>(width);
-    cfg.height = static_cast<unsigned>(height);
-    cfg.fps    = static_cast<unsigned>(fps);
+    if (width  > 0) cfg.width  = static_cast<unsigned>(width);
+    if (height > 0) cfg.height = static_cast<unsigned>(height);
+    if (fps    > 0) cfg.fps    = static_cast<unsigned>(fps);
     cfg.includeAudio    = includeAudio;
     cfg.includeClicks   = includeClicks;
     cfg.musicVol        = musicVol;
@@ -251,8 +255,9 @@ RenderConfig RenderPreset::toRenderConfig() const {
     cfg.hideEndscreen   = hideEndscreen;
     cfg.hideLevelComplete = hideLevelComplete;
 
+    // stock default values of the old render path are not promoted as overrides, they would
+    // shadow tier defaults and "30" (no M suffix) would generate -maxrate 30 bps and break encoding.
     static constexpr std::string_view kDefaultExtraArgs = "-pix_fmt yuv420p";
-    static constexpr std::string_view kDefaultVideoArgs = "colorspace=all=bt709:iall=bt470bg:fast=1";
     static constexpr std::string_view kDefaultBitrate   = "30";
 
     if (!codec.empty())                              cfg.codec      = codec;
