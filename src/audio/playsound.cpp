@@ -82,4 +82,11 @@ class $modify(ClickPlayLayer, PlayLayer) {
         if (csm->enabled && csm->backgroundNoiseEnabled)
             csm->startBackgroundNoise();
     }
+
+    void levelComplete() {
+        auto* csm = ClickSoundManager::get();
+        csm->clearPendingClicks();
+        csm->stopBackgroundNoise();
+        PlayLayer::levelComplete();
+    }
 };

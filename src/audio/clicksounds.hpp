@@ -118,7 +118,7 @@ private:
     std::mt19937 rng{std::random_device{}()};
     std::vector<PendingClick> pendingClicks;
     std::mutex pendingClickMutex;
-    ClickPlayerState playerState[2];
+    ClickPlayerState playerState[2][3];
     std::vector<VoiceTicket> activeVoices;
     std::mutex voiceMutex;
 
@@ -129,6 +129,7 @@ private:
     void playResolvedClick(bool pressed, bool isPlayer2, int button);
     void cullExpiredVoices();
     void enforcePolyphonyLimit();
+    void stopActiveVoices();
     FMOD::Sound* getCachedSound(const std::string& path);
     void clearSoundCache();
     std::vector<float> decodeClickToRaw(const std::string& filePath, int targetSampleRate);

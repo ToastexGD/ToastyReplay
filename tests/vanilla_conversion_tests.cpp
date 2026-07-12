@@ -1,6 +1,8 @@
 #include "core/gameplay_layer.hpp"
 #include "hacks/hitbox_overlay_model.hpp"
 #include "conversion/macro_converter.hpp"
+#include "audio/click_audio_math.hpp"
+#include "core/start_position_policy.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -26,6 +28,20 @@ static void resetGameplayLayerState() {
     g_fakePlayLayer = nullptr;
     g_fakeEditor = nullptr;
     setEditorPlaytestActive(false);
+}
+
+static void test_click_audio_controls_change_output() {
+    assert(std::abs(toasty::clickaudio::volumeGain(0.5f) - 0.5f) < 0.0001f);
+    assert(std::abs(toasty::clickaudio::volumeGain(1.0f) - 1.0f) < 0.0001f);
+    assert(std::abs(toasty::clickaudio::volumeGain(1.5f) - 2.5f) < 0.0001f);
+    assert(std::abs(toasty::clickaudio::volumeGain(2.0f) - 4.0f) < 0.0001f);
+    assert(std::abs(toasty::clickaudio::pitchFactor(0.25f) - 1.25f) < 0.0001f);
+}
+
+static void test_zero_percent_start_position_can_play_from_start() {
+    assert(toasty::start_position::isAtLevelStart(0.0f, 5000.0f));
+    assert(toasty::start_position::isAtLevelStart(45.0f, 5000.0f));
+    assert(!toasty::start_position::isAtLevelStart(250.0f, 5000.0f));
 }
 
 static void test_editor_playtest_counts_as_gameplay_active() {
@@ -316,6 +332,8 @@ static void test_cocos_menu_warning_is_registered_for_frontend_setting() {
 }
 
 int main() {
+    test_click_audio_controls_change_output();
+    test_zero_percent_start_position_can_play_from_start();
     test_editor_playtest_counts_as_gameplay_active();
     test_editor_hitbox_overlay_requires_active_playtest();
     test_conditional_source_signatures_allow_ttr3();

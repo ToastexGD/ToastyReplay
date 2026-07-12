@@ -1,4 +1,5 @@
 #include "clicksounds.hpp"
+#include "audio/click_audio_math.hpp"
 #include "format/replay.hpp"
 #include "utils.hpp"
 #include <Geode/Geode.hpp>
@@ -20,6 +21,12 @@ namespace {
     bool isLeftRightClick(int button) {
         return button == static_cast<int>(PlayerButton::Left) ||
             button == static_cast<int>(PlayerButton::Right);
+    }
+
+    int buttonStateIndex(int button) {
+        if (button == static_cast<int>(PlayerButton::Left)) return 1;
+        if (button == static_cast<int>(PlayerButton::Right)) return 2;
+        return 0;
     }
 }
 
@@ -172,7 +179,7 @@ static ResolvedClickSound resolveClickSound(
 
     auto applyCommonJitter = [&](float baseVolume, float intensityScale) {
         float volJitter = 1.0f + symmetricJitter(kVolumeJitter, rng);
-        result.volume = std::clamp(baseVolume * intensityScale * volJitter, 0.0f, 2.0f);
+        result.volume = std::clamp(toasty::clickaudio::volumeGain(baseVolume) * intensityScale * volJitter, 0.0f, 4.0f);
         result.pitchJitter = symmetricJitter(kPitchJitter, rng);
         result.panOffset = symmetricJitter(kPanJitter, rng);
     };
@@ -349,10 +356,19 @@ FMOD::Sound* ClickSoundManager::getCachedSound(const std::string& path) {
 void ClickSoundManager::clearSoundCache() {
     clearPendingClicks();
     stopBackgroundNoise();
+    stopActiveVoices();
     for (auto& [_, s] : soundCache) {
         if (s) s->release();
     }
     soundCache.clear();
+}
+
+void ClickSoundManager::stopActiveVoices() {
+    std::lock_guard<std::mutex> lock(voiceMutex);
+    for (auto const& ticket : activeVoices) {
+        if (ticket.channel) ticket.channel->stop();
+    }
+    activeVoices.clear();
 }
 
 void ClickSoundManager::cullExpiredVoices() {
@@ -439,8 +455,9 @@ void ClickSoundManager::playResolvedClick(bool pressed, bool isPlayer2, int butt
     ClickPack& pack = useP2Pack ? p2Pack : p1Pack;
     if (pack.empty()) return;
 
-    int stateSlot = useP2Pack ? 1 : 0;
-    auto resolved = resolveClickSound(pack, pressed, softness, rng, playerState[stateSlot]);
+    int playerIndex = isPlayer2 ? 1 : 0;
+    int stateIndex = buttonStateIndex(button);
+    auto resolved = resolveClickSound(pack, pressed, softness, rng, playerState[playerIndex][stateIndex]);
     if (!resolved.file.empty() && resolved.volume > 0.0f) {
         playFile(resolved.file, resolved.volume, resolved.pitchJitter, resolved.panOffset);
     }
@@ -486,6 +503,10 @@ void ClickSoundManager::updatePendingClicks() {
         pendingClicks.erase(ready, pendingClicks.end());
     }
 
+    std::sort(readyClicks.begin(), readyClicks.end(), [](PendingClick const& a, PendingClick const& b) {
+        return a.playAt < b.playAt;
+    });
+
     for (const auto& pending : readyClicks) {
         playResolvedClick(pending.pressed, pending.isPlayer2, pending.button);
     }
@@ -494,6 +515,9 @@ void ClickSoundManager::updatePendingClicks() {
 void ClickSoundManager::clearPendingClicks() {
     std::lock_guard<std::mutex> lock(pendingClickMutex);
     pendingClicks.clear();
+    for (auto& perPlayer : playerState) {
+        for (auto& state : perPlayer) state = {};
+    }
 }
 
 void ClickSoundManager::shutdown() {
@@ -653,7 +677,7 @@ std::vector<float> ClickSoundManager::generateClickAudio(
     if (tickRate <= 0.0f || sampleRate <= 0) return output;
 
     std::mt19937 renderRng{42};
-    ClickPlayerState renderState[2];
+    ClickPlayerState renderState[2][3];
     int clicksPlaced = 0;
     double firstClickTime = -1.0, lastClickTime = -1.0;
 
@@ -664,9 +688,10 @@ std::vector<float> ClickSoundManager::generateClickAudio(
 
         bool useP2Pack = shouldUseP2Pack(action.player2, trueTwoPlayerMode);
         ClickPack& pack = useP2Pack ? p2Pack : p1Pack;
-        int stateSlot = useP2Pack ? 1 : 0;
+        int playerIndex = action.player2 ? 1 : 0;
+        int stateIndex = buttonStateIndex(action.button);
 
-        auto resolved = resolveClickSound(pack, action.down, softness, renderRng, renderState[stateSlot]);
+        auto resolved = resolveClickSound(pack, action.down, softness, renderRng, renderState[playerIndex][stateIndex]);
         std::string file = resolved.file;
         float volume = resolved.volume;
 
@@ -690,9 +715,20 @@ std::vector<float> ClickSoundManager::generateClickAudio(
         float leftGain = volume * (1.0f - std::max(0.0f, pan));
         float rightGain = volume * (1.0f - std::max(0.0f, -pan));
 
-        for (size_t i = 0; i + 1 < clickSamples.size() && (sampleOffset + i + 1) < totalSamples; i += 2) {
-            output[sampleOffset + i] += clickSamples[i] * leftGain;
-            output[sampleOffset + i + 1] += clickSamples[i + 1] * rightGain;
+        double pitch = static_cast<double>(toasty::clickaudio::pitchFactor(resolved.pitchJitter));
+        size_t sourceFrames = clickSamples.size() / 2;
+        for (size_t outputFrame = 0; sampleOffset + outputFrame * 2 + 1 < totalSamples; ++outputFrame) {
+            double sourcePosition = static_cast<double>(outputFrame) * pitch;
+            size_t sourceFrame = static_cast<size_t>(sourcePosition);
+            if (sourceFrame >= sourceFrames) break;
+            size_t nextFrame = std::min(sourceFrame + 1, sourceFrames - 1);
+            float fraction = static_cast<float>(sourcePosition - static_cast<double>(sourceFrame));
+            float left = clickSamples[sourceFrame * 2] +
+                (clickSamples[nextFrame * 2] - clickSamples[sourceFrame * 2]) * fraction;
+            float right = clickSamples[sourceFrame * 2 + 1] +
+                (clickSamples[nextFrame * 2 + 1] - clickSamples[sourceFrame * 2 + 1]) * fraction;
+            output[sampleOffset + outputFrame * 2] += left * leftGain;
+            output[sampleOffset + outputFrame * 2 + 1] += right * rightGain;
         }
 
         clicksPlaced++;

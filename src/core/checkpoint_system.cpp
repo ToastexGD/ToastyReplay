@@ -1,4 +1,5 @@
 #include "ToastyReplay.hpp"
+#include "core/start_position_policy.hpp"
 #include "core/checkpoint_handler.hpp"
 #include "hacks/physicsbypass.hpp"
 #include "trajectory/trajectory.hpp"
@@ -753,6 +754,8 @@ class $modify(MacroPlayLayer, PlayLayer) {
             float recStartY = engine->ttrMode
                 ? (engine->activeTTR ? engine->activeTTR->startPosY : 0.f)
                 : (engine->activeMacro ? engine->activeMacro->startPosY : 0.f);
+            bool recordedAtLevelStart = recordedFromStartPos &&
+                toasty::start_position::isAtLevelStart(recStartX, m_levelLength);
 
             bool startPosMatch = false;
             if (m_startPosObject && recordedFromStartPos) {
@@ -791,7 +794,7 @@ class $modify(MacroPlayLayer, PlayLayer) {
                     engine->executeIndex = findFirstInputAtTick(engine->activeMacro->inputs, targetTick);
                 }
                 engine->clearStartPosWarning();
-            } else if (!m_startPosObject && recordedFromStartPos) {
+            } else if (!m_startPosObject && recordedFromStartPos && !recordedAtLevelStart) {
                 engine->setStartPosWarningKey("Macro was recorded from a start position. Use the same or later start position.");
                 engine->haltExecution();
             } else if (m_startPosObject && (!anchors || anchors->empty())) {
