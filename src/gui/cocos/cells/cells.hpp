@@ -7,7 +7,7 @@
 
 namespace toasty::frontend {
 
-inline constexpr float kCellWidth = 380.f;
+inline constexpr float kCellWidth = 326.f;
 
 class TRCell : public cocos2d::CCNode {
 protected:
@@ -98,14 +98,15 @@ public:
 
 class KeybindCell : public TRCell {
 protected:
-    int* m_keyPtr = nullptr;
+    std::string m_settingKey;
     cocos2d::CCNode* m_button = nullptr;
-    bool init(std::string const& label, int* keyPtr);
+    std::string m_display;
+    bool init(std::string const& label, std::string settingKey);
     void refreshLabel();
-    void pollRebind(float dt);
+    void pollSetting(float dt);
 
 public:
-    static KeybindCell* create(std::string const& label, int* keyPtr);
+    static KeybindCell* create(std::string const& label, std::string settingKey);
     void onTap(cocos2d::CCObject* sender);
 };
 

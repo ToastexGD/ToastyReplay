@@ -270,9 +270,9 @@ public:
     bool isTraceCancelled() const;
     void markDirty();
     void clearOverlay();
-    void attach(PlayLayer* playLayer);
+    void attach(GJBaseGameLayer* playLayer);
     void detach();
-    void updatePreview(PlayLayer* playLayer);
+    void updatePreview(GJBaseGameLayer* playLayer);
     void captureFrameDelta(float dt);
     void noteSimulatedDeath(PlayerObject* player);
     bool ownsPreviewPlayer(PlayerObject* player) const;
@@ -304,8 +304,8 @@ private:
     static PlayerStateCapsule capturePlayerState(PlayerObject* player);
     static void applyPlayerState(PlayerObject* player, PlayerStateCapsule const& state);
 
-    void rebuildPreview(PlayLayer* playLayer);
-    void traceInputPath(PlayLayer* playLayer, PlayerObject* previewPlayer, PlayerObject* sourcePlayer, bool holdingInput, bool linkedDual);
+    void rebuildPreview(GJBaseGameLayer* playLayer);
+    void traceInputPath(GJBaseGameLayer* playLayer, PlayerObject* previewPlayer, PlayerObject* sourcePlayer, bool holdingInput, bool linkedDual);
     void drawPredictionBounds(PlayerObject* player);
     void recalculateOverlapColors();
     cocos2d::CCDrawNode* ensureDrawNode();

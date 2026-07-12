@@ -5,7 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(ToastyReplay VERSION 2.1.1 LANGUAGES CXX)
+project(ToastyReplay VERSION 2.2.0 LANGUAGES CXX)
 
 set(TOASTYREPLAY_SOURCES
     src/format/ttr_format.cpp
@@ -17,7 +17,9 @@ set(TOASTYREPLAY_SOURCES
     src/core/input_timing.cpp
     src/core/frame_stepper.cpp
     src/core/keybinds.cpp
+    src/editor/editor_playtest.cpp
     src/gui/gui.cpp
+    src/gui/credits_popup.cpp
     src/gui/cocos/frontend.cpp
     src/gui/cocos/tr_menu_popup.cpp
     src/gui/cocos/tr_frame_editor_popup.cpp
@@ -383,6 +385,7 @@ add_executable(toastyreplay_vanilla_conversion_tests tests/vanilla_conversion_te
 target_include_directories(toastyreplay_vanilla_conversion_tests PRIVATE src)
 target_compile_features(toastyreplay_vanilla_conversion_tests PRIVATE cxx_std_23)
 target_compile_definitions(toastyreplay_vanilla_conversion_tests PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")
+target_compile_definitions(toastyreplay_vanilla_conversion_tests PRIVATE TOASTYREPLAY_GAMEPLAY_LAYER_TEST)
 if (MSVC)
     target_compile_definitions(toastyreplay_vanilla_conversion_tests PRIVATE _HAS_ITERATOR_DEBUGGING=0)
 endif()

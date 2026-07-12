@@ -1,6 +1,7 @@
 #include "gui/cocos/tr_frame_editor_popup.hpp"
 
 #include "gui/cocos/cells/cells.hpp"
+#include "lang/localization.hpp"
 #include "utils.hpp"
 
 #include <Geode/Geode.hpp>
@@ -23,6 +24,10 @@ namespace {
     constexpr float kScrollWidth = 394.f;
     constexpr float kScrollHeight = 250.f;
     constexpr int kMaxVisibleRows = 80;
+
+    std::string localized(std::string_view text) {
+        return std::string(toasty::lang::tr(text));
+    }
 
     const char* const kActionNames[4] = { "Jump", "Left", "Right", "Button 0" };
     const int kActionTypes[4] = { 1, 2, 3, 0 };
@@ -56,7 +61,8 @@ namespace {
     }
 
     CCMenuItemSpriteExtra* makeSmallButton(const char* label, const char* bg, std::function<void()> callback) {
-        auto* spr = ButtonSprite::create(label, 30, 0, 0.5f, false, "bigFont.fnt", bg, 24.f);
+        auto displayLabel = localized(label);
+        auto* spr = ButtonSprite::create(displayLabel.c_str(), 30, 0, 0.5f, false, "bigFont.fnt", bg, 24.f);
         return geode::cocos::CCMenuItemExt::createSpriteExtra(spr, [callback](CCMenuItemSpriteExtra*) {
             callback();
         });
@@ -93,7 +99,8 @@ bool TRFrameEditorPopup::init() {
         m_closeBtn->setScale(0.8f);
     }
 
-    auto* title = CCLabelBMFont::create("Macro Editor", "goldFont.fnt");
+    auto titleText = localized("Macro Editor");
+    auto* title = CCLabelBMFont::create(titleText.c_str(), "goldFont.fnt");
     title->setScale(0.55f);
     title->setPosition({ kPopupWidth * 0.5f, kPopupHeight - 20.f });
     m_mainLayer->addChild(title, 10);
@@ -380,15 +387,18 @@ void TRFrameEditorPopup::buildSegmentList(CCNode* content) {
 
 void TRFrameEditorPopup::requestBack() {
     if (m_editor.dirty) {
+        geode::WeakRef<TRFrameEditorPopup> source(this);
         geode::createQuickPopup(
             "Discard Changes?",
             "You have unsaved edits. Discard them?",
             "Cancel",
             "Discard",
-            [this](auto*, bool discard) {
+            [source](auto*, bool discard) {
                 if (discard) {
-                    m_editor.close();
-                    this->removeFromParentAndCleanup(true);
+                    if (auto popup = source.lock()) {
+                        popup->m_editor.close();
+                        popup->removeFromParentAndCleanup(true);
+                    }
                 }
             }
         );

@@ -438,14 +438,27 @@ namespace {
             float step = fixedDelta(engine);
             schedulerCarry += rawDt;
 
-            static constexpr int kMaxStepsPerFrame = 2;
-            int stepsThisFrame = 0;
+            double tickRate = engine.runtimeTickRate();
+            double outputFps = std::max(1.0, static_cast<double>(renderer.fps));
+            int ticksPerBatch = std::clamp(
+                static_cast<int>(std::lround(tickRate / outputFps)),
+                1,
+                96
+            );
+            float batchDelta = step * static_cast<float>(ticksPerBatch);
 
-            while (schedulerCarry + step * 0.01f >= step) {
-                if (stepsThisFrame >= kMaxStepsPerFrame) break;
-                schedulerCarry -= step;
-                scheduler->CCScheduler::update(step);
-                ++stepsThisFrame;
+            static constexpr int kMaxBatchesPerFrame = 4;
+            int batchesThisFrame = 0;
+            while (schedulerCarry + step * 0.01f >= batchDelta) {
+                if (batchesThisFrame >= kMaxBatchesPerFrame) break;
+                schedulerCarry -= batchDelta;
+                scheduler->CCScheduler::update(batchDelta);
+                ++batchesThisFrame;
+            }
+
+            float maxCarry = batchDelta * static_cast<float>(kMaxBatchesPerFrame);
+            if (schedulerCarry > maxCarry) {
+                schedulerCarry = maxCarry;
             }
 
             if (schedulerCarry < 0.0f) {
@@ -542,6 +555,9 @@ class $modify(TickControlPlayLayer, PlayLayer) {
             while (accum + 1e-9 >= baseStep && guard++ < 16) {
                 PlayLayer::updateVisibility(static_cast<float>(baseStep));
                 accum -= baseStep;
+            }
+            if (accum >= baseStep) {
+                accum = std::fmod(accum, baseStep);
             }
             return;
         }

@@ -1,4 +1,5 @@
 #include "gui/gui.hpp"
+#include "gui/credits_popup.hpp"
 #include "gui/cocos/frontend.hpp"
 #include "gui/pride_mode.hpp"
 #include "lang/localization.hpp"
@@ -12,6 +13,8 @@
 #include <Geode/modify/LoadingLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/CCMouseDispatcher.hpp>
+#include <Geode/ui/GeodeUI.hpp>
+#include <Geode/loader/SettingV3.hpp>
 #include <Geode/utils/file.hpp>
 #include <Geode/utils/async.hpp>
 #include <filesystem>
@@ -708,75 +711,26 @@ MenuInterface* MenuInterface::get() {
 
 void ReplayEngine::processHotkeys() {}
 
-std::string getKeyName(int code) {
-    if (code == 0) return "None";
-    if (code >= 65 && code <= 90) return std::string(1, (char)code);
-    if (code >= 48 && code <= 57) return std::string(1, (char)code);
-    if (code >= 112 && code <= 123) return "F" + std::to_string(code - 111);
-    if (code == 32) return "Space";
-    if (code == 8) return "Bksp";
-    if (code == 9) return "Tab";
-    if (code == 13) return "Enter";
-    if (code == 16) return "Shift";
-    if (code == 17) return "Ctrl";
-    if (code == 18) return "Alt";
-    if (code == 27) return "Esc";
-    if (code == 37) return "Left";
-    if (code == 38) return "Up";
-    if (code == 39) return "Right";
-    if (code == 40) return "Down";
-    if (code == 46) return "Del";
-    if (code == 45) return "Ins";
-    if (code == 36) return "Home";
-    if (code == 35) return "End";
-    if (code == 33) return "PgUp";
-    if (code == 34) return "PgDn";
-    if (code == 192) return "`";
-    if (code == 189) return "-";
-    if (code == 187) return "=";
-    if (code == 219) return "[";
-    if (code == 221) return "]";
-    if (code == 220) return "\\";
-    if (code == 186) return ";";
-    if (code == 222) return "'";
-    if (code == 188) return ",";
-    if (code == 190) return ".";
-    if (code == 191) return "/";
-    return "Key" + std::to_string(code);
-}
-
-static std::string checkKeybindConflict(int* target, int newKey, const KeybindSet& keybinds) {
-    if (newKey == 0) return "";
-    struct Entry { const char* name; const int* ptr; };
-    Entry entries[] = {
-        {"Menu Toggle",   &keybinds.menu},
-        {"Frame Advance", &keybinds.frameAdvance},
-        {"Frame Step",    &keybinds.frameStep},
-        {"Replay Toggle", &keybinds.replayToggle},
-        {"Noclip",        &keybinds.noclip},
-        {"Safe Mode",     &keybinds.safeMode},
-        {"Trajectory",    &keybinds.trajectory},
-        {"Audio Pitch",   &keybinds.audioPitch},
-        {"RNG Lock",      &keybinds.rngLock},
-        {"Hitboxes",      &keybinds.hitboxes},
-        {"Layout Mode",   &keybinds.layoutMode},
-        {"No Mirror",     &keybinds.noMirror},
-        {"Autoclicker",   &keybinds.autoclicker},
-        {"Disable Shaders", &keybinds.disableShaders},
-        {"Click Sounds", &keybinds.clickSounds},
-    };
-    for (auto& e : entries) {
-        if (e.ptr != target && *e.ptr == newKey) {
-            return trFormat(
-                "Already bound to {keybind}",
-                fmt::arg("keybind", toasty::lang::tr(e.name))
-            );
-        }
-    }
-    return "";
-}
-
 namespace Widgets {
+
+static std::string keybindDisplay(char const* settingKey) {
+    if (!settingKey) {
+        return {};
+    }
+    auto setting = typeinfo_pointer_cast<KeybindSettingV3>(Mod::get()->getSetting(settingKey));
+    if (!setting) {
+        return {};
+    }
+    auto const& keybinds = setting->getValue();
+    if (keybinds.empty()) {
+        return {};
+    }
+    std::string display = keybinds.front().toString();
+    if (keybinds.size() > 1) {
+        display += " +" + std::to_string(keybinds.size() - 1);
+    }
+    return display;
+}
 
 bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationState& anim) {
     ImGui::PushID(value);
@@ -1052,13 +1006,14 @@ static bool CollapsibleSectionHeader(const char* text, bool expanded, ThemeEngin
 }
 
 bool ModuleCard(const char* name, const char* description, bool* enabled,
-                ThemeEngine& theme, AnimationState& anim, int* keybind) {
+                ThemeEngine& theme, AnimationState& anim, char const* keybindSetting,
+                char const* secondaryKeybindSetting, const char*) {
     ImGui::PushID(enabled);
     ImGuiID id = ImGui::GetID(name);
     ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float width = ImGui::GetContentRegionAvail().x;
-    float height = description ? 56.0f : 42.0f;
+    constexpr float height = 44.0f;
     float dt = ImGui::GetIO().DeltaTime;
     ImVec4 accent = theme.getAccent();
     float rounding = theme.cornerRadius;
@@ -1084,28 +1039,46 @@ bool ModuleCard(const char* name, const char* description, bool* enabled,
         dl->AddRect(cardMin, cardMax, theme.getAccentU32(0.36f + hoverT * 0.22f), rounding, 0, 1.2f);
     }
 
-    ImU32 nameCol = *enabled ? theme.getAccentU32(0.98f) : theme.getTextU32();
-    dl->AddText(ImVec2(pos.x + 14.0f, pos.y + (description ? 9.0f : 12.0f)), nameCol, displayName.c_str());
-
-    if (description) {
-        float const maxDescWidth = width - 14.0f - 40.0f - 12.0f - 8.0f;
-        std::string truncated = displayDescription;
-        if (ImGui::CalcTextSize(truncated.c_str()).x > maxDescWidth) {
-            std::string const ellipsis = "...";
-            float const ellipsisWidth = ImGui::CalcTextSize(ellipsis.c_str()).x;
-            while (truncated.size() > 1
-                && ImGui::CalcTextSize(truncated.c_str()).x + ellipsisWidth > maxDescWidth) {
-                truncated.pop_back();
-            }
-            truncated += ellipsis;
-        }
-        dl->AddText(ImVec2(pos.x + 14.0f, pos.y + 31.0f), theme.getTextSecondaryU32(), truncated.c_str());
-    }
-
     float toggleW = 40.0f, toggleH = 20.0f;
     float toggleX = pos.x + width - toggleW - 12;
     float toggleY = pos.y + (height - toggleH) / 2;
     float toggleR = toggleH * 0.5f;
+
+    std::string binding = keybindDisplay(keybindSetting);
+    if (secondaryKeybindSetting) {
+        std::string secondary = keybindDisplay(secondaryKeybindSetting);
+        if (!secondary.empty()) {
+            binding += binding.empty() ? secondary : " / " + secondary;
+        }
+    }
+
+    float bindingWidth = 0.0f;
+    float bindingLeft = toggleX - 8.0f;
+    if (!binding.empty()) {
+        ImVec2 bindingTextSize = ImGui::CalcTextSize(binding.c_str());
+        bindingWidth = std::min(bindingTextSize.x + 16.0f, std::max(54.0f, width * 0.34f));
+        bindingLeft -= bindingWidth;
+        dl->AddRectFilled(
+            ImVec2(bindingLeft, pos.y + 10.0f),
+            ImVec2(bindingLeft + bindingWidth, pos.y + height - 10.0f),
+            theme.getAccentU32(*enabled ? 0.16f : 0.09f),
+            8.0f
+        );
+        dl->PushClipRect(ImVec2(bindingLeft + 7.0f, pos.y), ImVec2(bindingLeft + bindingWidth - 7.0f, pos.y + height), true);
+        dl->AddText(
+            ImVec2(bindingLeft + 8.0f, pos.y + (height - bindingTextSize.y) * 0.5f),
+            theme.getTextSecondaryU32(),
+            binding.c_str()
+        );
+        dl->PopClipRect();
+    }
+
+    ImU32 nameCol = *enabled ? theme.getAccentU32(0.98f) : theme.getTextU32();
+    float nameY = pos.y + (height - ImGui::CalcTextSize(displayName.c_str()).y) * 0.5f;
+    float nameRight = binding.empty() ? toggleX - 8.0f : bindingLeft - 8.0f;
+    dl->PushClipRect(ImVec2(pos.x + 14.0f, pos.y), ImVec2(nameRight, pos.y + height), true);
+    dl->AddText(ImVec2(pos.x + 14.0f, nameY), nameCol, displayName.c_str());
+    dl->PopClipRect();
 
     ImVec4 trackCol = lerpColor(ImVec4(0.93f, 0.96f, 1.0f, 0.20f), withAlpha(accent, 0.30f), toggleT);
     dl->AddRectFilled(
@@ -1117,27 +1090,8 @@ bool ModuleCard(const char* name, const char* description, bool* enabled,
     float knobX = toggleX + toggleR + toggleT * (toggleW - toggleH);
     dl->AddCircleFilled(ImVec2(knobX, toggleY + toggleR), toggleR - 2.0f, IM_COL32(247, 250, 255, 245));
     dl->AddCircle(ImVec2(knobX, toggleY + toggleR), toggleR - 2.0f, theme.getAccentU32(0.3f + toggleT * 0.3f), 0, 1.0f);
-    (void)hovered;
-    (void)keybind;
-
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::PopID();
-    return clicked;
-}
-
-static const void* activeModuleKey = nullptr;
-
-static float moduleContentHeightForProgress(float measuredHeight, float easedProgress) {
-    float const targetHeight = measuredHeight > 0.0f ? measuredHeight : 96.0f;
-    if (easedProgress >= 0.995f) {
-        return targetHeight;
-    }
-    return std::max(1.0f, targetHeight * easedProgress);
-}
-
-bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
-                     ThemeEngine& theme, AnimationState& anim, int* keybind) {
-    bool clicked = ModuleCard(name, description, enabled, theme, anim, keybind);
 
     auto& data = anim.moduleAnims[(const void*)enabled];
     float target = *enabled ? 1.0f : 0.0f;
@@ -1145,24 +1099,31 @@ bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
     if (data.progress < target) data.progress = std::min(data.progress + speed, target);
     else if (data.progress > target) data.progress = std::max(data.progress - speed, target);
 
+    if (data.progress > 0.0f && !displayDescription.empty()) {
+        float fade = anim.easeOutCubic(data.progress);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, fade);
+        ImGui::Indent(14.0f);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(1.0f, ImGui::GetContentRegionAvail().x - 14.0f));
+        ImGui::TextColored(theme.textSecondary, "%s", displayDescription.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        ImGui::Unindent(14.0f);
+        ImGui::PopStyleVar();
+    }
+    return clicked;
+}
+
+bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
+                     ThemeEngine& theme, AnimationState& anim, char const* keybindSetting,
+                     char const* secondaryKeybindSetting, const char* secondaryKeybindLabel) {
+    ModuleCard(name, description, enabled, theme, anim, keybindSetting, secondaryKeybindSetting, secondaryKeybindLabel);
+
+    auto& data = anim.moduleAnims[(const void*)enabled];
     if (data.progress <= 0.0f) return false;
 
-    activeModuleKey = (const void*)enabled;
     float t = anim.easeOutCubic(data.progress);
 
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, t);
-
-    if (keybind) {
-        ImGui::Dummy(ImVec2(0, 4));
-        Widgets::KeybindButton("Keybind", keybind, theme, anim);
-        ImGui::Dummy(ImVec2(0, 6));
-    }
-
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
-    char childId[128];
-    snprintf(childId, sizeof(childId), "##mod_%s", name);
-    float childH = moduleContentHeightForProgress(data.height, t);
-    ImGui::BeginChild(childId, ImVec2(-1, childH), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::Indent(14);
     ImGui::Dummy(ImVec2(0, 4));
 
@@ -1172,21 +1133,6 @@ bool ModuleCardBegin(const char* name, const char* description, bool* enabled,
 void ModuleCardEnd() {
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::Unindent(14);
-
-    if (activeModuleKey) {
-        auto& iface = *MenuInterface::get();
-        auto it = iface.anim.moduleAnims.find(activeModuleKey);
-        if (it != iface.anim.moduleAnims.end()) {
-            float measured = ImGui::GetCursorPosY();
-            if (measured > 0.0f) {
-                it->second.height = measured;
-            }
-        }
-        activeModuleKey = nullptr;
-    }
-
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
     ImGui::PopStyleVar();
 }
 
@@ -1240,92 +1186,6 @@ bool PillButton(const char* label, bool active, float width, ThemeEngine& theme,
     dl->AddText(textPos, textCol, displayLabel.c_str());
 
     return clicked;
-}
-
-void KeybindButton(const char* label, int* keyCode, ThemeEngine& theme, AnimationState& anim) {
-    MenuInterface* ui = MenuInterface::get();
-    ImGui::PushID(keyCode);
-    std::string displayLabel = getLocalizedDisplayLabel(label);
-
-    static int* settingsRebindActive = nullptr;
-    static int settingsRebindBackup = 0;
-
-    bool isRebinding = (ui->rebindTarget == keyCode);
-
-    if (settingsRebindActive == keyCode && !isRebinding) {
-        int newKey = *keyCode;
-        bool changed = newKey != settingsRebindBackup;
-        if (newKey != 0 && newKey != settingsRebindBackup) {
-            std::string conflict = checkKeybindConflict(keyCode, newKey, ui->keybinds);
-            if (!conflict.empty()) {
-                *keyCode = settingsRebindBackup;
-                ui->keybindConflictError = conflict;
-            } else {
-                ui->keybindConflictError.clear();
-                ui->saveSettings();
-            }
-        } else if (changed) {
-            ui->keybindConflictError.clear();
-            ui->saveSettings();
-        }
-        settingsRebindActive = nullptr;
-    }
-
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float width = ImGui::GetContentRegionAvail().x;
-    float height = 36.0f;
-    float dt = ImGui::GetIO().DeltaTime;
-
-    std::string keyText = isRebinding ? "..." : getKeyName(*keyCode);
-
-    ImGui::InvisibleButton(label, ImVec2(width, height));
-    ImGuiID id = ImGui::GetItemID();
-    bool hovered = ImGui::IsItemHovered();
-    bool leftClick = ImGui::IsItemClicked(0);
-    bool rightClick = ImGui::IsItemClicked(1);
-
-    float& hoverT = anim.hoverAnims[id];
-    hoverT = smoothStep(hoverT, hovered ? 1.0f : 0.0f, 11.0f, dt);
-
-    ImVec4 accent = theme.getAccent();
-    float rounding = theme.cornerRadius;
-    ImVec2 rowMax(pos.x + width, pos.y + height);
-    drawSolidRect(dl, pos, rowMax, rounding, theme, 1.0f + hoverT * 0.7f);
-
-    dl->AddText(ImVec2(pos.x + 12.0f, pos.y + (height - ImGui::CalcTextSize(displayLabel.c_str()).y) * 0.5f), theme.getTextU32(), displayLabel.c_str());
-    ImVec2 txtSize = ImGui::CalcTextSize(keyText.c_str());
-    float btnW = std::max(txtSize.x + 22.0f, 54.0f);
-    float btnH = 26.0f;
-    float btnX = pos.x + width - btnW - 10.0f;
-    float btnY = pos.y + (height - btnH) / 2;
-
-    ImVec2 btnMin(btnX, btnY);
-    ImVec2 btnMax(btnX + btnW, btnY + btnH);
-    drawSolidRect(dl, btnMin, btnMax, 9.0f, theme, isRebinding ? 1.5f : (1.0f + hoverT * 0.4f));
-    dl->AddRect(ImVec2(btnX, btnY), ImVec2(btnX + btnW, btnY + btnH),
-        isRebinding ? theme.getAccentU32(0.7f) : toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.16f)), 9.0f, 0, 1.0f);
-    dl->AddText(ImVec2(btnX + (btnW - txtSize.x) / 2, btnY + (btnH - txtSize.y) / 2),
-        isRebinding ? toU32(ImVec4(0.98f, 0.99f, 1.0f, 1.0f)) : theme.getTextU32(), keyText.c_str());
-
-    if (leftClick) {
-        if (isRebinding) {
-            ui->rebindTarget = nullptr;
-        } else {
-            settingsRebindActive = keyCode;
-            settingsRebindBackup = *keyCode;
-            ui->rebindTarget = keyCode;
-            ui->keybindConflictError.clear();
-        }
-    }
-    if (rightClick) {
-        *keyCode = 0;
-        if (isRebinding)
-            ui->rebindTarget = nullptr;
-        ui->keybindConflictError.clear();
-        ui->saveSettings();
-    }
-    ImGui::PopID();
 }
 
 }
@@ -2908,11 +2768,6 @@ void MenuInterface::drawReplayTab() {
 
     }
 
-    ImGui::Dummy(ImVec2(0, 12));
-    Widgets::SectionHeader("Keybinds", theme);
-    Widgets::KeybindButton("Toggle Playback", &keybinds.replayToggle, theme, anim);
-    ImGui::Dummy(ImVec2(0, 4));
-    Widgets::KeybindButton("Menu Toggle", &keybinds.menu, theme, anim);
 }
 
 void MenuInterface::drawToolsTab() {
@@ -2927,8 +2782,9 @@ void MenuInterface::drawToolsTab() {
     ImGui::SameLine(0, 6);
     if (Widgets::StyledButton("Apply###tps", ImVec2(78, 28), theme, anim)) {
         bool canChange = !PlayLayer::get() || engine->engineMode != MODE_EXECUTE;
-        if (canChange) {
-            engine->tickRate = tempTickRate;
+        if (canChange && std::isfinite(tempTickRate)) {
+            engine->tickRate = std::clamp(static_cast<double>(tempTickRate), 1.0, 1000000.0);
+            tempTickRate = static_cast<float>(engine->tickRate);
             Mod::get()->setSavedValue("eng_tick_rate", (float)engine->tickRate);
             TrajectoryPredictionService::get().markDirty();
         }
@@ -2968,62 +2824,43 @@ void MenuInterface::drawToolsTab() {
     ImGui::InputFloat("##speed", &tempGameSpeed, 0, 0, "%.2f");
     ImGui::SameLine(0, 6);
     if (Widgets::StyledButton("Apply###spd", ImVec2(78, 28), theme, anim)) {
-        engine->gameSpeed = tempGameSpeed;
-        TrajectoryPredictionService::get().markDirty();
+        if (std::isfinite(tempGameSpeed)) {
+            engine->gameSpeed = std::clamp(static_cast<double>(tempGameSpeed), 0.01, 1000.0);
+            tempGameSpeed = static_cast<float>(engine->gameSpeed);
+            Mod::get()->setSavedValue("eng_speed", static_cast<float>(engine->gameSpeed));
+            TrajectoryPredictionService::get().markDirty();
+        }
     }
 
     ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Features", theme);
 
     bool frameAdvanceBefore = engine->tickStepping;
-    if (Widgets::ModuleCardBegin("Frame Advance", "Pause and step frame-by-frame",
-        &engine->tickStepping, theme, anim, &keybinds.frameAdvance)) {
-        Widgets::KeybindButton("Step Key", &keybinds.frameStep, theme, anim);
-        Widgets::ModuleCardEnd();
-    }
+    Widgets::ModuleCard("Frame Advance", "Pause and step frame-by-frame",
+        &engine->tickStepping, theme, anim, "bind_frame_advance", "bind_frame_step", "Advance One Frame");
     if (engine->tickStepping != frameAdvanceBefore) {
         engine->setFrameStepEnabled(engine->tickStepping, PlayLayer::get());
     }
 
-    if (Widgets::ModuleCardBegin("Speedhack Audio", "Apply speed changes to game audio",
-        &engine->audioPitchEnabled, theme, anim, &keybinds.audioPitch)) {
-        Widgets::ModuleCardEnd();
-    }
+    Widgets::ModuleCard("Speedhack Audio", "Apply speed changes to game audio",
+        &engine->audioPitchEnabled, theme, anim, "bind_audio_pitch");
 
     if (Widgets::ModuleCardBegin("Layout Mode", "Remove all decorations",
-        &engine->layoutMode, theme, anim, &keybinds.layoutMode)) {
+        &engine->layoutMode, theme, anim, "bind_layout_mode")) {
         drawRgbColorPicker("Background", engine->layoutModeBackgroundR, engine->layoutModeBackgroundG, engine->layoutModeBackgroundB);
         drawRgbColorPicker("Ground", engine->layoutModeGroundR, engine->layoutModeGroundG, engine->layoutModeGroundB);
         Widgets::ModuleCardEnd();
     }
 
-    if (Widgets::ModuleCardBegin("Disable Shaders", "Suppress level shader effects",
-        &engine->disableShaders, theme, anim, &keybinds.disableShaders)) {
-        Widgets::ModuleCardEnd();
-    }
-
-    if (Widgets::ModuleCardBegin("No Death Effect", "Skip death burst visuals",
-        &engine->noDeathEffect, theme, anim)) {
-        Widgets::ModuleCardEnd();
-    }
-
-    if (Widgets::ModuleCardBegin("No Effects", "Suppress gameplay visual effects",
-        &engine->noEffect, theme, anim)) {
-        Widgets::ModuleCardEnd();
-    }
-
-    if (Widgets::ModuleCardBegin("Hide Endscreen", "Skip the level endscreen",
-        &engine->hideEndscreen, theme, anim)) {
-        Widgets::ModuleCardEnd();
-    }
-
-    if (Widgets::ModuleCardBegin("Hide New Best", "Skip the new best popup",
-        &engine->hideNewBest, theme, anim)) {
-        Widgets::ModuleCardEnd();
-    }
+    Widgets::ModuleCard("Disable Shaders", "Suppress level shader effects",
+        &engine->disableShaders, theme, anim, "bind_disable_shaders");
+    Widgets::ModuleCard("No Death Effect", "Skip death burst visuals", &engine->noDeathEffect, theme, anim, "bind_no_death_effect");
+    Widgets::ModuleCard("No Effects", "Suppress gameplay visual effects", &engine->noEffect, theme, anim, "bind_no_effects");
+    Widgets::ModuleCard("Hide Endscreen", "Skip the level endscreen", &engine->hideEndscreen, theme, anim, "bind_hide_endscreen");
+    Widgets::ModuleCard("Hide New Best", "Skip the new best popup", &engine->hideNewBest, theme, anim, "bind_hide_new_best");
 
     if (Widgets::ModuleCardBegin("No Mirror Effect", "Removed mirroring in playback/recording",
-        &engine->noMirrorEffect, theme, anim, &keybinds.noMirror)) {
+        &engine->noMirrorEffect, theme, anim, "bind_no_mirror")) {
         Widgets::ToggleSwitch("Only Recording", &engine->noMirrorRecordingOnly, theme, anim);
         Widgets::ModuleCardEnd();
     }
@@ -3034,7 +2871,7 @@ void MenuInterface::drawHacksTab() {
     ImGui::Dummy(ImVec2(0, 4));
 
     if (Widgets::ModuleCardBegin("Safe Mode", "Prevents stats and percentage gain",
-        &engine->protectedMode, theme, anim, &keybinds.safeMode)) {
+        &engine->protectedMode, theme, anim, "bind_safe_mode")) {
         Widgets::ToggleSwitch("Auto-Enable While Recording / Playing", &engine->autoSafeMode, theme, anim);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
         ImGui::TextWrapped("Force Safe Mode on whenever a macro is recording or playing back, even if the toggle above is off.");
@@ -3043,7 +2880,7 @@ void MenuInterface::drawHacksTab() {
     }
 
     if (Widgets::ModuleCardBegin("Show Trajectory", "Display predicted player path",
-        &engine->pathPreview, theme, anim, &keybinds.trajectory)) {
+        &engine->pathPreview, theme, anim, "bind_trajectory")) {
         auto setTrajectoryLength = [&](int length) {
             int sanitizedLength = ReplayEngine::sanitizeTrajectoryLength(length);
             if (engine->pathLength != sanitizedLength) {
@@ -3081,7 +2918,7 @@ void MenuInterface::drawHacksTab() {
     }
 
     if (Widgets::ModuleCardBegin("Show Hitboxes", "Display collision bounds for objects",
-        &engine->showHitboxes, theme, anim, &keybinds.hitboxes)) {
+        &engine->showHitboxes, theme, anim, "bind_hitboxes")) {
         Widgets::ToggleSwitch("On Death Only", &engine->hitboxOnDeath, theme, anim);
         Widgets::ToggleSwitch("Draw Trail", &engine->hitboxTrail, theme, anim);
 
@@ -3092,8 +2929,13 @@ void MenuInterface::drawHacksTab() {
     }
 
     if (Widgets::ModuleCardBegin("Noclip", "Disable collision with obstacles",
-        &engine->collisionBypass, theme, anim, &keybinds.noclip)) {
+        &engine->collisionBypass, theme, anim, "bind_noclip")) {
         float hitRate = engine->noclipAccuracyPercent();
+        auto accuracyText = toasty::noclip::formatAccuracy(
+            engine->noclipTotalFrames,
+            engine->noclipUnsafeFrames,
+            engine->noclipAccuracyDecimals
+        );
 
         Widgets::ToggleSwitch("Player 1", &engine->noclipPlayer1, theme, anim);
         Widgets::ToggleSwitch("Player 2", &engine->noclipPlayer2, theme, anim);
@@ -3106,7 +2948,7 @@ void MenuInterface::drawHacksTab() {
 
         imguiTextTr("Accuracy:");
         ImGui::SameLine();
-        ImGui::TextColored(hitColor, "%.2f%%", hitRate);
+        ImGui::TextColored(hitColor, "%s", accuracyText.c_str());
         auto deathFrameText = trFormat(
             "Deaths: {deaths} | Unsafe: {unsafe} | Frames: {frames}",
             fmt::arg("deaths", engine->noclipDeathEvents),
@@ -3114,6 +2956,12 @@ void MenuInterface::drawHacksTab() {
             fmt::arg("frames", engine->noclipTotalFrames)
         );
         ImGui::TextUnformatted(deathFrameText.c_str());
+
+        if (Widgets::StyledSliderInt("Decimal Places", &engine->noclipAccuracyDecimals, 0, 6, theme)) {
+            engine->noclipAccuracyDecimals = std::clamp(engine->noclipAccuracyDecimals, 0, 6);
+        }
+
+        Widgets::ToggleSwitch("Hitboxes on Noclip Death", &engine->noclipHitboxOnDeath, theme, anim);
 
         ImGui::Dummy(ImVec2(0, 4));
         if (engine->collisionLimitActive) {
@@ -3146,7 +2994,7 @@ void MenuInterface::drawHacksTab() {
     }
 
     if (Widgets::ModuleCardBegin("RNG Lock", "Use fixed seed for consistent RNG",
-        &engine->rngLocked, theme, anim, &keybinds.rngLock)) {
+        &engine->rngLocked, theme, anim, "bind_rng_lock")) {
         if (!rngBufferInit) {
             snprintf(rngBuffer, sizeof(rngBuffer), "%u", engine->rngSeedVal);
             rngBufferInit = true;
@@ -4097,7 +3945,7 @@ void MenuInterface::drawAutoclickerTab() {
     auto* eng = ReplayEngine::get();
 
     ImGui::Dummy(ImVec2(0, 4));
-    if (Widgets::ModuleCard("Autoclicker", "Auto-click at configurable intervals", &ac->enabled, theme, anim, &keybinds.autoclicker))
+    if (Widgets::ModuleCard("Autoclicker", "Auto-click at configurable intervals", &ac->enabled, theme, anim, "bind_autoclicker"))
         mod->setSavedValue("ac_enabled", ac->enabled);
 
     if (ac->enabled && eng->engineMode == MODE_EXECUTE) {
@@ -4189,9 +4037,6 @@ void MenuInterface::drawAutoclickerTab() {
     imguiTextWrappedTr("When enabled, only auto-clicks while you hold the jump button.");
     ImGui::PopStyleColor();
 
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Keybind", theme);
-    Widgets::KeybindButton("Toggle Autoclicker", &keybinds.autoclicker, theme, anim);
 }
 
 void MenuInterface::drawClicksTab() {
@@ -4220,7 +4065,7 @@ void MenuInterface::drawClicksTab() {
     }
 
     ImGui::Dummy(ImVec2(0, 4));
-    if (Widgets::ModuleCard("Click Sounds", "Play click and release sounds on input", &csm->enabled, theme, anim, &keybinds.clickSounds))
+    if (Widgets::ModuleCard("Click Sounds", "Play click and release sounds on input", &csm->enabled, theme, anim, "bind_click_sounds"))
         mod->setSavedValue("click_enabled", csm->enabled);
 
     ImGui::Dummy(ImVec2(0, 6));
@@ -4436,9 +4281,6 @@ void MenuInterface::drawClicksTab() {
         }
     }
 
-    ImGui::Dummy(ImVec2(0, 8));
-    Widgets::SectionHeader("Keybind", theme);
-    Widgets::KeybindButton("Toggle Click Sounds", &keybinds.clickSounds, theme, anim);
 }
 
 void MenuInterface::drawSettingsTab() {
@@ -4691,15 +4533,15 @@ void MenuInterface::drawSettingsTab() {
     ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Advanced", theme);
 
-    Widgets::ModuleCard("Instant Reset", "Reset the level and start playback immediately. When off, playback waits until the player dies.", &eng->fastPlayback, theme, anim);
-    if (Widgets::ModuleCard("Autosave", "Automatically save completed recordings", &eng->completionAutosave, theme, anim)) {
+    Widgets::ModuleCard("Instant Reset", "Start playback immediately after a reset", &eng->fastPlayback, theme, anim, "bind_instant_reset");
+    if (Widgets::ModuleCard("Autosave", "Automatically save completed recordings", &eng->completionAutosave, theme, anim, "bind_autosave")) {
         if (eng->completionAutosave && eng->persistenceMode) {
             eng->setPersistenceMode(false);
         }
         mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
     }
     if (eng->engineMode != MODE_DISABLED) ImGui::BeginDisabled();
-    if (Widgets::ModuleCard("Persistence Mode", "Keep failed attempts before the completed run", &eng->persistenceMode, theme, anim)) {
+    if (Widgets::ModuleCard("Persistence Mode", "Keep failed attempts before the completed run", &eng->persistenceMode, theme, anim, "bind_persistence_mode")) {
         eng->setPersistenceMode(eng->persistenceMode);
     }
     if (eng->engineMode != MODE_DISABLED) ImGui::EndDisabled();
@@ -4708,12 +4550,13 @@ void MenuInterface::drawSettingsTab() {
         "Disable click sounds for platformer left and right inputs",
         &csm->muteLeftRightClicks,
         theme,
-        anim
+        anim,
+        "bind_mute_left_right"
     )) {
         mod->setSavedValue("click_mute_left_right", csm->muteLeftRightClicks);
     }
     bool prevRenderWatermarkEnabled = renderWatermarkEnabled;
-    if (Widgets::ModuleCardBegin("Render Watermark", "Add a watermark into rendered video only", &renderWatermarkEnabled, theme, anim)) {
+    if (Widgets::ModuleCardBegin("Render Watermark", "Add a watermark into rendered video only", &renderWatermarkEnabled, theme, anim, "bind_render_watermark")) {
         renderWatermarkFont = sanitizeRenderWatermarkFont(renderWatermarkFont);
         renderWatermarkCorner = sanitizeRenderWatermarkCorner(renderWatermarkCorner);
         renderWatermarkScale = sanitizeClamped(renderWatermarkScale, 0.25f, 3.0f, 1.0f);
@@ -4847,97 +4690,23 @@ void MenuInterface::drawSettingsTab() {
     ImGui::PopStyleVar(2);
 
     ImGui::Dummy(ImVec2(0, 12));
+    Widgets::SectionHeader("Controls", theme);
+    if (Widgets::StyledButton("Keybind Manager", ImVec2(-1, 32), theme, anim)) {
+        toasty::frontend::openKeybindEditor();
+    }
+
+    ImGui::Dummy(ImVec2(0, 12));
     Widgets::SectionHeader("Credits", theme);
     if (Widgets::StyledButton("View Credits", ImVec2(-1, 32), theme, anim)) {
-        ImGui::OpenPopup("Credits##settingsCredits");
+        toasty::frontend::toggleMenu();
+        Loader::get()->queueInMainThread([] {
+            toasty::credits::showCreditsPage();
+        });
     }
     ImGui::Dummy(ImVec2(0, 4));
     if (Widgets::StyledButton("Licenses", ImVec2(-1, 32), theme, anim)) {
         ImGui::OpenPopup("Licenses##settingsLicenses");
     }
-
-    constexpr float kCreditsPopupRounding = 0.0f;
-    ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Appearing);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kCreditsPopupRounding);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0));
-    if (ImGui::BeginPopupModal(
-        "Credits##settingsCredits",
-        nullptr,
-        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-    )) {
-        auto creditsTitle = trString("Credits");
-        drawPopupChrome(*this, creditsTitle.c_str(), kCreditsPopupRounding);
-
-        Widgets::SectionHeader("Fellow Devs", theme);
-
-        struct CreditEntry {
-            const char* name;
-            const char* url;
-            const char* buttonId;
-        };
-
-        static constexpr std::array<CreditEntry, 3> credits = {{
-            {"ThisisLinh", "https://github.com/linhisreal", "GitHub##creditsLinh"},
-            {"Nigel", "https://github.com/guccimanefan", "GitHub##creditsNigel"},
-            {"Human", "https://github.com/MEME-KING16", "GitHub##creditsHuman"},
-        }};
-
-        auto drawCreditRow = [&](CreditEntry const& credit) {
-            ImVec2 rowPos = ImGui::GetCursorScreenPos();
-            float rowW = ImGui::GetContentRegionAvail().x;
-            constexpr float rowH = 46.0f;
-            ImVec2 rowMax(rowPos.x + rowW, rowPos.y + rowH);
-
-            drawSolidRect(ImGui::GetWindowDrawList(), rowPos, rowMax, theme.cornerRadius, theme, 0.44f);
-
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 12.0f, rowPos.y + 8.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, theme.textPrimary);
-            ImGui::TextUnformatted(credit.name);
-            ImGui::PopStyleColor();
-
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 12.0f, rowPos.y + 27.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            ImGui::TextUnformatted(credit.url);
-            ImGui::PopStyleColor();
-
-            constexpr float buttonW = 82.0f;
-            constexpr float buttonH = 26.0f;
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + rowW - buttonW - 10.0f, rowPos.y + 10.0f));
-            if (Widgets::StyledButton(credit.buttonId, ImVec2(buttonW, buttonH), theme, anim, 6.0f)) {
-                geode::utils::web::openLinkInBrowser(credit.url);
-            }
-
-            ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowMax.y + 6.0f));
-        };
-
-        for (auto const& credit : credits) {
-            drawCreditRow(credit);
-        }
-
-        ImGui::Dummy(ImVec2(0, 2));
-        ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-        ImGui::TextWrapped(
-            "%s",
-            "Thank you to my loyal devs, and to all the supporters who have kept ToastyReplay alive and running, your contributions mean the world to me. If you want to contribute to this project, buying ToastyReplay Pro helps support me, and my devs."
-        );
-        ImGui::PopStyleColor();
-
-        ImGui::Dummy(ImVec2(0, 8));
-        if (Widgets::StyledButton("Open ToastyReplay Website##creditsWebsite", ImVec2(-1, 30.0f), theme, anim, 6.0f)) {
-            geode::utils::web::openLinkInBrowser("https://toastyreplay.xyz/");
-        }
-        ImGui::Dummy(ImVec2(0, 4));
-        if (Widgets::StyledButton("Ok##creditsClose", ImVec2(-1, 28.0f), theme, anim, 6.0f)) {
-            ImGui::CloseCurrentPopup();
-        }
-
-        ImGui::EndPopup();
-    }
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(2);
 
     struct LicenseEntry {
         const char* name;
@@ -5364,24 +5133,11 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("anim_speed", anim.animSpeed);
     mod->setSavedValue("anim_direction", (int)anim.openDirection);
 
-    mod->setSavedValue("key_menu", keybinds.menu);
-    mod->setSavedValue("key_frame_advance", keybinds.frameAdvance);
-    mod->setSavedValue("key_frame_step", keybinds.frameStep);
-    mod->setSavedValue("key_replay_toggle", keybinds.replayToggle);
-    mod->setSavedValue("key_noclip", keybinds.noclip);
-    mod->setSavedValue("key_safe_mode", keybinds.safeMode);
-    mod->setSavedValue("key_trajectory", keybinds.trajectory);
-    mod->setSavedValue("key_audio_pitch", keybinds.audioPitch);
-    mod->setSavedValue("key_rng_lock", keybinds.rngLock);
-    mod->setSavedValue("key_hitboxes", keybinds.hitboxes);
-    mod->setSavedValue("key_layout_mode", keybinds.layoutMode);
-    mod->setSavedValue("key_no_mirror", keybinds.noMirror);
-    mod->setSavedValue("key_disable_shaders", keybinds.disableShaders);
-    mod->setSavedValue("key_click_sounds", keybinds.clickSounds);
 
     mod->setSavedValue("hack_auto_safe_mode", eng->autoSafeMode);
     mod->setSavedValue("hack_hitboxes", eng->showHitboxes);
     mod->setSavedValue("hack_hitbox_death", eng->hitboxOnDeath);
+    mod->setSavedValue("hack_noclip_hitbox_death", eng->noclipHitboxOnDeath);
     mod->setSavedValue("hack_hitbox_trail", eng->hitboxTrail);
     mod->setSavedValue("hack_hitbox_trail_len", eng->hitboxTrailLength);
     mod->setSavedValue("hack_trajectory", eng->pathPreview);
@@ -5390,6 +5146,7 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("hack_noclip", eng->collisionBypass);
     mod->setSavedValue("hack_noclip_p1", eng->noclipPlayer1);
     mod->setSavedValue("hack_noclip_p2", eng->noclipPlayer2);
+    mod->setSavedValue("hack_noclip_accuracy_decimals", std::clamp(eng->noclipAccuracyDecimals, 0, 6));
     mod->setSavedValue("hack_noclip_flash", eng->noclipDeathFlash);
     mod->setSavedValue("hack_noclip_color_r", eng->noclipDeathColorR);
     mod->setSavedValue("hack_noclip_color_g", eng->noclipDeathColorG);
@@ -5426,7 +5183,6 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("ac_target_cps", (double)ac->targetCps);
     mod->setSavedValue("ac_hold_ratio", (double)ac->holdRatio);
     mod->setSavedValue("ac_only_holding", ac->onlyWhileHolding);
-    mod->setSavedValue("key_autoclicker", keybinds.autoclicker);
 
     mod->setSavedValue("eng_accuracy_mode", static_cast<int>(eng->selectedAccuracyMode));
     mod->setSavedValue("eng_tick_rate", (float)eng->tickRate);
@@ -6783,21 +6539,6 @@ void MenuInterface::loadSettings() {
     int savedDirection = mod->getSavedValue<int>("anim_direction", ANIM_CENTER);
     anim.openDirection = static_cast<AnimDirection>(std::clamp(savedDirection, static_cast<int>(ANIM_CENTER), static_cast<int>(ANIM_FROM_BOTTOM)));
 
-    keybinds.menu = mod->getSavedValue<int>("key_menu", 0x42);
-    keybinds.frameAdvance = mod->getSavedValue<int>("key_frame_advance", 0x56);
-    keybinds.frameStep = mod->getSavedValue<int>("key_frame_step", 0x43);
-    keybinds.replayToggle = mod->getSavedValue<int>("key_replay_toggle", 0);
-    keybinds.noclip = mod->getSavedValue<int>("key_noclip", 0);
-    keybinds.safeMode = mod->getSavedValue<int>("key_safe_mode", 0);
-    keybinds.trajectory = mod->getSavedValue<int>("key_trajectory", 0);
-    keybinds.audioPitch = mod->getSavedValue<int>("key_audio_pitch", 0);
-    keybinds.rngLock = mod->getSavedValue<int>("key_rng_lock", 0);
-    keybinds.hitboxes = mod->getSavedValue<int>("key_hitboxes", 0);
-    keybinds.layoutMode = mod->getSavedValue<int>("key_layout_mode", 0);
-    keybinds.noMirror = mod->getSavedValue<int>("key_no_mirror", 0);
-    keybinds.autoclicker = mod->getSavedValue<int>("key_autoclicker", 0);
-    keybinds.disableShaders = mod->getSavedValue<int>("key_disable_shaders", 0);
-    keybinds.clickSounds = mod->getSavedValue<int>("key_click_sounds", 0);
 
     auto* ac = Autoclicker::get();
     ac->enabled = mod->getSavedValue<bool>("ac_enabled", false);
@@ -6817,6 +6558,7 @@ void MenuInterface::loadSettings() {
 
     eng->showHitboxes = mod->getSavedValue<bool>("hack_hitboxes", false);
     eng->hitboxOnDeath = mod->getSavedValue<bool>("hack_hitbox_death", false);
+    eng->noclipHitboxOnDeath = mod->getSavedValue<bool>("hack_noclip_hitbox_death", false);
     eng->hitboxTrail = mod->getSavedValue<bool>("hack_hitbox_trail", false);
     eng->hitboxTrailLength = mod->getSavedValue<int>("hack_hitbox_trail_len", 240);
     eng->pathPreview = mod->getSavedValue<bool>("hack_trajectory", false);
@@ -6826,6 +6568,7 @@ void MenuInterface::loadSettings() {
     eng->collisionBypass = mod->getSavedValue<bool>("hack_noclip", false);
     eng->noclipPlayer1 = mod->getSavedValue<bool>("hack_noclip_p1", true);
     eng->noclipPlayer2 = mod->getSavedValue<bool>("hack_noclip_p2", true);
+    eng->noclipAccuracyDecimals = std::clamp(mod->getSavedValue<int>("hack_noclip_accuracy_decimals", 2), 0, 6);
     eng->noclipDeathFlash = mod->getSavedValue<bool>("hack_noclip_flash", true);
     eng->noclipDeathColorR = mod->getSavedValue<float>("hack_noclip_color_r", 1.0f);
     eng->noclipDeathColorG = mod->getSavedValue<float>("hack_noclip_color_g", 0.0f);
@@ -7016,7 +6759,7 @@ void MenuInterface::drawMainWindow() {
     float remainH = ImGui::GetContentRegionAvail().y - statusBarH;
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-    ImGui::BeginChild("##TabContent", ImVec2(0, remainH), false);
+    ImGui::BeginChild("##TabContent", ImVec2(0, remainH), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
     ImGui::Indent(10.0f);
     drawTabContent();
     ImGui::Unindent(10.0f);

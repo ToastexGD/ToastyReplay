@@ -251,6 +251,10 @@ public:
         return m_initialFps;
     }
 
+    double currentFps() const {
+        return m_currentFps;
+    }
+
 private:
     double m_initialFps = 240.0;
     double m_currentFps = 240.0;
@@ -273,7 +277,8 @@ static PlayerStateBundle makeImportedPlayerState(
     float y,
     float rotation,
     double yVelocity,
-    bool platformer
+    bool platformer,
+    double xVelocity = 0.0
 ) {
     auto sanitizeF = [](float value) -> float {
         return std::isfinite(value) ? value : 0.0f;
@@ -287,6 +292,7 @@ static PlayerStateBundle makeImportedPlayerState(
     state.motion.rotation = sanitizeF(rotation);
     state.motion.verticalVelocity = sanitizeD(yVelocity);
     state.motion.preSlopeVerticalVelocity = sanitizeD(yVelocity);
+    state.motion.horizontalVelocity = sanitizeD(xVelocity);
     state.flags.platformer = platformer;
     state.environment.extendedState = false;
     return state;
@@ -338,11 +344,12 @@ static void addPlayerAnchor(
     ));
 
     auto it = std::find_if(replay.anchors.begin(), replay.anchors.end(), [&](PlaybackAnchor const& anchor) {
-        return anchor.tick == tick;
+        return anchor.tick == tick && (!anchor.hasAbsoluteTime() || std::abs(anchor.timeSeconds - time) <= 0.000000001);
     });
     if (it == replay.anchors.end()) {
         PlaybackAnchor anchor;
         anchor.tick = tick;
+        anchor.timeSeconds = time;
         it = replay.anchors.insert(replay.anchors.end(), std::move(anchor));
     }
 
@@ -477,6 +484,16 @@ static void resolveSameTickButtonCollisions(ImportedReplay& replay) {
                 if (indices.size() < 2) continue;
 
                 if (!replay.inputs[indices.front()].pressed) {
+                    continue;
+                }
+
+                size_t pressCount = 0;
+                for (size_t index : indices) {
+                    if (replay.inputs[index].pressed) {
+                        ++pressCount;
+                    }
+                }
+                if (pressCount < 2) {
                     continue;
                 }
 
@@ -1100,14 +1117,22 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
     reader.skip(16);
 
     uint8_t version = reader.u8();
-    reader.skip(3);
-    float tps = reader.f32le();
-    reader.skip(0x40 - 8);
+    reader.skip(1);
+    uint8_t headerFlags = reader.u8();
+    reader.skip(1);
+    float rateField = reader.f32le();
+    uint64_t headerSeed = reader.u64le();
+    reader.skip(0x40 - 16);
+
+    bool hasOverrideSeed = version == 2 && (headerFlags & 0x01) != 0;
 
     ImportedReplay replay;
     replay.format = ReplayFormat::TCBot;
-    replay.fps = static_cast<double>(tps);
+    replay.fps = decodeTcmFps(version, headerFlags, rateField);
+    replay.hasDeterministicSeed = hasOverrideSeed;
+    replay.deterministicSeed = hasOverrideSeed ? headerSeed : 0;
     replay.hasTcbotV2VersionByte = version == 2;
+    ImportTimeline timeline(replay.fps);
 
     if (version == 1) {
         uint32_t count = readLEB128(reader);
@@ -1116,11 +1141,15 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
             uint32_t frame = readLEB128(reader);
             uint8_t inputByte = reader.u8();
             uint8_t inputType = inputByte & 0x07;
-            if (inputType >= 3) continue;
+            if (inputType >= 3) {
+                replay.inputs.clear();
+                replay.duration = 0.0;
+                continue;
+            }
             bool pressed = (inputByte & 0x80) != 0;
             bool player2 = (inputByte & 0x40) != 0;
             int button = static_cast<int>(inputType) + 1;
-            addInput(replay, static_cast<double>(frame) / replay.fps, frame, button, player2, pressed);
+            addInput(replay, timeline.timeForFrame(frame), frame, button, player2, pressed);
         }
     } else if (version == 2) {
         uint32_t currentFrame = readLEB128(reader);
@@ -1138,9 +1167,9 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
                 bool player2 = (byte & 0x08) != 0;
                 bool swift = (byte & 0x10) != 0;
                 int button = static_cast<int>(inputData);
-                addInput(replay, static_cast<double>(currentFrame) / replay.fps, currentFrame, button, player2, pressed);
+                addInput(replay, timeline.timeForFrame(currentFrame), currentFrame, button, player2, pressed, swift);
                 if (swift) {
-                    addInput(replay, static_cast<double>(currentFrame) / replay.fps, currentFrame, button, player2, !pressed);
+                    addInput(replay, timeline.timeForFrame(currentFrame), currentFrame, button, player2, !pressed, true);
                 }
             } else {
                 uint8_t customType = (byte >> 2) & 0x03;
@@ -1149,14 +1178,22 @@ static ImportedReplay parseTCBot(std::vector<uint8_t> const& data) {
                     if (!extra) {
                         if (reader.remaining() < 4) break;
                         float newTps = reader.f32le();
-                        replay.fps = static_cast<double>(newTps);
+                        timeline.changeFps(replay, currentFrame, static_cast<double>(newTps));
                     }
                 } else {
                     if (extra) {
                         if (reader.remaining() < 8) break;
-                        reader.skip(8);
+                        replay.deterministicSeed = reader.u64le();
+                        replay.hasDeterministicSeed = true;
                     }
                     currentFrame = 0;
+                    replay.inputs.clear();
+                    replay.tpsEvents.clear();
+                    replay.duration = 0.0;
+                    replay.fps = timeline.currentFps();
+                    replay.dynamicTiming = false;
+                    replay.needsCbsTiming = false;
+                    timeline = ImportTimeline(replay.fps);
                 }
             }
 
@@ -1784,8 +1821,15 @@ static ImportedReplay parseGDR2(std::vector<uint8_t> const& data) {
     int32_t extSize = reader.varI32();
     if (extSize < 0) throw FormatError("invalid GDR2 extension size");
     reader.skip(static_cast<size_t>(extSize));
-    if (extSize > 0 || hasExtension) {
-        addWarningOnce(replay, "GDR2 extensions were imported as inputs only; custom physics data was skipped.");
+    bool const supportsInputExtension = !hasExtension || inputTag == "Phys";
+    replay.hasDecodedGdr2Extensions = extSize == 0 && supportsInputExtension;
+    if (extSize > 0) {
+        replay.hasUnsupportedPlaybackData = true;
+        addWarningOnce(replay, "This GDR2 file contains a replay extension that cannot be preserved exactly.");
+    }
+    if (hasExtension && !supportsInputExtension) {
+        replay.hasUnsupportedPlaybackData = true;
+        addWarningOnce(replay, "This GDR2 file uses an unknown input extension: " + inputTag + ".");
     }
 
     int32_t deathCount = reader.varI32();
@@ -1803,22 +1847,46 @@ static ImportedReplay parseGDR2(std::vector<uint8_t> const& data) {
     auto readInputs = [&](int32_t count, bool player2) {
         uint64_t frame = 0;
         for (int32_t i = 0; i < count; ++i) {
-            uint64_t packed = static_cast<uint64_t>(reader.varI32());
+            uint64_t packed = reader.varU64();
             int button = 1;
             bool pressed = false;
             if (replay.platformerMode) {
-                frame += packed >> 3;
+                uint64_t const delta = packed >> 3;
+                if (delta > std::numeric_limits<uint64_t>::max() - frame) throw FormatError("GDR2 frame overflow");
+                frame += delta;
                 button = static_cast<int>((packed >> 1) & 3);
                 pressed = (packed & 1) != 0;
             } else {
-                frame += packed >> 1;
+                uint64_t const delta = packed >> 1;
+                if (delta > std::numeric_limits<uint64_t>::max() - frame) throw FormatError("GDR2 frame overflow");
+                frame += delta;
                 pressed = (packed & 1) != 0;
             }
-            addInput(replay, static_cast<double>(frame) / replay.fps, static_cast<int64_t>(frame), button, player2, pressed);
+            double const sourceFrame = static_cast<double>(frame);
+            double const time = sourceFrame / replay.fps;
+            addInput(replay, time, sourceFrame, button, player2, pressed);
             if (hasExtension) {
                 int32_t inputExtSize = reader.varI32();
                 if (inputExtSize < 0) throw FormatError("invalid GDR2 input extension size");
-                reader.skip(static_cast<size_t>(inputExtSize));
+                if (inputTag == "Phys" && inputExtSize == 28) {
+                    float x = reader.f32be();
+                    float y = reader.f32be();
+                    float rotation = reader.f32be();
+                    double xVelocity = reader.f64be();
+                    double yVelocity = reader.f64be();
+                    addPlayerAnchor(
+                        replay,
+                        time,
+                        sourceFrame,
+                        player2,
+                        makeImportedPlayerState(x, y, rotation, yVelocity, replay.platformerMode, xVelocity)
+                    );
+                } else {
+                    reader.skip(static_cast<size_t>(inputExtSize));
+                    replay.hasDecodedGdr2Extensions = false;
+                    replay.hasUnsupportedPlaybackData = true;
+                    addWarningOnce(replay, "This GDR2 file contains input extension data that cannot be preserved exactly.");
+                }
             }
         }
     };
@@ -1903,7 +1971,8 @@ static ImportedReplay parseGDMO(std::vector<uint8_t> const& data) {
                         }
                         addWarningOnce(replay, "Converted GDMO correction data into Toasty anchors.");
                     } else if (correctionCount != 0) {
-                        addWarningOnce(replay, "GDMO correction data had an unknown layout and was skipped.");
+                        replay.hasUnsupportedPlaybackData = true;
+                        addWarningOnce(replay, "GDMO correction data had an unknown layout and cannot be preserved exactly.");
                     }
                 }
                 finishImport(replay);
@@ -2290,6 +2359,8 @@ ConversionResult convertReplay(
 
         if (target == ConversionTarget::TTR3) {
             TTR3InspectionFacts facts;
+            facts.sourceInspected = true;
+            facts.hasUnsupportedPlaybackData = imported->hasUnsupportedPlaybackData;
             facts.hasTcbotV2VersionByte = imported->hasTcbotV2VersionByte;
             facts.hasFractionalPlaintextFrames = imported->hasFractionalPlaintextFrames;
             facts.hasDecodedGdr2Extensions = imported->hasDecodedGdr2Extensions;
@@ -2302,6 +2373,7 @@ ConversionResult convertReplay(
                 throw FormatError(eligibility.message);
             }
 
+            imported->sourceLosslessVerified = true;
             imported->convertedForTTR3 = true;
             finishImportForTarget(*imported, ConversionTarget::TTR3);
             auto ttr3Macro = buildTTR3FromImported(*imported, outputName, std::move(author));

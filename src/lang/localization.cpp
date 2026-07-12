@@ -1,4 +1,5 @@
 #include "lang/localization.hpp"
+#include "gui/cocos/frontend.hpp"
 
 #include <Geode/loader/SettingV3.hpp>
 #include <Geode/utils/file.hpp>
@@ -176,6 +177,7 @@ namespace toasty::lang {
             }
             listenForSettingChanges<std::string>("ui_language", [](std::string const&) {
                 refresh();
+                toasty::frontend::refreshMenuState();
             });
         });
     }

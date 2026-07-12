@@ -71,6 +71,8 @@ enum class TTR3Route {
 };
 
 struct TTR3InspectionFacts {
+    bool sourceInspected = false;
+    bool hasUnsupportedPlaybackData = false;
     bool hasTcbotV2VersionByte = false;
     bool hasGdmoCorrectionRecords = false;
     bool hasFractionalPlaintextFrames = false;
@@ -114,11 +116,14 @@ struct ImportedReplay {
     std::vector<ImportedTpsEvent> tpsEvents;
     std::vector<std::string> warnings;
     bool sourceLosslessVerified = false;
+    bool hasUnsupportedPlaybackData = false;
     bool hasTcbotV2VersionByte = false;
     bool hasFractionalPlaintextFrames = false;
     bool hasDecodedGdr2Extensions = false;
     bool hasUvBotPhysicsAnchors = false;
     bool ybot2SourceTpsHighEnough = false;
+    bool hasDeterministicSeed = false;
+    uint64_t deterministicSeed = 0;
     bool convertedForTTR3 = false;
 };
 
@@ -152,17 +157,33 @@ inline double safeTTR3Fps(double fps) {
     return isFiniteTTR3Fps(fps) ? fps : 240.0;
 }
 
+inline double decodeTcmFps(uint8_t version, uint8_t flags, float rateField) {
+    if (version != 2 || (flags & 0x02) != 0) {
+        return safeTTR3Fps(static_cast<double>(rateField));
+    }
+    if (!std::isfinite(rateField) || rateField <= 0.0f) {
+        return 240.0;
+    }
+    return safeTTR3Fps(1.0 / static_cast<double>(rateField));
+}
+
 inline int sanitizeTTR3Button(int button) {
     return button >= 1 && button <= 3 ? button : 1;
 }
 
 inline int32_t materializeTTR3Tick(double timeSeconds, double fps) {
-    double tick = std::floor(std::max(0.0, timeSeconds) * safeTTR3Fps(fps));
+    double tick = std::floor(std::max(0.0, timeSeconds) * safeTTR3Fps(fps) + 0.000001);
     return static_cast<int32_t>(std::clamp<double>(
         tick,
         0.0,
         static_cast<double>(std::numeric_limits<int32_t>::max())
     ));
+}
+
+inline double ttr3SnappedCbsOffset(double timeSeconds, int32_t tick, double fps) {
+    double safe = safeTTR3Fps(fps);
+    double offset = timeSeconds - static_cast<double>(tick) / safe;
+    return offset * safe > 0.000001 ? offset : 0.0;
 }
 
 inline void finishImportForTTR3(ImportedReplay& replay) {
@@ -229,6 +250,16 @@ inline void finishImportForTTR3(ImportedReplay& replay) {
                         continue;
                     }
 
+                    size_t pressCount = 0;
+                    for (size_t index : indices) {
+                        if (replay.inputs[index].pressed) {
+                            ++pressCount;
+                        }
+                    }
+                    if (pressCount < 2) {
+                        continue;
+                    }
+
                     double const baseTime = static_cast<double>(tick) / replay.fps;
                     double const fractionStep = 1.0 / static_cast<double>(indices.size());
                     for (size_t k = 0; k < indices.size(); ++k) {
@@ -255,7 +286,7 @@ inline void finishImportForTTR3(ImportedReplay& replay) {
     for (size_t i = 0; i < replay.inputs.size(); ++i) {
         auto& input = replay.inputs[i];
         input.tick = materializeTTR3Tick(input.time, replay.fps);
-        input.cbsTimeOffset = std::max(0.0, input.time - static_cast<double>(input.tick) / replay.fps);
+        input.cbsTimeOffset = ttr3SnappedCbsOffset(input.time, static_cast<int32_t>(input.tick), replay.fps);
         input.stepOffset = static_cast<float>(std::clamp(input.cbsTimeOffset * replay.fps, 0.0, 0.999999));
         input.sequence = static_cast<uint64_t>(i);
     }
@@ -302,7 +333,7 @@ inline TTRMacro buildTTR3FromImported(
     TTRMacro macro;
     macro.fileFormat = TTRFileFormat::TTR3;
     macro.sourceFormatId = static_cast<uint64_t>(imported.format);
-    macro.losslessVerified = true;
+    macro.losslessVerified = imported.sourceLosslessVerified;
     macro.macroConverted = true;
     macro.bestEffort = false;
     macro.author = std::move(author);
@@ -312,15 +343,11 @@ inline TTRMacro buildTTR3FromImported(
     macro.levelId = imported.levelId;
     macro.framerate = fps;
     macro.duration = std::max(0.0, imported.duration);
-    bool const hasSubTickPrecision = std::any_of(
+    bool const hasSubTickPrecision = imported.needsCbsTiming || imported.dynamicTiming || std::any_of(
         imported.inputs.begin(),
         imported.inputs.end(),
         [](ImportedInput const& input) {
-            bool const offsetNonzero = std::isfinite(input.stepOffset) && input.stepOffset > 0.0f;
-            bool const absoluteTime = std::isfinite(input.time)
-                && std::isfinite(input.sourceFrame)
-                && input.time - input.sourceFrame * (1.0 / 240.0) > 1e-6;
-            return offsetNonzero || absoluteTime;
+            return std::isfinite(input.stepOffset) && input.stepOffset > 0.0f;
         });
     macro.accuracyMode = hasSubTickPrecision ? AccuracyMode::CBS : AccuracyMode::Vanilla;
     macro.exactCbsTiming = hasSubTickPrecision;
@@ -333,6 +360,12 @@ inline TTRMacro buildTTR3FromImported(
         macro.tpsEvents.push_back({ event.timeSeconds, event.tps });
     }
     macro.recordTimestamp = static_cast<int64_t>(std::time(nullptr));
+    if (imported.hasDeterministicSeed) {
+        macro.rngLocked = true;
+        macro.rngSeed = static_cast<uint32_t>(
+            imported.deterministicSeed ^ (imported.deterministicSeed >> 32)
+        );
+    }
 
     if (macro.tpsEvents.empty()) {
         macro.tpsEvents.push_back({0.0, fps});
@@ -355,7 +388,7 @@ inline TTRMacro buildTTR3FromImported(
         out.setPressed(input.pressed);
         out.timeSeconds = timeSeconds;
         out.swiftPairAnchor = input.swift && input.pressed;
-        out.cbsTimeOffset = std::max(0.0, timeSeconds - static_cast<double>(out.tick) / fps);
+        out.cbsTimeOffset = ttr3SnappedCbsOffset(timeSeconds, out.tick, fps);
         out.stepOffset = static_cast<float>(std::clamp(out.cbsTimeOffset * fps, 0.0, 0.999999));
         macro.twoPlayerMode = macro.twoPlayerMode || input.player2;
         macro.duration = std::max(macro.duration, timeSeconds);
@@ -400,45 +433,46 @@ inline TTR3Eligibility inspectTTR3Eligibility(ReplayFormat format, TTR3Inspectio
         };
     };
 
+    if (facts.sourceInspected && facts.hasUnsupportedPlaybackData) {
+        return TTR3Eligibility {
+            TTR3Route::Blocked,
+            false,
+            "This macro contains playback data that ToastyReplay cannot preserve exactly."
+        };
+    }
+
     switch (format) {
-        case ReplayFormat::Silicate2:
-        case ReplayFormat::Silicate3:
-        case ReplayFormat::DDHOR:
-        case ReplayFormat::Amethyst:
-        case ReplayFormat::Zephyrus:
-        case ReplayFormat::ReplayEngine1:
-        case ReplayFormat::ReplayEngine3:
-            return lossless();
-
-        case ReplayFormat::TCBot:
-            return facts.hasTcbotV2VersionByte ? lossless() : blocked();
-        case ReplayFormat::GDMO:
-            return facts.hasGdmoCorrectionRecords ? lossless() : blocked();
-        case ReplayFormat::Plaintext:
-            return facts.hasFractionalPlaintextFrames ? lossless() : blocked();
-        case ReplayFormat::GDR2:
-            return facts.hasDecodedGdr2Extensions ? lossless() : blocked();
-        case ReplayFormat::YBot2:
-            return facts.ybot2SourceTpsHighEnough ? lossless() : blocked();
-        case ReplayFormat::UvBot:
-            return facts.hasUvBotPhysicsAnchors ? lossless() : blocked();
-
         case ReplayFormat::MegaHackJson:
         case ReplayFormat::MegaHackBinary:
         case ReplayFormat::TasBotJson:
         case ReplayFormat::ZBotFrame:
         case ReplayFormat::YBotFrame:
+        case ReplayFormat::YBot2:
+        case ReplayFormat::Amethyst:
         case ReplayFormat::Echo:
+        case ReplayFormat::GDMO:
         case ReplayFormat::ReplayBot:
         case ReplayFormat::Rush:
         case ReplayFormat::KDBot:
+        case ReplayFormat::Plaintext:
+        case ReplayFormat::DDHOR:
         case ReplayFormat::XBotFrame:
         case ReplayFormat::XdBot:
-        case ReplayFormat::GdrJson:
         case ReplayFormat::RBot:
+        case ReplayFormat::Zephyrus:
+        case ReplayFormat::ReplayEngine1:
         case ReplayFormat::ReplayEngine2:
+        case ReplayFormat::ReplayEngine3:
         case ReplayFormat::Silicate1:
-            return blocked();
+        case ReplayFormat::Silicate2:
+        case ReplayFormat::Silicate3:
+        case ReplayFormat::TCBot:
+        case ReplayFormat::GdrJson:
+        case ReplayFormat::UvBot:
+            return lossless();
+
+        case ReplayFormat::GDR2:
+            return !facts.sourceInspected || facts.hasDecodedGdr2Extensions ? lossless() : blocked();
 
         case ReplayFormat::Unknown:
         case ReplayFormat::OmegaBot:

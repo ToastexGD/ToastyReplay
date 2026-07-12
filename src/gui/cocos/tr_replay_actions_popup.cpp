@@ -4,6 +4,7 @@
 #include "conversion/macro_converter.hpp"
 #include "ToastyReplay.hpp"
 #include "utils.hpp"
+#include "lang/localization.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/ButtonSprite.hpp>
@@ -20,6 +21,10 @@ namespace toasty::frontend {
 namespace {
     constexpr float kPopupWidth = 300.f;
     constexpr float kPopupHeight = 240.f;
+
+    std::string localized(std::string_view text) {
+        return std::string(toasty::lang::tr(text));
+    }
 
     std::string macroExtension(std::string const& name, bool isTTR) {
         namespace fs = std::filesystem;
@@ -52,13 +57,15 @@ bool TRReplayActionsPopup::init() {
     title->setPosition({ kPopupWidth * 0.5f, kPopupHeight - 22.f });
     m_mainLayer->addChild(title, 10);
 
-    auto* renameLabel = CCLabelBMFont::create("Rename", "bigFont.fnt");
+    auto renameText = localized("Rename");
+    auto* renameLabel = CCLabelBMFont::create(renameText.c_str(), "bigFont.fnt");
     renameLabel->setScale(0.42f);
     renameLabel->setAnchorPoint({ 0.f, 0.5f });
     renameLabel->setPosition({ 20.f, kPopupHeight - 52.f });
     m_mainLayer->addChild(renameLabel);
 
-    m_renameInput = TextInput::create(150.f, "New name", "bigFont.fnt");
+    auto newNameText = localized("New name");
+    m_renameInput = TextInput::create(150.f, newNameText.c_str(), "bigFont.fnt");
     m_renameInput->setScale(0.85f);
     m_renameInput->setString(m_name);
     m_renameInput->setPosition({ 130.f, kPopupHeight - 52.f });
@@ -66,7 +73,8 @@ bool TRReplayActionsPopup::init() {
 
     auto* renameMenu = CCMenu::create();
     renameMenu->setPosition({ 0.f, 0.f });
-    auto* renameSpr = ButtonSprite::create("Save", 30, 0, 0.5f, false, "bigFont.fnt", "GJ_button_01.png", 24.f);
+    auto saveText = localized("Save");
+    auto* renameSpr = ButtonSprite::create(saveText.c_str(), 30, 0, 0.5f, false, "bigFont.fnt", "GJ_button_01.png", 24.f);
     auto* renameItem = geode::cocos::CCMenuItemExt::createSpriteExtra(renameSpr, [this](CCMenuItemSpriteExtra*) {
         this->doRename();
     });
@@ -79,7 +87,8 @@ bool TRReplayActionsPopup::init() {
 
     float actionY = kPopupHeight - 92.f;
     auto addAction = [&](const char* label, const char* bg, std::function<void()> action) {
-        auto* spr = ButtonSprite::create(label, 140, 0, 0.6f, false, "bigFont.fnt", bg, 28.f);
+        auto displayLabel = localized(label);
+        auto* spr = ButtonSprite::create(displayLabel.c_str(), 140, 0, 0.6f, false, "bigFont.fnt", bg, 28.f);
         auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(spr, [action](CCMenuItemSpriteExtra*) {
             action();
         });
@@ -268,13 +277,14 @@ void TRReplayActionsPopup::doDelete() {
     std::string name = m_name;
     bool isTTR = m_isTTR;
     auto onChanged = m_onChanged;
+    geode::WeakRef<TRReplayActionsPopup> source(this);
 
     geode::createQuickPopup(
         "Delete Macro",
         "Delete <cr>" + name + "</c>? This cannot be undone.",
         "Cancel",
         "Delete",
-        [this, name, isTTR, onChanged](FLAlertLayer*, bool confirm) {
+        [source, name, isTTR, onChanged](FLAlertLayer*, bool confirm) {
             if (!confirm) {
                 return;
             }
@@ -309,7 +319,9 @@ void TRReplayActionsPopup::doDelete() {
                 if (onChanged) {
                     onChanged();
                 }
-                this->removeFromParentAndCleanup(true);
+                if (auto popup = source.lock()) {
+                    popup->removeFromParentAndCleanup(true);
+                }
             } else {
                 Notification::create("Failed to delete", NotificationIcon::Error, 1.0f)->show();
             }

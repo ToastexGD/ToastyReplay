@@ -1,3 +1,5 @@
+#include "core/gameplay_layer.hpp"
+#include "hacks/hitbox_overlay_model.hpp"
 #include "conversion/macro_converter.hpp"
 
 #include <cassert>
@@ -8,6 +10,41 @@
 #include <string>
 
 using namespace toasty::conversion;
+using namespace toasty::gameplay;
+
+namespace {
+PlayLayer* g_fakePlayLayer = nullptr;
+LevelEditorLayer* g_fakeEditor = nullptr;
+}
+
+namespace toasty::gameplay::detail {
+    PlayLayer* (*playLayerGetter)() = []() -> PlayLayer* { return g_fakePlayLayer; };
+    LevelEditorLayer* (*editorGetter)() = []() -> LevelEditorLayer* { return g_fakeEditor; };
+}
+
+static void resetGameplayLayerState() {
+    g_fakePlayLayer = nullptr;
+    g_fakeEditor = nullptr;
+    setEditorPlaytestActive(false);
+}
+
+static void test_editor_playtest_counts_as_gameplay_active() {
+    resetGameplayLayerState();
+    g_fakeEditor = reinterpret_cast<LevelEditorLayer*>(0x3);
+    setEditorPlaytestActive(true);
+    assert(mode() == Mode::EditorPlaytest);
+    assert(activeLayer() == g_fakeEditor);
+    assert(isGameplayActive());
+    assert(isEditorPlaytest());
+    assert(!isEditorBuildMode());
+}
+
+static void test_editor_hitbox_overlay_requires_active_playtest() {
+    assert(!toasty::hitbox_overlay::shouldRenderEditorOverlay(false, false));
+    assert(!toasty::hitbox_overlay::shouldRenderEditorOverlay(false, true));
+    assert(!toasty::hitbox_overlay::shouldRenderEditorOverlay(true, false));
+    assert(toasty::hitbox_overlay::shouldRenderEditorOverlay(true, true));
+}
 
 static std::string readProjectFile(char const* relativePath) {
     static constexpr char const* prefixes[] = { "", "../", "../../", "../../../" };
@@ -197,6 +234,57 @@ static void test_ttr3_same_tick_non_swift_taps_preserve_edges_with_cbs_offsets()
     assert(macro.inputs[2].stepOffset > macro.inputs[1].stepOffset);
 }
 
+static void test_single_same_tick_tap_stays_vanilla() {
+    ImportedReplay replay;
+    replay.format = ReplayFormat::TCBot;
+    replay.fps = 360.0;
+    replay.sourceLosslessVerified = true;
+    replay.inputs.push_back({ .time = 100.0 / replay.fps, .sourceFrame = 100.0, .sequence = 0,
+        .button = 1, .player2 = false, .pressed = true });
+    replay.inputs.push_back({ .time = 100.0 / replay.fps, .sourceFrame = 100.0, .sequence = 1,
+        .button = 1, .player2 = false, .pressed = false });
+
+    finishImportForTarget(replay, ConversionTarget::TTR3);
+    auto macro = buildTTR3FromImported(replay, "single-tap", "Toast");
+
+    assert(!replay.needsCbsTiming);
+    assert(macro.accuracyMode == AccuracyMode::Vanilla);
+    assert(macro.inputs.size() == 2);
+    assert(macro.inputs[0].tick == 100);
+    assert(macro.inputs[1].tick == 100);
+    assert(macro.inputs[0].isPressed());
+    assert(!macro.inputs[1].isPressed());
+}
+
+static void test_integer_frames_materialize_exactly_at_arbitrary_tps() {
+    for (double tps : { 30.0, 60.0, 144.0, 240.0, 360.0, 1000.0, 2026.0 }) {
+        for (int frame = 0; frame <= 10000; ++frame) {
+            double time = static_cast<double>(frame) / tps;
+            assert(materializeTTR3Tick(time, tps) == frame);
+            assert(ttr3SnappedCbsOffset(time, frame, tps) == 0.0);
+        }
+    }
+}
+
+static void test_deterministic_seed_is_preserved() {
+    ImportedReplay replay;
+    replay.format = ReplayFormat::TCBot;
+    replay.hasDeterministicSeed = true;
+    replay.deterministicSeed = 0x123456789ABCDEF0ull;
+
+    auto macro = buildTTR3FromImported(replay, "seeded", "Toast");
+
+    assert(macro.rngLocked);
+    assert(macro.rngSeed == static_cast<uint32_t>(0x123456789ABCDEF0ull ^ (0x123456789ABCDEF0ull >> 32)));
+}
+
+static void test_tcm_rate_metadata_supports_tps_and_delta_time() {
+    assert(std::abs(decodeTcmFps(1, 0, 360.0f) - 360.0) < 0.000001);
+    assert(std::abs(decodeTcmFps(2, 0x02, 1000.0f) - 1000.0) < 0.000001);
+    assert(std::abs(decodeTcmFps(2, 0, 0.001f) - 1000.0) < 0.001);
+    assert(decodeTcmFps(2, 0, 0.0f) == 240.0);
+}
+
 static void test_respawn_override_uses_scheduler_not_dead_update_polling() {
     auto source = readProjectFile("src/hacks/safemode.cpp");
     assert(source.find("scheduleOnce(schedule_selector(GuardedPlayLayer::applyRespawnOverride)") != std::string::npos);
@@ -228,11 +316,17 @@ static void test_cocos_menu_warning_is_registered_for_frontend_setting() {
 }
 
 int main() {
+    test_editor_playtest_counts_as_gameplay_active();
+    test_editor_hitbox_overlay_requires_active_playtest();
     test_conditional_source_signatures_allow_ttr3();
     test_vanilla_ttr3_conversion_strips_playback_fixups_but_keeps_source_signature();
     test_cbs_ttr3_conversion_keeps_authoritative_anchors();
     test_vanilla_ttr3_swift_clicks_keep_every_edge();
     test_ttr3_same_tick_non_swift_taps_preserve_edges_with_cbs_offsets();
+    test_single_same_tick_tap_stays_vanilla();
+    test_integer_frames_materialize_exactly_at_arbitrary_tps();
+    test_deterministic_seed_is_preserved();
+    test_tcm_rate_metadata_supports_tps_and_delta_time();
     test_respawn_override_uses_scheduler_not_dead_update_polling();
     test_module_card_animation_uses_measured_height_without_snap();
     test_dispatch_keybinds_are_visible_on_module_cards();

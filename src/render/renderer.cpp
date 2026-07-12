@@ -711,7 +711,7 @@ int Renderer::getCurrentFrame() const {
 }
 
 float Renderer::getTPS() const {
-    return static_cast<float>(ReplayEngine::get()->tickRate);
+    return static_cast<float>(ReplayEngine::get()->runtimeTickRate());
 }
 
 static void copyFlippedRows(uint8_t* dst, const uint8_t* src, unsigned width, unsigned height) {
@@ -2327,7 +2327,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         if (apiMuxed && !audioCodec.empty() && audioCodec != "aac") {
             Loader::get()->queueInMainThread([ac = audioCodec] {
-                auto msg = fmt::format("Audio muxed as AAC — ffmpeg.exe needed for {}", ac);
+                auto msg = fmt::format("Audio muxed as AAC - ffmpeg.exe needed for {}", ac);
                 Notification::create(msg, NotificationIcon::Warning)->show();
             });
         }

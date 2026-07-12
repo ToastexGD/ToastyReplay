@@ -1,5 +1,6 @@
 #include "gui/cocos/cells/cells.hpp"
 #include "gui/cocos/frontend.hpp"
+#include "lang/localization.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/ButtonSprite.hpp>
@@ -12,6 +13,50 @@ using namespace geode::prelude;
 
 namespace toasty::frontend {
 
+namespace {
+    std::string localized(std::string_view text) {
+        return std::string(toasty::lang::tr(text));
+    }
+
+    ccColor3B toColor(CocosColor const& color) {
+        return ccc3(color[0], color[1], color[2]);
+    }
+
+    CCScale9Sprite* makeSurface(float width, float height, ccColor3B color, GLubyte opacity) {
+        auto* surface = CCScale9Sprite::create("GJ_square05.png");
+        CCSize natural = surface->getContentSize();
+        constexpr float inset = 8.f;
+        surface->setCapInsets(CCRect(inset, inset, std::max(1.f, natural.width - inset * 2.f), std::max(1.f, natural.height - inset * 2.f)));
+        surface->setContentSize({ width, height });
+        surface->setColor(color);
+        surface->setOpacity(opacity);
+        return surface;
+    }
+
+    CCNode* makeToggleTrack(bool active) {
+        auto theme = cocosTheme();
+        auto* node = CCNode::create();
+        node->setContentSize({ 48.f, 24.f });
+        node->setAnchorPoint({ 0.5f, 0.5f });
+
+        auto* track = makeSurface(48.f, 22.f, toColor(active ? theme.accent : theme.inactive), 255);
+        track->setPosition({ 24.f, 12.f });
+        node->addChild(track);
+
+        auto* knob = makeSurface(17.f, 17.f, toColor(active ? theme.sectionText : theme.mutedText), 255);
+        knob->setPosition({ active ? 36.f : 12.f, 12.f });
+        node->addChild(knob);
+
+        auto stateText = localized(active ? "ON" : "OFF");
+        auto* state = CCLabelBMFont::create(stateText.c_str(), "bigFont.fnt");
+        state->setScale(active ? 0.25f : 0.22f);
+        state->setColor(toColor(active ? theme.sectionText : theme.mutedText));
+        state->setPosition({ active ? 13.f : 34.f, 12.f });
+        node->addChild(state);
+        return node;
+    }
+}
+
 bool TRCell::initCell(float width, float height, bool withBackground) {
     if (!CCNode::init()) {
         return false;
@@ -20,14 +65,13 @@ bool TRCell::initCell(float width, float height, bool withBackground) {
     setAnchorPoint({ 0.5f, 0.5f });
 
     if (withBackground) {
-        auto* bg = CCScale9Sprite::create("GJ_square05.png");
-        CCSize natural = bg->getContentSize();
-        constexpr float inset = 8.f;
-        bg->setCapInsets(CCRect(inset, inset, std::max(1.f, natural.width - inset * 2.f), std::max(1.f, natural.height - inset * 2.f)));
-        bg->setContentSize({ width, height });
+        auto theme = cocosTheme();
+        auto* border = makeSurface(width, height, toColor(theme.cellBorder), 225);
+        border->setPosition({ width * 0.5f, height * 0.5f });
+        addChild(border, -2);
+
+        auto* bg = makeSurface(width - 2.f, height - 2.f, toColor(theme.cell), 245);
         bg->setPosition({ width * 0.5f, height * 0.5f });
-        bg->setColor(ccc3(0, 0, 0));
-        bg->setOpacity(60);
         addChild(bg, -1);
         m_bg = bg;
     }
@@ -35,14 +79,16 @@ bool TRCell::initCell(float width, float height, bool withBackground) {
 }
 
 void TRCell::applySubStyle() {
+    auto theme = cocosTheme();
     if (m_bg) {
         auto* bg = static_cast<CCScale9Sprite*>(m_bg);
-        bg->setColor(ccc3(48, 72, 108));
-        bg->setOpacity(150);
+        bg->setColor(toColor(theme.subCell));
+        bg->setOpacity(250);
     }
     auto size = getContentSize();
-    auto* accent = CCLayerColor::create(ccc4(95, 190, 240, 230), 3.f, std::max(2.f, size.height - 8.f));
-    accent->setPosition({ 6.f, 4.f });
+    auto accentColor = toColor(theme.secondary);
+    auto* accent = CCLayerColor::create(ccc4(accentColor.r, accentColor.g, accentColor.b, 245), 3.f, std::max(2.f, size.height - 12.f));
+    accent->setPosition({ 6.f, 6.f });
     addChild(accent);
 }
 
@@ -57,16 +103,31 @@ SectionHeaderCell* SectionHeaderCell::create(std::string const& text) {
 }
 
 bool SectionHeaderCell::init(std::string const& text) {
-    if (!initCell(kCellWidth, 20.f, false)) {
+    if (!initCell(kCellWidth, 24.f, false)) {
         return false;
     }
     auto size = getContentSize();
-    auto* label = CCLabelBMFont::create(text.c_str(), "goldFont.fnt");
+    auto theme = cocosTheme();
+    auto* marker = CCSprite::create("smallDot.png");
+    if (marker) {
+        marker->setScale(6.f / std::max(1.f, marker->getContentSize().width));
+        marker->setColor(toColor(theme.accent));
+        marker->setPosition({ 10.f, size.height * 0.5f });
+        addChild(marker);
+    }
+
+    auto displayText = localized(text);
+    auto* label = CCLabelBMFont::create(displayText.c_str(), "bigFont.fnt");
     label->setAnchorPoint({ 0.f, 0.5f });
-    label->setScale(0.48f);
-    label->limitLabelWidth(size.width - 16.f, 0.48f, 0.2f);
-    label->setPosition({ 8.f, size.height * 0.5f });
+    label->setScale(0.43f);
+    label->setColor(toColor(theme.sectionText));
+    label->limitLabelWidth(size.width - 34.f, 0.43f, 0.2f);
+    label->setPosition({ 19.f, size.height * 0.5f + 1.f });
     addChild(label);
+    auto lineColor = toColor(theme.secondary);
+    auto* line = CCLayerColor::create(ccc4(lineColor.r, lineColor.g, lineColor.b, 125), size.width - 18.f, 1.f);
+    line->setPosition({ 9.f, 1.f });
+    addChild(line);
     return true;
 }
 
@@ -82,37 +143,40 @@ ToggleCell* ToggleCell::create(std::string const& label, std::string const& desc
 
 bool ToggleCell::init(std::string const& label, std::string const& description, bool on, std::function<void(bool)> callback) {
     bool hasDesc = !description.empty();
-    if (!initCell(kCellWidth, hasDesc ? 34.f : 28.f)) {
+    if (!initCell(kCellWidth, hasDesc ? 40.f : 32.f)) {
         return false;
     }
     m_callback = std::move(callback);
     m_value = on;
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
-    title->limitLabelWidth(size.width - 80.f, 0.46f, 0.2f);
-    title->setPosition({ 12.f, hasDesc ? size.height * 0.66f : size.height * 0.5f });
+    title->limitLabelWidth(size.width - 96.f, 0.46f, 0.2f);
+    title->setPosition({ 14.f, hasDesc ? size.height * 0.68f : size.height * 0.5f });
     addChild(title);
 
     if (hasDesc) {
-        auto* desc = CCLabelBMFont::create(description.c_str(), "bigFont.fnt");
+        auto displayDescription = localized(description);
+        auto* desc = CCLabelBMFont::create(displayDescription.c_str(), "bigFont.fnt");
         desc->setAnchorPoint({ 0.f, 0.5f });
         desc->setScale(0.3f);
-        desc->setColor(ccc3(160, 170, 175));
-        desc->limitLabelWidth(size.width - 80.f, 0.3f, 0.16f);
-        desc->setPosition({ 12.f, size.height * 0.28f });
+        desc->setColor(toColor(cocosTheme().mutedText));
+        desc->limitLabelWidth(size.width - 96.f, 0.3f, 0.16f);
+        desc->setPosition({ 14.f, size.height * 0.28f });
         addChild(desc);
     }
 
     auto* menu = CCMenu::create();
     menu->setContentSize({ 0.f, 0.f });
-    menu->setPosition({ size.width - 24.f, size.height * 0.5f });
+    menu->setPosition({ size.width - 34.f, size.height * 0.5f });
     addChild(menu);
 
-    auto* toggler = geode::cocos::CCMenuItemExt::createTogglerWithStandardSprites(
-        0.6f,
+    auto* toggler = geode::cocos::CCMenuItemExt::createToggler(
+        makeToggleTrack(true),
+        makeToggleTrack(false),
         [this](CCMenuItemToggler*) {
             m_value = !m_value;
             if (m_callback) {
@@ -137,17 +201,18 @@ ButtonCell* ButtonCell::create(std::string const& label, std::string const& butt
 }
 
 bool ButtonCell::init(std::string const& label, std::string const& buttonText, std::function<void()> callback) {
-    if (!initCell(kCellWidth, 32.f)) {
+    if (!initCell(kCellWidth, 34.f)) {
         return false;
     }
     m_callback = std::move(callback);
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 140.f, 0.46f, 0.2f);
-    title->setPosition({ 12.f, size.height * 0.5f });
+    title->setPosition({ 14.f, size.height * 0.5f });
     addChild(title);
 
     auto* menu = CCMenu::create();
@@ -155,7 +220,8 @@ bool ButtonCell::init(std::string const& label, std::string const& buttonText, s
     menu->setPosition({ size.width - 66.f, size.height * 0.5f });
     addChild(menu);
 
-    auto* spr = ButtonSprite::create(buttonText.c_str(), 100, 0, 0.5f, true, "bigFont.fnt", "GJ_button_01.png", 24.f);
+    auto displayButtonText = localized(buttonText);
+    auto* spr = ButtonSprite::create(displayButtonText.c_str(), 100, 0, 0.5f, true, "bigFont.fnt", "GJ_button_01.png", 24.f);
     auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(
         spr,
         [this](CCMenuItemSpriteExtra*) {
@@ -180,22 +246,26 @@ InputCell* InputCell::create(std::string const& label, std::string const& value,
 }
 
 bool InputCell::init(std::string const& label, std::string const& value, std::string const& placeholder, bool numeric, std::function<void(std::string const&)> callback) {
-    if (!initCell(kCellWidth, 34.f)) {
+    if (!initCell(kCellWidth, 36.f)) {
         return false;
     }
     m_callback = std::move(callback);
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 150.f, 0.46f, 0.2f);
-    title->setPosition({ 12.f, size.height * 0.5f });
+    title->setPosition({ 14.f, size.height * 0.5f });
     addChild(title);
 
-    auto* input = TextInput::create(118.f, placeholder.c_str(), "bigFont.fnt");
+    auto displayPlaceholder = localized(placeholder);
+    auto* input = TextInput::create(118.f, displayPlaceholder.c_str(), "bigFont.fnt");
     input->setScale(0.85f);
     input->setString(value);
+    input->getBGSprite()->setColor(toColor(cocosTheme().content));
+    input->getBGSprite()->setOpacity(245);
     if (numeric) {
         input->setCommonFilter(CommonFilter::Uint);
         input->setMaxCharCount(6);
@@ -222,10 +292,13 @@ ComboCell* ComboCell::create(std::string const& label, std::vector<std::string> 
 }
 
 bool ComboCell::init(std::string const& label, std::vector<std::string> options, int index, std::function<void(int)> callback) {
-    if (!initCell(kCellWidth, 32.f)) {
+    if (!initCell(kCellWidth, 34.f)) {
         return false;
     }
-    m_options = std::move(options);
+    m_options.reserve(options.size());
+    for (auto const& option : options) {
+        m_options.push_back(localized(option));
+    }
     m_callback = std::move(callback);
     if (m_options.empty()) {
         m_options.push_back("");
@@ -233,11 +306,12 @@ bool ComboCell::init(std::string const& label, std::vector<std::string> options,
     m_index = std::clamp(index, 0, static_cast<int>(m_options.size()) - 1);
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 150.f, 0.46f, 0.2f);
-    title->setPosition({ 12.f, size.height * 0.5f });
+    title->setPosition({ 14.f, size.height * 0.5f });
     addChild(title);
 
     auto* menu = CCMenu::create();
@@ -283,7 +357,7 @@ SliderCell* SliderCell::create(std::string const& label, float value, float minV
 }
 
 bool SliderCell::init(std::string const& label, float value, float minValue, float maxValue, std::function<void(float)> callback) {
-    if (!initCell(kCellWidth, 30.f)) {
+    if (!initCell(kCellWidth, 34.f)) {
         return false;
     }
     m_callback = std::move(callback);
@@ -292,11 +366,12 @@ bool SliderCell::init(std::string const& label, float value, float minValue, flo
     m_decimals = (m_max - m_min) <= 3.0f ? 2 : 0;
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(120.f, 0.46f, 0.18f);
-    title->setPosition({ 12.f, size.height * 0.5f });
+    title->setPosition({ 14.f, size.height * 0.5f });
     addChild(title);
 
     auto* slider = Slider::create(this, menu_selector(SliderCell::onSlider), 0.42f);
@@ -307,7 +382,7 @@ bool SliderCell::init(std::string const& label, float value, float minValue, flo
     auto* valueLabel = CCLabelBMFont::create("", "bigFont.fnt");
     valueLabel->setAnchorPoint({ 1.f, 0.5f });
     valueLabel->setScale(0.4f);
-    valueLabel->setColor(ccc3(180, 210, 235));
+    valueLabel->setColor(toColor(cocosTheme().secondary));
     valueLabel->setPosition({ size.width - 10.f, size.height * 0.5f });
     addChild(valueLabel);
     m_valueNode = valueLabel;
@@ -367,17 +442,18 @@ ColorCell* ColorCell::create(std::string const& label, ccColor4B color, std::fun
 }
 
 bool ColorCell::init(std::string const& label, ccColor4B color, std::function<void(ccColor4B)> callback) {
-    if (!initCell(kCellWidth, 30.f)) {
+    if (!initCell(kCellWidth, 34.f)) {
         return false;
     }
     m_callback = std::move(callback);
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 90.f, 0.46f, 0.2f);
-    title->setPosition({ 12.f, size.height * 0.5f });
+    title->setPosition({ 14.f, size.height * 0.5f });
     addChild(title);
 
     auto* container = CCNode::create();
@@ -398,14 +474,19 @@ bool ColorCell::init(std::string const& label, ccColor4B color, std::function<vo
         ccColor3B current = sw->getColor();
         ccColor4B start = ccc4(current.r, current.g, current.b, sw->getOpacity());
         auto* popup = geode::ColorPickPopup::create(start);
-        popup->setCallback([this](ccColor4B picked) {
-            if (m_swatch) {
-                auto* node = static_cast<CCLayerColor*>(m_swatch);
+        geode::WeakRef<ColorCell> cell(this);
+        popup->setCallback([cell](ccColor4B picked) {
+            auto locked = cell.lock();
+            if (!locked) {
+                return;
+            }
+            if (locked->m_swatch) {
+                auto* node = static_cast<CCLayerColor*>(locked->m_swatch);
                 node->setColor(ccc3(picked.r, picked.g, picked.b));
                 node->setOpacity(picked.a);
             }
-            if (m_callback) {
-                m_callback(picked);
+            if (locked->m_callback) {
+                locked->m_callback(picked);
             }
         });
         popup->show();
@@ -416,9 +497,9 @@ bool ColorCell::init(std::string const& label, ccColor4B color, std::function<vo
     return true;
 }
 
-KeybindCell* KeybindCell::create(std::string const& label, int* keyPtr) {
+KeybindCell* KeybindCell::create(std::string const& label, std::string settingKey) {
     auto* cell = new KeybindCell();
-    if (cell && cell->init(label, keyPtr)) {
+    if (cell && cell->init(label, std::move(settingKey))) {
         cell->autorelease();
         return cell;
     }
@@ -426,18 +507,19 @@ KeybindCell* KeybindCell::create(std::string const& label, int* keyPtr) {
     return nullptr;
 }
 
-bool KeybindCell::init(std::string const& label, int* keyPtr) {
-    if (!initCell(kCellWidth, 30.f)) {
+bool KeybindCell::init(std::string const& label, std::string settingKey) {
+    if (!initCell(kCellWidth, 34.f)) {
         return false;
     }
-    m_keyPtr = keyPtr;
+    m_settingKey = std::move(settingKey);
     auto size = getContentSize();
 
-    auto* title = CCLabelBMFont::create(label.c_str(), "bigFont.fnt");
+    auto displayLabel = localized(label);
+    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 130.f, 0.46f, 0.2f);
-    title->setPosition({ 12.f, size.height * 0.5f });
+    title->setPosition({ 14.f, size.height * 0.5f });
     addChild(title);
 
     auto* menu = CCMenu::create();
@@ -445,45 +527,34 @@ bool KeybindCell::init(std::string const& label, int* keyPtr) {
     menu->setPosition({ size.width - 62.f, size.height * 0.5f });
     addChild(menu);
 
-    std::string current = m_keyPtr ? toasty::frontend::keyName(*m_keyPtr) : "None";
-    auto* spr = ButtonSprite::create(current.c_str(), 96, 0, 0.46f, true, "bigFont.fnt", "GJ_button_04.png", 26.f);
+    m_display = toasty::frontend::keybindDisplay(m_settingKey);
+    auto* spr = ButtonSprite::create(m_display.c_str(), 96, 0, 0.46f, true, "bigFont.fnt", "GJ_button_04.png", 26.f);
     m_button = spr;
     auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(spr, [this](CCMenuItemSpriteExtra* sender) {
         this->onTap(sender);
     });
     menu->addChild(item);
+    this->schedule(schedule_selector(KeybindCell::pollSetting), 0.25f);
 
     return true;
 }
 
 void KeybindCell::onTap(CCObject*) {
-    if (!m_keyPtr) {
-        return;
-    }
-    toasty::frontend::beginRebind(m_keyPtr);
-    if (m_button) {
-        static_cast<ButtonSprite*>(m_button)->setString("...");
-    }
-    this->unschedule(schedule_selector(KeybindCell::pollRebind));
-    this->schedule(schedule_selector(KeybindCell::pollRebind), 0.08f);
+    toasty::frontend::openKeybindEditor();
 }
 
-void KeybindCell::pollRebind(float) {
-    if (!m_keyPtr) {
-        this->unschedule(schedule_selector(KeybindCell::pollRebind));
-        return;
-    }
-    if (toasty::frontend::isRebinding(m_keyPtr)) {
-        return;
-    }
-    this->unschedule(schedule_selector(KeybindCell::pollRebind));
+void KeybindCell::pollSetting(float) {
     refreshLabel();
-    toasty::frontend::persistSettings();
 }
 
 void KeybindCell::refreshLabel() {
-    if (m_button && m_keyPtr) {
-        static_cast<ButtonSprite*>(m_button)->setString(toasty::frontend::keyName(*m_keyPtr).c_str());
+    if (!m_button) {
+        return;
+    }
+    std::string current = toasty::frontend::keybindDisplay(m_settingKey);
+    if (current != m_display) {
+        m_display = std::move(current);
+        static_cast<ButtonSprite*>(m_button)->setString(m_display.c_str());
     }
 }
 

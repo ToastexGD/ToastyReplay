@@ -91,24 +91,6 @@ struct AnimationState {
     float easeInOutQuad(float t);
 };
 
-struct KeybindSet {
-    int menu = 0x42;
-    int frameAdvance = 0x56;
-    int frameStep = 0x43;
-    int replayToggle = 0;
-    int noclip = 0;
-    int safeMode = 0;
-    int trajectory = 0;
-    int audioPitch = 0;
-    int rngLock = 0;
-    int hitboxes = 0;
-    int layoutMode = 0;
-    int noMirror = 0;
-    int autoclicker = 0;
-    int disableShaders = 0;
-    int clickSounds = 0;
-};
-
 class MenuInterface {
 public:
     static MenuInterface* get();
@@ -131,13 +113,8 @@ public:
 
     ThemeEngine theme;
     AnimationState anim;
-    KeybindSet keybinds;
-
     float ambientTime = 0.0f;
     bool ambientWavesEnabled = true;
-
-    int* rebindTarget = nullptr;
-    std::string keybindConflictError;
 
     FrameEditor frameEditor;
 
@@ -312,20 +289,17 @@ private:
     char uploadCommentBuf[501] = {0};
 };
 
-std::string getKeyName(int code);
-
 namespace Widgets {
     bool ToggleSwitch(const char* label, bool* value, ThemeEngine& theme, AnimationState& anim);
     bool StyledButton(const char* label, ImVec2 size, ThemeEngine& theme, AnimationState& anim, float roundingOverride = -1.0f);
     bool StyledSliderFloat(const char* label, float* value, float min, float max, ThemeEngine& theme, bool allowManualInput = false);
     bool StyledSliderInt(const char* label, int* value, int min, int max, ThemeEngine& theme);
     void SectionHeader(const char* text, ThemeEngine& theme);
-    bool ModuleCard(const char* name, const char* description, bool* enabled, ThemeEngine& theme, AnimationState& anim, int* keybind = nullptr);
-    bool ModuleCardBegin(const char* name, const char* description, bool* enabled, ThemeEngine& theme, AnimationState& anim, int* keybind = nullptr);
+    bool ModuleCard(const char* name, const char* description, bool* enabled, ThemeEngine& theme, AnimationState& anim, char const* keybindSetting = nullptr, char const* secondaryKeybindSetting = nullptr, const char* secondaryKeybindLabel = nullptr);
+    bool ModuleCardBegin(const char* name, const char* description, bool* enabled, ThemeEngine& theme, AnimationState& anim, char const* keybindSetting = nullptr, char const* secondaryKeybindSetting = nullptr, const char* secondaryKeybindLabel = nullptr);
     void ModuleCardEnd();
     void StatusBadge(const char* text, ImVec4 color);
     bool PillButton(const char* label, bool active, float width, ThemeEngine& theme, AnimationState& anim);
-    void KeybindButton(const char* label, int* keyCode, ThemeEngine& theme, AnimationState& anim);
 }
 
 #endif

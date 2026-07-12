@@ -1,13 +1,18 @@
 {
-	"geode": "5.7.1",
-	"version": "v2.1.1",
+	"geode": "5.8.1",
+	"version": "v2.2.0",
 	"gd": {
 		"win": "2.2081",
 		"mac": "2.2081"
 	},
 	"id": "toastexgd.toastyreplay",
 	"name": "ToastyReplay",
-	"developer": "ToastexGD",
+	"developers": [
+		"ToastexGD",
+		"human0443",
+		"misko.bin",
+		"__hopeandmiracle"
+	],
 	"description": "Frame-perfect replay bot for Geode.",
 	"links": {
 		"source": "https://github.com/ToastexGD/ToastyReplay"
@@ -32,6 +37,13 @@
 			"default": "ImGui",
 			"one-of": ["ImGui", "Cocos2d"]
 		},
+		"cocos_theme": {
+			"name": "Cocos Menu Theme",
+			"description": "Color theme used by the native Cocos2d menu.",
+			"type": "string",
+			"default": "Native",
+			"one-of": ["Native", "Toasty", "Ocean", "Forest", "Violet"]
+		},
 		"ui_language": {
 			"name": "UI Language",
 			"type": "string",
@@ -54,6 +66,174 @@
 			"name": "Render Save Location",
 			"type": "folder",
 			"default": ""
+		},
+		"bind_menu": {
+			"type": "keybind",
+			"name": "Menu Toggle",
+			"description": "Open or close ToastyReplay.",
+			"default": "B",
+			"category": "universal"
+		},
+		"bind_replay_toggle": {
+			"type": "keybind",
+			"name": "Replay Toggle",
+			"description": "Start or stop macro playback.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_frame_advance": {
+			"type": "keybind",
+			"name": "Frame Advance",
+			"description": "Enable or disable frame advance mode.",
+			"default": "V",
+			"category": "gameplay"
+		},
+		"bind_frame_step": {
+			"type": "keybind",
+			"name": "Advance One Frame",
+			"description": "Advance one frame while frame advance mode is enabled.",
+			"default": "C",
+			"category": "gameplay"
+		},
+		"bind_noclip": {
+			"type": "keybind",
+			"name": "Noclip",
+			"description": "Toggle noclip.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_safe_mode": {
+			"type": "keybind",
+			"name": "Safe Mode",
+			"description": "Toggle safe mode.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_trajectory": {
+			"type": "keybind",
+			"name": "Trajectory",
+			"description": "Toggle trajectory preview.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_hitboxes": {
+			"type": "keybind",
+			"name": "Hitboxes",
+			"description": "Toggle hitbox rendering.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_rng_lock": {
+			"type": "keybind",
+			"name": "RNG Lock",
+			"description": "Toggle deterministic RNG.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_audio_pitch": {
+			"type": "keybind",
+			"name": "Speedhack Audio",
+			"description": "Toggle speed-aware audio pitch.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_layout_mode": {
+			"type": "keybind",
+			"name": "Layout Mode",
+			"description": "Toggle layout mode.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_disable_shaders": {
+			"type": "keybind",
+			"name": "Disable Shaders",
+			"description": "Toggle level shader suppression.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_no_mirror": {
+			"type": "keybind",
+			"name": "No Mirror Effect",
+			"description": "Toggle mirror effect suppression.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_click_sounds": {
+			"type": "keybind",
+			"name": "Click Bot",
+			"description": "Toggle generated click sounds.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_autoclicker": {
+			"type": "keybind",
+			"name": "Autoclicker",
+			"description": "Toggle the autoclicker.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_no_death_effect": {
+			"type": "keybind",
+			"name": "No Death Effect",
+			"description": "Toggle death burst suppression.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_no_effects": {
+			"type": "keybind",
+			"name": "No Effects",
+			"description": "Toggle gameplay effect suppression.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_hide_endscreen": {
+			"type": "keybind",
+			"name": "Hide Endscreen",
+			"description": "Toggle the level endscreen.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_hide_new_best": {
+			"type": "keybind",
+			"name": "Hide New Best",
+			"description": "Toggle the new best popup.",
+			"default": [],
+			"category": "gameplay"
+		},
+		"bind_instant_reset": {
+			"type": "keybind",
+			"name": "Instant Reset",
+			"description": "Toggle immediate playback resets.",
+			"default": [],
+			"category": "universal"
+		},
+		"bind_autosave": {
+			"type": "keybind",
+			"name": "Autosave",
+			"description": "Toggle completed recording autosaves.",
+			"default": [],
+			"category": "universal"
+		},
+		"bind_persistence_mode": {
+			"type": "keybind",
+			"name": "Persistence Mode",
+			"description": "Toggle failed-attempt persistence.",
+			"default": [],
+			"category": "universal"
+		},
+		"bind_mute_left_right": {
+			"type": "keybind",
+			"name": "Mute Left/Right Clicks",
+			"description": "Toggle platformer left and right click sounds.",
+			"default": [],
+			"category": "universal"
+		},
+		"bind_render_watermark": {
+			"type": "keybind",
+			"name": "Render Watermark",
+			"description": "Toggle the rendered video watermark.",
+			"default": [],
+			"category": "universal"
 		}
 	},
 	"resources": {

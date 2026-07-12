@@ -1,6 +1,9 @@
 #include "ToastyReplay.hpp"
+#include "core/gameplay_layer.hpp"
+#include "hacks/hitbox_overlay_model.hpp"
 
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/LevelEditorLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 
@@ -469,7 +472,7 @@ namespace {
         }
 
         void attach(GJBaseGameLayer* layer) {
-            m_overlayNode = nullptr;
+            releaseOverlayNode();
             resetAttempt();
 
             if (!layer) {
@@ -492,12 +495,13 @@ namespace {
             auto* node = CCDrawNode::create();
             node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
             node->m_bUseArea = false;
+            node->retain();
             parent->addChild(node, zOrder);
             m_overlayNode = node;
         }
 
         void detach() {
-            m_overlayNode = nullptr;
+            releaseOverlayNode();
             resetAttempt();
         }
 
@@ -540,20 +544,27 @@ namespace {
         }
 
         void render(GJBaseGameLayer* layer) {
+            auto* engine = ReplayEngine::get();
+            if (!engine || !layer) {
+                return;
+            }
+
             ensureAttached(layer);
+            if (!m_overlayNode) {
+                return;
+            }
+
             OverlayPainter painter(m_overlayNode);
             painter.clearAndReset();
 
-            auto* engine = ReplayEngine::get();
-            if (!engine || !layer || !m_overlayNode) {
+            bool continuous = engine->showHitboxes && !engine->hitboxOnDeath;
+            bool deathSnapshot = engine->showHitboxes && engine->hitboxOnDeath && m_dead;
+            bool noclipDeathFrame = engine->noclipHitboxOnDeath && engine->noclipDeadLastFrame;
+            if (!continuous && !deathSnapshot && !noclipDeathFrame) {
                 return;
             }
 
-            if (!engine->showHitboxes || (engine->hitboxOnDeath && !m_dead)) {
-                return;
-            }
-
-            auto snapshot = VisibleObjectSnapshot::capture(layer, engine->hitboxOnDeath && m_dead, m_killerObject);
+            auto snapshot = VisibleObjectSnapshot::capture(layer, deathSnapshot, m_killerObject);
             ShapeExtractor extractor(layer);
             auto shapes = extractor.collect(snapshot);
 
@@ -565,6 +576,19 @@ namespace {
         }
 
     private:
+        void releaseOverlayNode() {
+            if (!m_overlayNode) {
+                return;
+            }
+
+            if (m_overlayNode->getParent()) {
+                m_overlayNode->removeFromParentAndCleanup(true);
+            }
+
+            m_overlayNode->release();
+            m_overlayNode = nullptr;
+        }
+
         CCDrawNode* m_overlayNode = nullptr;
         TrailHistory m_trails;
         bool m_dead = false;
@@ -575,7 +599,7 @@ namespace {
 class $modify(HitboxBGL, GJBaseGameLayer) {
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
-        if (!PlayLayer::get()) return;
+        if (!toasty::gameplay::isGameplayActive()) return;
         auto& overlay = HitboxOverlayState::get();
         overlay.captureTrail(this, isHalfTick);
         overlay.markDead(m_player1 && m_player1->m_isDead);
@@ -611,10 +635,43 @@ class $modify(HitboxPL, PlayLayer) {
     }
 };
 
+class $modify(HitboxLEL, LevelEditorLayer) {
+    void onPlaytest() {
+        LevelEditorLayer::onPlaytest();
+        HitboxOverlayState::get().attach(this);
+    }
+
+    void updateVisibility(float dt) {
+        LevelEditorLayer::updateVisibility(dt);
+        if (!toasty::hitbox_overlay::shouldRenderEditorOverlay(toasty::gameplay::isEditorPlaytest(), m_player1 != nullptr)) {
+            HitboxOverlayState::get().detach();
+            return;
+        }
+
+        HitboxOverlayState::get().markDead(m_player1 && m_player1->m_isDead);
+        HitboxOverlayState::get().render(this);
+    }
+
+    void resetLevel() {
+        LevelEditorLayer::resetLevel();
+        HitboxOverlayState::get().resetAttempt();
+    }
+
+    void destroyPlayer(PlayerObject* player, GameObject* object) {
+        LevelEditorLayer::destroyPlayer(player, object);
+        HitboxOverlayState::get().markCollision(object, m_anticheatSpike);
+    }
+
+    void onStopPlaytest() {
+        HitboxOverlayState::get().detach();
+        LevelEditorLayer::onStopPlaytest();
+    }
+};
+
 class $modify(HitboxPO, PlayerObject) {
     void playerDestroyed(bool value) {
-        if (auto* playLayer = PlayLayer::get()) {
-            if (this == playLayer->m_player1 || this == playLayer->m_player2) {
+        if (auto* layer = toasty::gameplay::activeLayer()) {
+            if (this == layer->m_player1 || this == layer->m_player2) {
                 HitboxOverlayState::get().markDead(true);
             }
         }

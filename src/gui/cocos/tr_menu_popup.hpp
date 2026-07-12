@@ -2,6 +2,7 @@
 
 #include <Geode/ui/Popup.hpp>
 #include <Geode/ui/ScrollLayer.hpp>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ protected:
     int m_activeTab = -1;
     int m_mainSubTab = 0;
     bool m_clickPacksScanned = false;
+    bool m_replayListLoaded = false;
     bool m_onlineMacrosLoaded = false;
     int m_uploadMacroIndex = 0;
     std::string m_uploadComment;
@@ -29,15 +31,17 @@ protected:
     int m_separatoryP2Index = 0;
     int m_separatoryOutputAccuracy = 0;
     std::string m_separatoryOutputName;
-    std::string m_pendingExpandId;
-    std::vector<cocos2d::CCNode*> m_animateCells;
     bool m_preserveScroll = false;
     bool m_subTabChanged = false;
+    int m_pendingTab = -1;
+    bool m_tabSwitchQueued = false;
+    std::uint64_t m_seenRevision = 0;
 
     bool init() override;
 
     void buildTabBar();
     void switchTab(int index);
+    void applyTab(int index);
     void buildTabContent(int index);
     void buildMainTab(cocos2d::CCNode* content);
     void buildReplaySection(cocos2d::CCNode* content);
@@ -53,11 +57,14 @@ protected:
     void buildSettingsTab(cocos2d::CCNode* content);
     void buildOnlineTab(cocos2d::CCNode* content);
     void refreshOnlineWhilePolling(float dt);
+    void refreshIfNeeded(float dt);
 
 public:
     static TRMenuPopup* create();
     static void toggle();
     static bool isOpen();
+    static void refreshOpenMenu();
+    static void reopen();
 };
 
 }

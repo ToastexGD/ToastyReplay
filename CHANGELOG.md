@@ -1,5 +1,42 @@
 # Changelog
 
+## v2.2.0
+
+### What's New?
+
+- Added TTR3 as the default recording format with exact input timing, TPS events, anchors, checkpoints, persistence attempts, and replay metadata.
+- Added replay search, pagination, format badges, accuracy badges, and native replay actions.
+- Added native duplicate, rename, delete, convert, and edit flows.
+- Updated the macro editor with per-player lanes and improved undo and redo handling for Vanilla macros.
+- Added full classic, platformer, two-player, practice mode, checkpoint, and start position support.
+- Added editor playtest support for replay playback, trajectory, and hitboxes.
+- Added native Geode keybinds and migration from older ToastyReplay bindings.
+- Kept legacy TTR, TTR2, and GDR loading and playback.
+- Added TTR3 output for supported foreign macro formats and legacy ToastyReplay files.
+- Added compatibility checks that block conversion when source data cannot be preserved accurately.
+- Fixed GDR2 input decoding, extension validation, platformer controls, and physics anchor handling.
+- Fixed TCBot v2 TPS and delta-time metadata, restart attempts, dynamic TPS changes, swift inputs, and deterministic RNG seeds.
+- Fixed integer-frame inputs occasionally landing one tick early at TPS values such as 360, 1000, and 2026.
+- Fixed dropped, duplicated, or reordered same-frame inputs.
+- Kept single same-frame press and release taps in Vanilla mode while using CBS timing for repeated same-frame presses.
+- Added an optional native Cocos2d menu alongside the classic ImGui menu.
+- Added Native, Toasty, Ocean, Forest, and Violet themes to the Cocos2d menu.
+- Added English, Spanish, French, Vietnamese, and Simplified Chinese interfaces with bundled CJK font support.
+- Fixed language changes not refreshing the open Cocos2d menu.
+- Updated the project to Geode 5.8.1 and Geometry Dash 2.2081.
+- Replaced the old renderer with a new system that supports presets, GPU encoder detection, expanded codecs, audio controls, color correction, and custom output settings.
+- Added per-player noclip, configurable accuracy decimals, noclip death hitboxes, respawn delay controls, Layout Mode colors, and expanded trajectory length controls.
+- Added No Death Effect, No Effects, Hide Endscreen, and Hide New Best tools.
+- Added a full-window Credits and Support page with a moving orange Geometry Dash background, a mobile-only close button, and Escape navigation on desktop.
+
+### What's Fixed?
+
+- Fixed high-TPS render scheduling, physics stepping, and macOS anchor synchronization.
+- Fixed frame advance timing, music synchronization, rapid click audio, and render orientation.
+- Fixed Safe Mode, respawn behavior, native popup lifetime, and menu refresh issues.
+- Fixed click sound buffers cutting off longer release samples.
+- Fixed several conversion failures that previously imported a file but could not produce an accurate TTR3 macro.
+
 ## v2.1.1
 
 ### What's fixed?

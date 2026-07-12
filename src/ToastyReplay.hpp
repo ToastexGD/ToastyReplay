@@ -6,6 +6,7 @@
 #include "conversion/macro_converter.hpp"
 #include "format/replay.hpp"
 #include "format/ttr_format.hpp"
+#include "core/noclip_accuracy.hpp"
 #include "hacks/autoclicker.hpp"
 #include "trajectory/trajectory.hpp"
 #include "render/renderer.hpp"
@@ -161,12 +162,14 @@ public:
 
     bool showHitboxes = false;
     bool hitboxOnDeath = false;
+    bool noclipHitboxOnDeath = false;
     bool hitboxTrail = false;
     int hitboxTrailLength = 240;
 
     int noclipTotalFrames = 0;
     int noclipUnsafeFrames = 0;
     int noclipDeathEvents = 0;
+    int noclipAccuracyDecimals = 2;
     bool noclipWouldDieThisFrame = false;
     bool noclipDeadLastFrame = false;
     PlayerObject* noclipLastDeathPlayer = nullptr;
@@ -303,13 +306,7 @@ public:
     }
 
     float noclipAccuracyPercent() const {
-        if (noclipTotalFrames <= 0) {
-            return 100.0f;
-        }
-
-        int unsafeFrames = std::clamp(noclipUnsafeFrames, 0, noclipTotalFrames);
-        float percent = 100.0f * (1.0f - static_cast<float>(unsafeFrames) / static_cast<float>(noclipTotalFrames));
-        return std::clamp(percent, 0.0f, 100.0f);
+        return static_cast<float>(toasty::noclip::accuracyPercent(noclipTotalFrames, noclipUnsafeFrames));
     }
 
     void setStartPosWarningKey(std::string_view key) {

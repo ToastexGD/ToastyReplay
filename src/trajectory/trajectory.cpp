@@ -1,4 +1,5 @@
 #include "ToastyReplay.hpp"
+#include "core/gameplay_layer.hpp"
 #include "trajectory.hpp"
 #include "trajectory_physics.hpp"
 
@@ -6,6 +7,7 @@
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/HardStreak.hpp>
+#include <Geode/modify/LevelEditorLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
@@ -13,14 +15,14 @@
 
 namespace {
     struct ScopedPredictionLayerState {
-        PlayLayer* layer;
+        GJBaseGameLayer* layer;
         GJGameState gameState;
         PlayerObject* player1;
         PlayerObject* player2;
         GameObject* player1CollisionBlock;
         GameObject* player2CollisionBlock;
 
-        explicit ScopedPredictionLayerState(PlayLayer* playLayer)
+        explicit ScopedPredictionLayerState(GJBaseGameLayer* playLayer)
             : layer(playLayer),
               gameState(playLayer->m_gameState),
               player1(playLayer->m_player1),
@@ -50,7 +52,7 @@ namespace {
     };
 
     struct ScopedPredictionCameraState {
-        PlayLayer* layer;
+        GJBaseGameLayer* layer;
         float cameraZoom;
         float targetCameraZoom;
         cocos2d::CCPoint cameraOffset;
@@ -72,7 +74,7 @@ namespace {
         float cameraUnzoomedX;
         float halfCameraWidth;
 
-        explicit ScopedPredictionCameraState(PlayLayer* playLayer)
+        explicit ScopedPredictionCameraState(GJBaseGameLayer* playLayer)
             : layer(playLayer),
               cameraZoom(playLayer ? playLayer->m_gameState.m_cameraZoom : 0.0f),
               targetCameraZoom(playLayer ? playLayer->m_gameState.m_targetCameraZoom : 0.0f),
@@ -167,9 +169,9 @@ namespace {
     };
 
     void applyPreviewButtonState(PlayerObject* player, PlayerButton button, bool holding);
-    bool hasClassicDualPreview(PlayLayer* playLayer);
-    bool hasTrueTwoPlayerPreview(PlayLayer* playLayer);
-    bool hasAnySecondPreview(PlayLayer* playLayer);
+    bool hasClassicDualPreview(GJBaseGameLayer* playLayer);
+    bool hasTrueTwoPlayerPreview(GJBaseGameLayer* playLayer);
+    bool hasAnySecondPreview(GJBaseGameLayer* playLayer);
 }
 
 TrajectoryPredictionService& TrajectoryPredictionService::get() {
@@ -245,14 +247,14 @@ namespace {
         }
     }
 
-    bool hasClassicDualPreview(PlayLayer* playLayer) {
+    bool hasClassicDualPreview(GJBaseGameLayer* playLayer) {
         return playLayer
             && playLayer->m_player2
             && playLayer->m_gameState.m_isDualMode
             && (!playLayer->m_levelSettings || !playLayer->m_levelSettings->m_twoPlayerMode);
     }
 
-    bool hasTrueTwoPlayerPreview(PlayLayer* playLayer) {
+    bool hasTrueTwoPlayerPreview(GJBaseGameLayer* playLayer) {
         return playLayer
             && playLayer->m_player2
             && playLayer->m_gameState.m_isDualMode
@@ -260,11 +262,11 @@ namespace {
             && playLayer->m_levelSettings->m_twoPlayerMode;
     }
 
-    bool hasAnySecondPreview(PlayLayer* playLayer) {
+    bool hasAnySecondPreview(GJBaseGameLayer* playLayer) {
         return hasClassicDualPreview(playLayer) || hasTrueTwoPlayerPreview(playLayer);
     }
 
-    float sanitizedTimeWarp(PlayLayer* playLayer) {
+    float sanitizedTimeWarp(GJBaseGameLayer* playLayer) {
         if (!playLayer || !std::isfinite(playLayer->m_gameState.m_timeWarp)) {
             return 1.0f;
         }
@@ -272,7 +274,7 @@ namespace {
         return std::max(0.001f, playLayer->m_gameState.m_timeWarp);
     }
 
-    int predictionFrameCount(PlayLayer* playLayer) {
+    int predictionFrameCount(GJBaseGameLayer* playLayer) {
         auto* engine = ReplayEngine::get();
         double predictionRate = std::max(engine->runtimeTickRate(), ReplayEngine::kBaseTickRate);
         double timeWarp = static_cast<double>(sanitizedTimeWarp(playLayer));
@@ -285,7 +287,7 @@ namespace {
         return static_cast<int>(std::clamp(steps, 0.0, static_cast<double>(ReplayEngine::kTrajectoryPredictionStepMax)));
     }
 
-    void advancePredictionClock(PlayLayer* playLayer, PlayerObject* player) {
+    void advancePredictionClock(GJBaseGameLayer* playLayer, PlayerObject* player) {
         if (!playLayer || !player) {
             return;
         }
@@ -803,7 +805,7 @@ cocos2d::CCDrawNode* TrajectoryPredictionService::ensureDrawNode() {
     return m_drawNode;
 }
 
-void TrajectoryPredictionService::attach(PlayLayer* playLayer) {
+void TrajectoryPredictionService::attach(GJBaseGameLayer* playLayer) {
     detach();
     if (!playLayer || !playLayer->m_objectLayer) {
         return;
@@ -1012,7 +1014,7 @@ void TrajectoryPredictionService::drawPredictionBounds(PlayerObject* player) {
 }
 
 void TrajectoryPredictionService::traceInputPath(
-    PlayLayer* playLayer,
+    GJBaseGameLayer* playLayer,
     PlayerObject* previewPlayer,
     PlayerObject* sourcePlayer,
     bool holdingInput,
@@ -1245,7 +1247,7 @@ void TrajectoryPredictionService::traceInputPath(
     }
 }
 
-void TrajectoryPredictionService::rebuildPreview(PlayLayer* playLayer) {
+void TrajectoryPredictionService::rebuildPreview(GJBaseGameLayer* playLayer) {
     if (!playLayer || !m_context.previewPlayers[0]) {
         return;
     }
@@ -1305,7 +1307,7 @@ void TrajectoryPredictionService::rebuildPreview(PlayLayer* playLayer) {
     }
 }
 
-void TrajectoryPredictionService::updatePreview(PlayLayer* playLayer) {
+void TrajectoryPredictionService::updatePreview(GJBaseGameLayer* playLayer) {
     if (!playLayer) {
         return;
     }
@@ -1409,6 +1411,42 @@ class $modify(TrajectoryPreviewPlayLayer, PlayLayer) {
         }
 
         PlayLayer::playEndAnimationToPos(position);
+    }
+};
+
+class $modify(TrajectoryPreviewEditorLayer, LevelEditorLayer) {
+    void postUpdate(float dt) {
+        LevelEditorLayer::postUpdate(dt);
+        if (toasty::gameplay::isEditorPlaytest()) {
+            TrajectoryPredictionService::get().updatePreview(this);
+        }
+    }
+
+    void onPlaytest() {
+        LevelEditorLayer::onPlaytest();
+        if (!this || !m_objectLayer) {
+            return;
+        }
+        auto& service = TrajectoryPredictionService::get();
+        service.attach(this);
+        service.markDirty();
+    }
+
+    void destroyPlayer(PlayerObject* player, GameObject* gameObject) {
+        auto& service = TrajectoryPredictionService::get();
+        if (service.ownsPreviewPlayer(player)) {
+            service.noteSimulatedDeath(player);
+            return;
+        }
+
+        LevelEditorLayer::destroyPlayer(player, gameObject);
+    }
+
+    void onStopPlaytest() {
+        auto& service = TrajectoryPredictionService::get();
+        service.clearOverlay();
+        service.detach();
+        LevelEditorLayer::onStopPlaytest();
     }
 };
 

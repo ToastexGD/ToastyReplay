@@ -93,18 +93,24 @@ void ReplayEngine::setFrameStepEnabled(bool enabled, PlayLayer* playLayer) {
     tickStepping = enabled;
     singleTickStep = false;
 
-    if (enabled && playLayer && !renderer.recording) {
-        requestFrameStepMusicSync(playLayer);
+    if (enabled) {
+        if (playLayer && !renderer.recording) {
+            requestFrameStepMusicSync(playLayer);
+        } else {
+            frameStepMusicSeekPending = false;
+        }
     } else {
         frameStepMusicSeekPending = false;
         clearFrameStepState();
-        clearNativeQueuedButtons(playLayer);
-        clearQueuedSubstepState();
-        clearQueuedMacroCommands();
-        queuedCaptureCommands.clear();
-        cbsCaptureProcessingQueue = false;
+        if (playLayer) {
+            clearNativeQueuedButtons(playLayer);
+            clearQueuedSubstepState();
+            clearQueuedMacroCommands();
+            queuedCaptureCommands.clear();
+            cbsCaptureProcessingQueue = false;
+        }
         resetTimingTracking();
-        if (engineMode == MODE_DISABLED) {
+        if (playLayer && engineMode == MODE_DISABLED) {
             resetDeferredInputState();
             releasePlayerButtons(playLayer);
         }

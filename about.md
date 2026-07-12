@@ -1,72 +1,42 @@
-### Geometry Dash's most accurate replay bot.
-Record, playback, edit, and render frame-perfect macros with 100% accuracy.
+### ToastyReplay
 
-Features
---
-**Recording & Playback**
-* Frame-perfect macro recording at any TPS
-* Two formats: **TTR** (compact binary) and **GDR** (legacy)
-* Full two-player and platformer support
-* Practice mode recording with checkpoint snapshots
-* Start position support with tick offset
+Frame-perfect recording, playback, editing, conversion, and rendering for Geometry Dash.
 
-**Accuracy Modes**
-* **Vanilla** - standard frame-by-frame
-* **CBS** (Click Between Steps) - native sub-step timing
-* **CBF** (Click Between Frames) - microsecond precision for syzzi's mod
-* Playback anchors that correct physics drift every second
+ToastyReplay Free includes Vanilla and CBS recording and playback, TTR3 recording, classic and platformer support, two-player macros, macro conversion, click sounds, gameplay tools, and an optional beta renderer.
 
-**Frame Editor**
-* Visual timeline with drag-to-edit input segments
-* Per-player input lanes, zoom/scroll, overview bar
-* Full undo/redo stack
-* Drag edges to resize holds, move segments to retime inputs
+## New in v2.2.0
 
-**Video Rendering**
-* FFmpeg export (720p to 4K, any FPS)
-* Configurable codec, bitrate, and pixel format
-* Mix in game audio, click sounds, or both
-* Hide end screen / level complete popup
+- TTR3 is now the default recording format.
+- Added an optional native Cocos2d menu with five themes.
+- Added replay search, pagination, native replay actions, and an updated macro editor.
+- Added the new renderer as an optional beta with presets, GPU encoder detection, audio controls, color correction, and output up to 4K.
+- Added native Geode keybinds and migration from older bindings.
+- Added English, Spanish, French, Vietnamese, and Simplified Chinese interfaces.
+- Added editor playtest support for replays, trajectory, and hitboxes.
+- Added a full-window Credits and Support page with Buy Pro, website, Ko-fi access, and a moving orange Geometry Dash background.
+- Fixed conversion timing, high-TPS rendering, frame advance, Safe Mode, and menu refresh issues.
 
-**Click Sounds**
-* Custom click packs with hard/soft clicks and releases
-* Separate packs for Player 1 and Player 2
-* Softness slider, click delay randomization, background noise
-* Auto-mixed into video renders
+## Replay and conversion
 
-**Hacks & Tools**
-* **Noclip** with accuracy %, collision limits, and death flash
-* **Hitboxes** (always-on, on-death, or trail mode)
-* **Trajectory** preview (312 frames ahead)
-* **Safe Mode**, **Layout Mode**, **No Mirror**
-* **Autoclicker** with per-player config
-* **RNG Lock** for deterministic random triggers
-* **Speed Control** with audio pitch sync
-* **Frame Advance** (tick-by-tick stepping)
+- Vanilla and CBS recording and playback
+- TTR3, legacy TTR, TTR2, and GDR support
+- Classic, platformer, two-player, practice mode, checkpoint, and start position support
+- Conversion from supported MegaHack, TasBot, zBot, YBot, XBot, xdBot, Amethyst, Echo, GDMO, ReplayBot, Rush, KDBot, DDHOR, RBot, Zephyrus, ReplayEngine, Silicate, TCBot, GDR2, GDR JSON, UvBot, and plaintext formats
+- Strict conversion checks that block unsupported source data instead of producing an inaccurate TTR3 file
+- Timeline editing for Vanilla macros with per-player lanes and undo and redo history
 
-**Online**
-* Discord login with macro uploading
-* Bug report submission from in-game
+## Rendering and tools
 
-**Customization**
-* 5+ built-in themes with full custom colors
-* Rebindable hotkeys for every feature
-* Glow cycle animation, text scaling
-* Animated menu transitions with easing
+- Optional beta video output up to 4K, custom resolutions, presets, codecs, bitrate controls, and audio mixing
+- Custom click packs with separate Player 1 and Player 2 selections
+- Per-player noclip, hitboxes, trajectory, Layout Mode, Disable Shaders, No Mirror, Safe Mode, speed control, frame advance, and autoclicker
 
-Credits
---
-- [Figment](https://github.com/FigmentBoy) for permission to use some of [zBot's](https://github.com/FigmentBoy/zBot) features like trajectory and replay features.
-- [Zilko](https://github.com/Zilko) for inspiring me (from [xdBot](https://github.com/Zilko/xdBot))
-- [Jarvisdevil](https://github.com/thejarvisdevil) for helping me put my braincells together.
-- [NinXout](https://github.com/ninXout) for inspiration similar to Eclipse Menu. (Received help for my hitbox implementation)
-- [C++ and C++ Together Discords](https://discord.gg/WeBHv6b4WS) for helping me learn C++ and their amazing guides.
-- [GDH by Toby](https://github.com/TobyAdd/GDH/blob/main/LICENSE) for being an amazing open source reference to fix up trajectory, hitboxes, and other bugs.
-- And of course, [Geode](https://github.com/geode-sdk) for the amazing framework this is built on.
+The optional FFmpeg API dependency can be installed through Geode. A local FFmpeg executable can also be configured.
 
-Updates are added monthly. If you find bugs, report them on Discord or open an issue.
+## Platforms
 
-https://discord.gg/JWkVm7cUhH
-https://github.com/ToastexGD/ToastyReplay/issues
+Windows and macOS for Geometry Dash 2.2081. Geode 5.8.1 or newer is required.
 
-Thanks everyone! <3
+Free and Pro cannot be enabled at the same time.
+
+[Website and Pro purchase](https://toastyreplay.xyz/) | [Discord](https://discord.gg/JWkVm7cUhH) | [Ko-fi](https://ko-fi.com/toastexgd) | [Report an issue](https://github.com/ToastexGD/ToastyReplay/issues)

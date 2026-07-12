@@ -10,16 +10,20 @@
 #include "online/online_client.hpp"
 #include "trajectory/trajectory.hpp"
 #include "render/render_preset.hpp"
+#include "lang/localization.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/ButtonSprite.hpp>
+#include <Geode/ui/Scrollbar.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -30,36 +34,111 @@ using namespace geode::prelude;
 namespace toasty::frontend {
 
 namespace {
-    constexpr float kPopupWidth = 420.f;
-    constexpr float kPopupHeight = 280.f;
+    constexpr float kPopupWidth = 480.f;
+    constexpr float kPopupHeight = 304.f;
     constexpr int kTabCount = 6;
     const char* const kTabs[kTabCount] = { "Main", "Render", "Clicks", "Autoclicker", "Settings", "Online" };
+    constexpr float kTabWidth = 88.f;
+    constexpr float kTabHeight = 33.f;
+    constexpr float kTabPitch = 38.72f;
+    constexpr float kTabX = 54.f;
+    constexpr float kTabStartY = 225.8f;
+    std::atomic<std::uint64_t> g_menuRevision = 0;
 
-    constexpr float kTabWidth = 62.f;
-    constexpr float kTabHeight = 30.f;
-    constexpr float kTabPitch = 66.f;
-    constexpr float kTabRowY = -52.f;
+    std::string localized(std::string_view text) {
+        return std::string(toasty::lang::tr(text));
+    }
+
+    ccColor3B toColor(CocosColor const& color) {
+        return ccc3(color[0], color[1], color[2]);
+    }
+
+    CCScale9Sprite* makeSurface(float width, float height, ccColor3B color, GLubyte opacity) {
+        auto* surface = CCScale9Sprite::create("GJ_square05.png");
+        CCSize natural = surface->getContentSize();
+        constexpr float inset = 8.f;
+        surface->setCapInsets(CCRect(inset, inset, std::max(1.f, natural.width - inset * 2.f), std::max(1.f, natural.height - inset * 2.f)));
+        surface->setContentSize({ width, height });
+        surface->setColor(color);
+        surface->setOpacity(opacity);
+        return surface;
+    }
+
+    ccColor4B rgbSettingToCC(int red, int green, int blue) {
+        return ccc4(
+            static_cast<GLubyte>(std::clamp(red, 0, 255)),
+            static_cast<GLubyte>(std::clamp(green, 0, 255)),
+            static_cast<GLubyte>(std::clamp(blue, 0, 255)),
+            255
+        );
+    }
 
     CCNode* makePillButton(const char* label, ccColor3B color, float width, float height) {
         auto* container = CCNode::create();
         container->setContentSize({ width, height });
         container->setAnchorPoint({ 0.5f, 0.5f });
 
-        auto* bg = CCScale9Sprite::create("GJ_square05.png");
-        CCSize natural = bg->getContentSize();
-        constexpr float inset = 8.f;
-        bg->setCapInsets(CCRect(inset, inset, std::max(1.f, natural.width - inset * 2.f), std::max(1.f, natural.height - inset * 2.f)));
-        bg->setContentSize({ width, height });
+        auto* bg = makeSurface(width, height, color, 255);
         bg->setPosition({ width * 0.5f, height * 0.5f });
-        bg->setColor(color);
         container->addChild(bg);
 
-        auto* text = CCLabelBMFont::create(label, "bigFont.fnt");
+        auto displayLabel = localized(label);
+        auto* text = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
         text->setAnchorPoint({ 0.5f, 0.5f });
         text->setPosition({ width * 0.5f, height * 0.5f });
         text->limitLabelWidth(width - 10.f, 0.42f, 0.18f);
         container->addChild(text);
 
+        return container;
+    }
+
+    CCNode* makeSegmentButton(const char* label, bool active, float width, float height) {
+        auto theme = cocosTheme();
+        auto* container = CCNode::create();
+        container->setContentSize({ width, height });
+        container->setAnchorPoint({ 0.5f, 0.5f });
+
+        if (active) {
+            auto* selected = makeSurface(width - 3.f, height - 3.f, toColor(theme.subCell), 255);
+            selected->setPosition({ width * 0.5f, height * 0.5f + 1.f });
+            container->addChild(selected);
+
+            auto accent = toColor(theme.accent);
+            auto* underline = CCLayerColor::create(ccc4(accent.r, accent.g, accent.b, 255), width - 14.f, 2.f);
+            underline->setPosition({ 7.f, 2.f });
+            container->addChild(underline);
+        }
+
+        auto displayLabel = localized(label);
+        auto* text = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+        text->setColor(toColor(active ? theme.sectionText : theme.mutedText));
+        text->limitLabelWidth(width - 10.f, 0.38f, 0.2f);
+        text->setPosition({ width * 0.5f, height * 0.5f + 1.f });
+        container->addChild(text);
+        return container;
+    }
+
+    CCNode* makeNavButton(int index, bool active) {
+        auto theme = cocosTheme();
+        auto* container = CCNode::create();
+        container->setContentSize({ kTabWidth, kTabHeight });
+        container->setAnchorPoint({ 0.5f, 0.5f });
+
+        auto* border = makeSurface(kTabWidth, kTabHeight, toColor(active ? theme.accent : theme.cellBorder), active ? 255 : 210);
+        border->setPosition({ kTabWidth * 0.5f, kTabHeight * 0.5f });
+        container->addChild(border);
+
+        auto* bg = makeSurface(kTabWidth - 2.f, kTabHeight - 2.f, toColor(active ? theme.subCell : theme.cell), 255);
+        bg->setPosition({ kTabWidth * 0.5f, kTabHeight * 0.5f });
+        container->addChild(bg);
+
+        auto displayLabel = localized(kTabs[index]);
+        auto* label = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+        label->setAnchorPoint({ 0.5f, 0.5f });
+        label->setColor(toColor(active ? theme.sectionText : theme.mutedText));
+        label->limitLabelWidth(kTabWidth - 14.f, 0.42f, 0.22f);
+        label->setPosition({ kTabWidth * 0.5f, kTabHeight * 0.5f });
+        container->addChild(label);
         return container;
     }
 }
@@ -71,50 +150,64 @@ bool TRMenuPopup::init() {
 
     this->setID("cocos-menu"_spr);
 
+    auto theme = cocosTheme();
+
+    if (m_bgSprite) {
+        m_bgSprite->setColor(toColor(theme.shell));
+        m_bgSprite->setOpacity(255);
+    }
+
     if (m_closeBtn) {
-        m_closeBtn->setScale(0.8f);
+        m_closeBtn->setScale(0.72f);
     }
 
-    {
-        auto* title = CCLabelBMFont::create("ToastyReplay", "goldFont.fnt");
-        title->setScale(0.6f);
-        title->setAnchorPoint({ 0.f, 0.5f });
-        float titleWidth = title->getScaledContentSize().width;
+    auto* header = makeSurface(kPopupWidth - 16.f, 42.f, toColor(theme.header), 250);
+    header->setPosition({ kPopupWidth * 0.5f, kPopupHeight - 25.f });
+    m_mainLayer->addChild(header, 1);
 
-        CCSprite* logo = CCSprite::create("toastyreplay-logo.png"_spr);
-        float logoWidth = 0.f;
-        float gap = 0.f;
-        if (logo) {
-            logo->setScale(20.f / std::max(1.f, logo->getContentSize().height));
-            logo->setAnchorPoint({ 0.f, 0.5f });
-            logoWidth = logo->getScaledContentSize().width;
-            gap = 8.f;
-        }
-
-        float totalWidth = logoWidth + gap + titleWidth;
-        float startX = (kPopupWidth - totalWidth) * 0.5f;
-        float headerY = kPopupHeight - 24.f;
-
-        if (logo) {
-            logo->setPosition({ startX, headerY });
-            m_mainLayer->addChild(logo, 10);
-            startX += logoWidth + gap;
-        }
-        title->setPosition({ startX, headerY });
-        m_mainLayer->addChild(title, 10);
+    float titleX = 20.f;
+    if (auto* logo = CCSprite::create("toastyreplay-logo.png"_spr)) {
+        logo->setScale(27.f / std::max(1.f, logo->getContentSize().height));
+        logo->setPosition({ 27.f, kPopupHeight - 25.f });
+        m_mainLayer->addChild(logo, 3);
+        titleX = 47.f;
     }
 
-    auto* panel = CCScale9Sprite::create("GJ_square02.png");
-    panel->setContentSize({ 404.f, 192.f });
-    panel->setPosition({ kPopupWidth * 0.5f, 100.f });
-    panel->setColor(ccc3(0, 0, 0));
-    panel->setOpacity(55);
-    m_mainLayer->addChild(panel, 1);
+    auto* title = CCLabelBMFont::create("ToastyReplay", "bigFont.fnt");
+    title->setScale(0.48f);
+    title->setAnchorPoint({ 0.f, 0.5f });
+    title->setPosition({ titleX, kPopupHeight - 25.f });
+    m_mainLayer->addChild(title, 3);
 
-    m_scroll = ScrollLayer::create({ 394.f, 182.f });
-    m_scroll->setPosition({ (kPopupWidth - 394.f) * 0.5f, 9.f });
-    m_scroll->m_contentLayer->setLayout(ScrollLayer::createDefaultListLayout(2.f));
-    m_mainLayer->addChild(m_scroll, 2);
+    auto* editionBadge = makePillButton("FREE", toColor(theme.accent), 64.f, 20.f);
+    editionBadge->setPosition({ kPopupWidth - 52.f, kPopupHeight - 25.f });
+    m_mainLayer->addChild(editionBadge, 3);
+
+    auto* navPanel = makeSurface(92.f, 238.f, toColor(theme.navigation), 245);
+    navPanel->setPosition({ 54.f, 129.f });
+    m_mainLayer->addChild(navPanel, 1);
+
+    auto* panelBorder = makeSurface(366.f, 238.f, toColor(theme.cellBorder), 225);
+    panelBorder->setPosition({ 289.f, 129.f });
+    m_mainLayer->addChild(panelBorder, 1);
+
+    auto* panel = makeSurface(346.f, 236.f, toColor(theme.content), 250);
+    panel->setPosition({ 279.f, 129.f });
+    m_mainLayer->addChild(panel, 2);
+
+    auto* scrollGutter = makeSurface(16.f, 232.f, toColor(theme.navigation), 245);
+    scrollGutter->setPosition({ 462.f, 129.f });
+    m_mainLayer->addChild(scrollGutter, 2);
+
+    m_scroll = ScrollLayer::create({ 336.f, 226.f });
+    m_scroll->setPosition({ 111.f, 16.f });
+    m_scroll->m_contentLayer->setLayout(ScrollLayer::createDefaultListLayout(4.f));
+    m_mainLayer->addChild(m_scroll, 3);
+
+    auto* scrollbar = Scrollbar::create(m_scroll);
+    scrollbar->setPosition({ 462.f, 129.f });
+    scrollbar->setScale(0.88f);
+    m_mainLayer->addChild(scrollbar, 4);
 
     m_tabMenu = CCMenu::create();
     m_tabMenu->setContentSize(m_size);
@@ -123,46 +216,56 @@ bool TRMenuPopup::init() {
     m_tabMenu->setPosition({ m_size.width * 0.5f, m_size.height * 0.5f });
     m_mainLayer->addChild(m_tabMenu, 100);
 
-    switchTab(0);
+    m_seenRevision = g_menuRevision.load(std::memory_order_relaxed);
+    schedule(schedule_selector(TRMenuPopup::refreshIfNeeded), 0.05f);
+    applyTab(0);
     return true;
+}
+
+void TRMenuPopup::refreshIfNeeded(float) {
+    auto revision = g_menuRevision.load(std::memory_order_relaxed);
+    if (revision == m_seenRevision) {
+        return;
+    }
+    m_seenRevision = revision;
+    if (m_activeTab >= 0) {
+        switchTab(m_activeTab);
+    }
 }
 
 void TRMenuPopup::buildTabBar() {
     m_tabMenu->removeAllChildrenWithCleanup(true);
 
-    float startX = -kTabPitch * (kTabCount - 1) * 0.5f;
-
     for (int i = 0; i < kTabCount; ++i) {
         bool active = (i == m_activeTab);
-
-        auto* container = CCNode::create();
-        container->setContentSize({ kTabWidth, kTabHeight });
-        container->setAnchorPoint({ 0.5f, 0.5f });
-
-        const char* tex = active ? "GJ_button_01.png" : "GJ_button_04.png";
-        auto* bg = CCScale9Sprite::create(tex);
-        CCSize natural = bg->getContentSize();
-        constexpr float inset = 10.f;
-        bg->setCapInsets(CCRect(inset, inset, std::max(1.f, natural.width - inset * 2.f), std::max(1.f, natural.height - inset * 2.f)));
-        bg->setContentSize({ kTabWidth, kTabHeight });
-        bg->setPosition({ kTabWidth * 0.5f, kTabHeight * 0.5f });
-        container->addChild(bg);
-
-        auto* label = CCLabelBMFont::create(kTabs[i], "bigFont.fnt");
-        label->setAnchorPoint({ 0.5f, 0.5f });
-        label->setPosition({ kTabWidth * 0.5f, kTabHeight * 0.5f });
-        label->setColor(ccc3(255, 255, 255));
-        label->limitLabelWidth(kTabWidth - 12.f, 0.46f, 0.18f);
-        container->addChild(label);
-
-        auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(container, [this, i](CCMenuItemSpriteExtra*) {
+        auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(makeNavButton(i, active), [this, i](CCMenuItemSpriteExtra*) {
             this->switchTab(i);
         });
-        m_tabMenu->addChildAtPosition(item, Anchor::Top, ccp(startX + i * kTabPitch, kTabRowY));
+        item->setPosition({ kTabX, kTabStartY - i * kTabPitch });
+        m_tabMenu->addChild(item);
     }
 }
 
 void TRMenuPopup::switchTab(int index) {
+    m_pendingTab = index;
+    if (m_tabSwitchQueued) {
+        return;
+    }
+    m_tabSwitchQueued = true;
+    retain();
+    geode::queueInMainThread([this] {
+        int index = m_pendingTab;
+        m_pendingTab = -1;
+        m_tabSwitchQueued = false;
+        if (getParent()) {
+            applyTab(index);
+        }
+        release();
+    });
+}
+
+void TRMenuPopup::applyTab(int index) {
+    index = std::clamp(index, 0, kTabCount - 1);
     m_preserveScroll = (index == m_activeTab) && !m_subTabChanged;
     m_subTabChanged = false;
     m_activeTab = index;
@@ -170,15 +273,12 @@ void TRMenuPopup::switchTab(int index) {
     buildTabContent(index);
 }
 
-void TRMenuPopup::addSub(CCNode* content, CCNode* cell, std::string const& ownerId) {
+void TRMenuPopup::addSub(CCNode* content, CCNode* cell, std::string const&) {
     if (!cell) {
         return;
     }
     static_cast<TRCell*>(cell)->applySubStyle();
     content->addChild(cell);
-    if (!m_pendingExpandId.empty() && ownerId == m_pendingExpandId) {
-        m_animateCells.push_back(cell);
-    }
 }
 
 void TRMenuPopup::buildTabContent(int index) {
@@ -186,7 +286,6 @@ void TRMenuPopup::buildTabContent(int index) {
     float prevScrollY = content->getPositionY();
     float prevContentHeight = content->getContentHeight();
     content->removeAllChildrenWithCleanup(true);
-    m_animateCells.clear();
 
     if (index == 0) {
         buildMainTab(content);
@@ -200,8 +299,6 @@ void TRMenuPopup::buildTabContent(int index) {
         buildSettingsTab(content);
     } else if (index == 5) {
         buildOnlineTab(content);
-    } else {
-        content->addChild(SectionHeaderCell::create(std::string(kTabs[index]) + " - coming soon"));
     }
 
     content->updateLayout();
@@ -212,46 +309,42 @@ void TRMenuPopup::buildTabContent(int index) {
         m_scroll->scrollToTop();
     }
 
-    if (!m_animateCells.empty()) {
-        int order = 0;
-        for (auto* cell : m_animateCells) {
-            float targetX = cell->getPositionX();
-            float targetY = cell->getPositionY();
-            cell->setPositionX(targetX - 28.f);
-            auto* slide = CCEaseOut::create(CCMoveTo::create(0.18f, ccp(targetX, targetY)), 2.0f);
-            cell->runAction(CCSequence::create(CCDelayTime::create(0.025f * order), slide, nullptr));
-            ++order;
-        }
-    }
-    m_animateCells.clear();
-    m_pendingExpandId.clear();
 }
 
 void TRMenuPopup::buildMainTab(CCNode* content) {
     auto* row = CCNode::create();
-    row->setContentSize({ kCellWidth, 26.f });
+    row->setContentSize({ kCellWidth, 30.f });
     row->setAnchorPoint({ 0.5f, 0.5f });
-
-    auto* subMenu = CCMenu::create();
-    subMenu->setContentSize({ 0.f, 0.f });
-    subMenu->setPosition({ kCellWidth * 0.5f, 13.f });
-    row->addChild(subMenu);
 
     bool separatoryEnabled = false;
     std::vector<const char*> subNames = { "Replay", "Hacks", "Tools" };
     int subCount = static_cast<int>(subNames.size());
     m_mainSubTab = std::clamp(m_mainSubTab, 0, subCount - 1);
 
-    constexpr float subPitch = 66.f;
+    float segmentWidth = subCount == 4 ? 66.f : 76.f;
+    float trackWidth = segmentWidth * subCount;
+    auto palette = cocosTheme();
+    auto* trackBorder = makeSurface(trackWidth + 4.f, 28.f, toColor(palette.cellBorder), 235);
+    trackBorder->setPosition({ kCellWidth * 0.5f, 15.f });
+    row->addChild(trackBorder);
+    auto* track = makeSurface(trackWidth + 2.f, 26.f, toColor(palette.navigation), 250);
+    track->setPosition({ kCellWidth * 0.5f, 15.f });
+    row->addChild(track);
+
+    auto* subMenu = CCMenu::create();
+    subMenu->setContentSize({ 0.f, 0.f });
+    subMenu->setPosition({ kCellWidth * 0.5f, 15.f });
+    row->addChild(subMenu);
+
     for (int i = 0; i < subCount; ++i) {
         bool active = (i == m_mainSubTab);
-        auto* pill = makePillButton(subNames[i], active ? ccc3(95, 190, 240) : ccc3(135, 140, 152), 60.f, 22.f);
-        auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(pill, [this, i](CCMenuItemSpriteExtra*) {
+        auto* segment = makeSegmentButton(subNames[i], active, segmentWidth, 24.f);
+        auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(segment, [this, i](CCMenuItemSpriteExtra*) {
             m_mainSubTab = i;
             m_subTabChanged = true;
             switchTab(0);
         });
-        item->setPosition({ (static_cast<float>(i) - (subCount - 1) * 0.5f) * subPitch, 0.f });
+        item->setPosition({ (static_cast<float>(i) - (subCount - 1) * 0.5f) * segmentWidth, 0.f });
         subMenu->addChild(item);
     }
     content->addChild(row);
@@ -276,15 +369,316 @@ void TRMenuPopup::buildMainTab(CCNode* content) {
 }
 
 void TRMenuPopup::buildHacksSection(CCNode* content) {
-    content->addChild(SectionHeaderCell::create("Hacks tab is not yet available in the Cocos UI"));
+    auto* engine = ReplayEngine::get();
+    if (!engine) {
+        content->addChild(SectionHeaderCell::create("Engine unavailable"));
+        return;
+    }
+
+    struct HackRow {
+        const char* id;
+        const char* label;
+        const char* description;
+        bool value;
+    };
+
+    const HackRow rows[] = {
+        { "safe_mode", "Safe Mode", "Stops the run from affecting stats", engine->protectedMode },
+        { "trajectory", "Show Trajectory", "Preview the player's path", engine->pathPreview },
+        { "hitboxes", "Show Hitboxes", "Show collision outlines", engine->showHitboxes },
+        { "noclip", "Noclip", "Ignore lethal collisions", engine->collisionBypass },
+        { "rng_lock", "RNG Lock", "Keep random behavior repeatable", engine->rngLocked },
+    };
+
+    for (auto const& row : rows) {
+        std::string id = row.id;
+        content->addChild(ToggleCell::create(row.label, row.description, row.value, [this, id](bool value) {
+            auto* e = ReplayEngine::get();
+            if (id == "safe_mode") e->protectedMode = value;
+            else if (id == "trajectory") e->pathPreview = value;
+            else if (id == "hitboxes") e->showHitboxes = value;
+            else if (id == "noclip") e->collisionBypass = value;
+            else if (id == "rng_lock") e->rngLocked = value;
+            toasty::frontend::persistSettings();
+            switchTab(0);
+        }));
+        addHackSubOptions(content, id);
+    }
 }
 
 void TRMenuPopup::addHackSubOptions(CCNode* content, std::string const& id) {
-    (void)content; (void)id;
+    auto* engine = ReplayEngine::get();
+    if (!engine) {
+        return;
+    }
+
+    auto addKeybind = [this, content, id]() {
+        if (!toasty::frontend::desktopKeybinds()) {
+            return;
+        }
+        if (auto* setting = toasty::frontend::keybindSettingId(id)) {
+            addSub(content, KeybindCell::create("Keybind", setting), id);
+        }
+    };
+
+    if (id == "safe_mode") {
+        if (!engine->protectedMode) return;
+        addKeybind();
+        addSub(content, ToggleCell::create("Auto Safe Mode", "Turn it on while recording or playing", engine->autoSafeMode, [](bool value) {
+            ReplayEngine::get()->autoSafeMode = value;
+            toasty::frontend::persistSettings();
+        }), id);
+        return;
+    }
+
+    if (id == "trajectory") {
+        if (!engine->pathPreview) return;
+        addKeybind();
+        addSub(content, SliderCell::create("Path Length", static_cast<float>(engine->pathLength),
+            static_cast<float>(ReplayEngine::kTrajectoryLengthMin), static_cast<float>(ReplayEngine::kTrajectoryLengthSliderMax), [](float value) {
+                auto* e = ReplayEngine::get();
+                e->pathLength = ReplayEngine::sanitizeTrajectoryLength(static_cast<int>(std::lround(value)));
+                TrajectoryPredictionService::get().markDirty();
+                Mod::get()->setSavedValue("hack_trajectory_len", e->pathLength);
+            }), id);
+        addSub(content, InputCell::create("Exact Length", std::to_string(engine->pathLength), "240", true, [](std::string const& text) {
+            if (auto value = toasty::parseInteger<int>(text)) {
+                auto* e = ReplayEngine::get();
+                e->pathLength = ReplayEngine::sanitizeTrajectoryLength(*value);
+                TrajectoryPredictionService::get().markDirty();
+                Mod::get()->setSavedValue("hack_trajectory_len", e->pathLength);
+            }
+        }), id);
+        return;
+    }
+
+    if (id == "hitboxes") {
+        if (!engine->showHitboxes) return;
+        addKeybind();
+        addSub(content, ToggleCell::create("On Death Only", "Hide them until the player dies", engine->hitboxOnDeath, [](bool value) {
+            ReplayEngine::get()->hitboxOnDeath = value;
+            toasty::frontend::persistSettings();
+        }), id);
+        addSub(content, ToggleCell::create("Draw Trail", "Keep recent player hitboxes visible", engine->hitboxTrail, [this](bool value) {
+            ReplayEngine::get()->hitboxTrail = value;
+            toasty::frontend::persistSettings();
+            switchTab(0);
+        }), id);
+        if (engine->hitboxTrail) {
+            addSub(content, SliderCell::create("Trail Length", static_cast<float>(engine->hitboxTrailLength), 10.f, 600.f, [](float value) {
+                auto* e = ReplayEngine::get();
+                e->hitboxTrailLength = std::clamp(static_cast<int>(std::lround(value)), 10, 600);
+                Mod::get()->setSavedValue("hack_hitbox_trail_len", e->hitboxTrailLength);
+            }), id);
+        }
+        return;
+    }
+
+    if (id == "noclip") {
+        if (!engine->collisionBypass) return;
+        addKeybind();
+        addSub(content, ToggleCell::create("Player 1", "Apply noclip to Player 1", engine->noclipPlayer1, [](bool value) {
+            ReplayEngine::get()->noclipPlayer1 = value;
+            toasty::frontend::persistSettings();
+        }), id);
+        addSub(content, ToggleCell::create("Player 2", "Apply noclip to Player 2", engine->noclipPlayer2, [](bool value) {
+            ReplayEngine::get()->noclipPlayer2 = value;
+            toasty::frontend::persistSettings();
+        }), id);
+        auto accuracy = toasty::noclip::formatAccuracy(engine->noclipTotalFrames, engine->noclipUnsafeFrames, engine->noclipAccuracyDecimals);
+        addSub(content, SectionHeaderCell::create("Accuracy " + accuracy), id);
+        addSub(content, InputCell::create("Decimal Places", std::to_string(engine->noclipAccuracyDecimals), "2", true, [](std::string const& text) {
+            if (auto value = toasty::parseInteger<int>(text)) {
+                ReplayEngine::get()->noclipAccuracyDecimals = std::clamp(*value, 0, 6);
+                toasty::frontend::persistSettings();
+            }
+        }), id);
+        addSub(content, ToggleCell::create("Death Hitbox", "Show the collision noclip prevented", engine->noclipHitboxOnDeath, [](bool value) {
+            ReplayEngine::get()->noclipHitboxOnDeath = value;
+            toasty::frontend::persistSettings();
+        }), id);
+        addSub(content, ToggleCell::create("Accuracy Limit", "Stop playback below this percentage", engine->collisionLimitActive, [this](bool value) {
+            auto* e = ReplayEngine::get();
+            e->collisionLimitActive = value;
+            if (value && e->collisionThreshold < 1.f) e->collisionThreshold = 80.f;
+            toasty::frontend::persistSettings();
+            switchTab(0);
+        }), id);
+        if (engine->collisionLimitActive) {
+            addSub(content, InputCell::create("Limit (%)", std::to_string(static_cast<int>(engine->collisionThreshold)), "80", true, [](std::string const& text) {
+                if (auto value = toasty::parseInteger<int>(text)) {
+                    ReplayEngine::get()->collisionThreshold = std::clamp(static_cast<float>(*value), 1.f, 100.f);
+                    toasty::frontend::persistSettings();
+                }
+            }), id);
+        }
+        addSub(content, ToggleCell::create("Death Flash", "Flash a color when noclip saves you", engine->noclipDeathFlash, [this](bool value) {
+            ReplayEngine::get()->noclipDeathFlash = value;
+            toasty::frontend::persistSettings();
+            switchTab(0);
+        }), id);
+        if (engine->noclipDeathFlash) {
+            auto color = ccc4(
+                static_cast<GLubyte>(std::clamp(engine->noclipDeathColorR, 0.f, 1.f) * 255.f),
+                static_cast<GLubyte>(std::clamp(engine->noclipDeathColorG, 0.f, 1.f) * 255.f),
+                static_cast<GLubyte>(std::clamp(engine->noclipDeathColorB, 0.f, 1.f) * 255.f),
+                255);
+            addSub(content, ColorCell::create("Death Color", color, [](ccColor4B picked) {
+                auto* e = ReplayEngine::get();
+                e->noclipDeathColorR = picked.r / 255.f;
+                e->noclipDeathColorG = picked.g / 255.f;
+                e->noclipDeathColorB = picked.b / 255.f;
+                toasty::frontend::persistSettings();
+            }), id);
+        }
+        return;
+    }
+
+    if (id == "rng_lock") {
+        if (!engine->rngLocked) return;
+        addKeybind();
+        addSub(content, InputCell::create("Seed", std::to_string(engine->rngSeedVal), "1", true, [](std::string const& text) {
+            auto value = toasty::parseInteger<unsigned long long>(text);
+            ReplayEngine::get()->rngSeedVal = value ? static_cast<unsigned int>(*value) : 1u;
+            toasty::frontend::persistSettings();
+        }), id);
+    }
 }
 
 void TRMenuPopup::buildToolsSection(CCNode* content) {
-    content->addChild(SectionHeaderCell::create("Tools tab is not yet available in the Cocos UI"));
+    auto* engine = ReplayEngine::get();
+    if (!engine) {
+        content->addChild(SectionHeaderCell::create("Engine unavailable"));
+        return;
+    }
+
+    content->addChild(SectionHeaderCell::create("Timing"));
+    content->addChild(InputCell::create("Target TPS", std::to_string(static_cast<int>(engine->tickRate)), "240", true, [this](std::string const& text) {
+        m_toolsTps = text;
+    }));
+    content->addChild(ButtonCell::create("Apply TPS", "Apply", [this]() {
+        auto* e = ReplayEngine::get();
+        std::string source = m_toolsTps.empty() ? std::to_string(static_cast<int>(e->tickRate)) : m_toolsTps;
+        auto value = toasty::parseInteger<int>(source);
+        if (!value || *value < 1 || *value > 1000000) {
+            Notification::create("TPS must be between 1 and 1,000,000", NotificationIcon::Warning, 1.2f)->show();
+            return;
+        }
+        if (PlayLayer::get() && e->engineMode == MODE_EXECUTE) {
+            Notification::create("Stop playback before changing TPS", NotificationIcon::Warning, 1.2f)->show();
+            return;
+        }
+        e->tickRate = *value;
+        Mod::get()->setSavedValue<float>("eng_tick_rate", static_cast<float>(e->tickRate));
+        TrajectoryPredictionService::get().markDirty();
+        m_toolsTps.clear();
+        switchTab(0);
+    }));
+
+    content->addChild(InputCell::create("Game Speed", std::to_string(engine->gameSpeed).substr(0, 4), "1.0", false, [this](std::string const& text) {
+        m_toolsSpeed = text;
+    }));
+    content->addChild(ButtonCell::create("Apply Speed", "Apply", [this]() {
+        auto* e = ReplayEngine::get();
+        std::string source = m_toolsSpeed.empty() ? std::to_string(e->gameSpeed) : m_toolsSpeed;
+        char* end = nullptr;
+        float parsed = std::strtof(source.c_str(), &end);
+        if (end == source.c_str() || *end != '\0' || !std::isfinite(parsed) || parsed < 0.01f || parsed > 1000.f) {
+            Notification::create("Speed must be between 0.01x and 1000x", NotificationIcon::Warning, 1.2f)->show();
+            return;
+        }
+        e->gameSpeed = parsed;
+        Mod::get()->setSavedValue<float>("eng_speed", parsed);
+        TrajectoryPredictionService::get().markDirty();
+        m_toolsSpeed.clear();
+        switchTab(0);
+    }));
+
+    content->addChild(ToggleCell::create("Respawn Override", "Use a custom delay after death", engine->respawnTimeOverrideEnabled, [this](bool value) {
+        auto* e = ReplayEngine::get();
+        e->respawnTimeOverrideEnabled = value;
+        Mod::get()->setSavedValue("hack_respawn_override_enabled", value);
+        switchTab(0);
+    }));
+    if (engine->respawnTimeOverrideEnabled) {
+        addSub(content, InputCell::create("Respawn Delay (ms)", std::to_string(engine->respawnTimeOverrideMs), "1000", true, [](std::string const& text) {
+            if (auto value = toasty::parseInteger<int>(text)) {
+                auto* e = ReplayEngine::get();
+                e->respawnTimeOverrideMs = std::clamp(*value, 0, 10000);
+                Mod::get()->setSavedValue("hack_respawn_ms", e->respawnTimeOverrideMs);
+            }
+        }), "respawn");
+    }
+
+    content->addChild(SectionHeaderCell::create("Gameplay"));
+    auto addTool = [this, content](std::string const& id, std::string const& label, std::string const& description, bool on, std::function<void(bool)> apply, std::function<void()> addOptions = nullptr) {
+        content->addChild(ToggleCell::create(label, description, on, [this, apply](bool value) {
+            apply(value);
+            toasty::frontend::persistSettings();
+            switchTab(0);
+        }));
+        if (!on) return;
+        if (toasty::frontend::desktopKeybinds()) {
+            if (auto* setting = toasty::frontend::keybindSettingId(id)) {
+                addSub(content, KeybindCell::create("Keybind", setting), id);
+            }
+        }
+        if (addOptions) addOptions();
+    };
+
+    addTool("frame_advance", "Frame Advance", "Pause and step one frame at a time", engine->tickStepping, [](bool value) {
+        ReplayEngine::get()->setFrameStepEnabled(value, PlayLayer::get());
+    }, [this, content]() {
+        if (toasty::frontend::desktopKeybinds()) {
+            if (auto* setting = toasty::frontend::keybindSettingId("frame_step")) {
+                addSub(content, KeybindCell::create("Advance One Frame", setting), "frame_advance");
+            }
+        }
+    });
+    addTool("audio_pitch", "Speedhack Audio", "Match audio pitch to game speed", engine->audioPitchEnabled, [](bool value) {
+        ReplayEngine::get()->audioPitchEnabled = value;
+    });
+    addTool("layout_mode", "Layout Mode", "Hide level decoration", engine->layoutMode, [](bool value) {
+        ReplayEngine::get()->layoutMode = value;
+    }, [this, content, engine]() {
+        addSub(content, ColorCell::create("Background", rgbSettingToCC(engine->layoutModeBackgroundR, engine->layoutModeBackgroundG, engine->layoutModeBackgroundB), [](ccColor4B picked) {
+            auto* e = ReplayEngine::get();
+            e->layoutModeBackgroundR = picked.r;
+            e->layoutModeBackgroundG = picked.g;
+            e->layoutModeBackgroundB = picked.b;
+            toasty::frontend::persistSettings();
+        }), "layout_mode");
+        addSub(content, ColorCell::create("Ground", rgbSettingToCC(engine->layoutModeGroundR, engine->layoutModeGroundG, engine->layoutModeGroundB), [](ccColor4B picked) {
+            auto* e = ReplayEngine::get();
+            e->layoutModeGroundR = picked.r;
+            e->layoutModeGroundG = picked.g;
+            e->layoutModeGroundB = picked.b;
+            toasty::frontend::persistSettings();
+        }), "layout_mode");
+    });
+    addTool("disable_shaders", "Disable Shaders", "Turn off level shader effects", engine->disableShaders, [](bool value) {
+        ReplayEngine::get()->disableShaders = value;
+    });
+    addTool("no_death_effect", "No Death Effect", "Hide the death burst", engine->noDeathEffect, [](bool value) {
+        ReplayEngine::get()->noDeathEffect = value;
+    });
+    addTool("no_effects", "No Effects", "Hide gameplay effects", engine->noEffect, [](bool value) {
+        ReplayEngine::get()->noEffect = value;
+    });
+    addTool("hide_endscreen", "Hide Endscreen", "Skip the level endscreen", engine->hideEndscreen, [](bool value) {
+        ReplayEngine::get()->hideEndscreen = value;
+    });
+    addTool("hide_new_best", "Hide New Best", "Skip the new best popup", engine->hideNewBest, [](bool value) {
+        ReplayEngine::get()->hideNewBest = value;
+    });
+    addTool("no_mirror", "No Mirror Effect", "Ignore mirror portals", engine->noMirrorEffect, [](bool value) {
+        ReplayEngine::get()->noMirrorEffect = value;
+    }, [this, content, engine]() {
+        addSub(content, ToggleCell::create("Recording Only", "Keep mirroring everywhere else", engine->noMirrorRecordingOnly, [](bool value) {
+            ReplayEngine::get()->noMirrorRecordingOnly = value;
+            toasty::frontend::persistSettings();
+        }), "no_mirror");
+    });
 }
 
 void TRMenuPopup::buildScreenLabelsSection(CCNode* content) {
@@ -311,7 +705,7 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
     bool disabled = engine->engineMode == MODE_DISABLED;
 
     auto addMode = [&](const char* label, bool active, ccColor3B activeColor, std::function<void()> action, int slot) {
-        auto* pill = makePillButton(label, active ? activeColor : ccc3(135, 140, 152), 84.f, 30.f);
+        auto* pill = makePillButton(label, active ? activeColor : toColor(cocosTheme().inactive), 84.f, 30.f);
         auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(pill, [this, action](CCMenuItemSpriteExtra*) {
             action();
             switchTab(0);
@@ -418,7 +812,10 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
 
     content->addChild(SectionHeaderCell::create("Saved Macros"));
 
-    engine->reloadMacroList();
+    if (!m_replayListLoaded) {
+        engine->reloadMacroList();
+        m_replayListLoaded = true;
+    }
 
     content->addChild(InputCell::create("Search", m_replayMacroFilter, "name", false, [this](std::string const& text) {
         m_replayMacroFilter = text;
@@ -1105,8 +1502,8 @@ void TRMenuPopup::buildAutoclickerTab(CCNode* content) {
 
     if (toasty::frontend::desktopKeybinds()) {
         content->addChild(SectionHeaderCell::create("Keybind"));
-        if (int* keyPtr = toasty::frontend::keybindPtr("autoclicker")) {
-            content->addChild(KeybindCell::create("Toggle Autoclicker", keyPtr));
+        if (auto* setting = toasty::frontend::keybindSettingId("autoclicker")) {
+            content->addChild(KeybindCell::create("Toggle Autoclicker", setting));
         }
     }
 }
@@ -1132,7 +1529,25 @@ void TRMenuPopup::buildSettingsTab(CCNode* content) {
     content->addChild(SectionHeaderCell::create("General"));
     content->addChild(ComboCell::create("Menu Style", { "ImGui", "Cocos2d" }, toasty::frontend::isCocos() ? 1 : 0, [](int idx) {
         toasty::frontend::setMenuFrontend(idx == 1);
-        Notification::create("Reopen the menu to apply", NotificationIcon::Info, 1.0f)->show();
+        if (idx == 1) {
+            TRMenuPopup::reopen();
+        } else {
+            geode::queueInMainThread([] {
+                if (TRMenuPopup::isOpen()) TRMenuPopup::toggle();
+                toasty::frontend::toggleMenu();
+            });
+        }
+    }));
+
+    auto themeNames = toasty::frontend::cocosThemeNames();
+    auto currentTheme = toasty::frontend::cocosThemeName();
+    auto themeIt = std::find(themeNames.begin(), themeNames.end(), currentTheme);
+    int themeIndex = themeIt == themeNames.end() ? 0 : static_cast<int>(std::distance(themeNames.begin(), themeIt));
+    content->addChild(ComboCell::create("Cocos Theme", themeNames, themeIndex, [themeNames](int idx) {
+        if (idx >= 0 && idx < static_cast<int>(themeNames.size())) {
+            toasty::frontend::setCocosTheme(themeNames[idx]);
+            TRMenuPopup::reopen();
+        }
     }));
 
     auto* engine = ReplayEngine::get();
@@ -1192,17 +1607,15 @@ void TRMenuPopup::buildSettingsTab(CCNode* content) {
     content->addChild(ComboCell::create("UI Language", languages, languageIndex, [languages](int idx) {
         if (idx >= 0 && idx < static_cast<int>(languages.size())) {
             Mod::get()->setSettingValue<std::string>("ui_language", languages[idx]);
+            toasty::lang::refresh();
+            TRMenuPopup::refreshOpenMenu();
         }
     }));
 
-    if (toasty::frontend::desktopKeybinds()) {
-        content->addChild(SectionHeaderCell::create("Keybinds"));
-        for (auto const& entry : toasty::frontend::allKeybinds()) {
-            if (int* ptr = toasty::frontend::keybindPtr(entry.second)) {
-                content->addChild(KeybindCell::create(entry.first, ptr));
-            }
-        }
-    }
+    content->addChild(SectionHeaderCell::create("Controls"));
+    content->addChild(ButtonCell::create("Keybinds", "Open Manager", [] {
+        toasty::frontend::openKeybindEditor();
+    }));
 }
 
 TRMenuPopup* TRMenuPopup::create() {
@@ -1233,6 +1646,25 @@ void TRMenuPopup::toggle() {
 bool TRMenuPopup::isOpen() {
     auto* scene = CCDirector::sharedDirector()->getRunningScene();
     return scene && scene->getChildByID("cocos-menu"_spr) != nullptr;
+}
+
+void TRMenuPopup::refreshOpenMenu() {
+    g_menuRevision.fetch_add(1, std::memory_order_relaxed);
+}
+
+void TRMenuPopup::reopen() {
+    geode::queueInMainThread([] {
+        auto* scene = CCDirector::sharedDirector()->getRunningScene();
+        if (!scene) {
+            return;
+        }
+        if (auto* popup = scene->getChildByID("cocos-menu"_spr)) {
+            popup->removeFromParentAndCleanup(true);
+        }
+        if (auto* popup = TRMenuPopup::create()) {
+            popup->show();
+        }
+    });
 }
 
 }
