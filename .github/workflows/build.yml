@@ -41,7 +41,7 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           cli: "latest"
-          sdk: "5.7.1"
+          sdk: "5.8.1"
           ccache-variant: ""
 
       - name: Build private static watermark library
@@ -100,7 +100,7 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           cli: "latest"
-          sdk: "5.7.1"
+          sdk: "5.8.1"
           configure-args: "-DTOASTYREPLAY_WATERMARK_ROOT=${{ steps.watermark_root.outputs.root }}"
           ccache-variant: sccache
 
@@ -146,7 +146,7 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           cli: "latest"
-          sdk: "5.7.1"
+          sdk: "5.8.1"
 
       - uses: actions/upload-artifact@v4
         with:
