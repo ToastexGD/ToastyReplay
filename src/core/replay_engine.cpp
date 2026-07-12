@@ -1,5 +1,6 @@
 #include "ToastyReplay.hpp"
 #include "core/checkpoint_handler.hpp"
+#include "core/gameplay_layer.hpp"
 #include "hacks/autoclicker.hpp"
 #include "gui/gui.hpp"
 #include "gui/frame_editor.hpp"
@@ -1040,7 +1041,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
     }
 
     void handleButton(bool hold, int button, bool player2) {
-        if (!PlayLayer::get()) {
+        if (!toasty::gameplay::isGameplayActive()) {
             return GJBaseGameLayer::handleButton(hold, button, player2);
         }
 
@@ -1070,7 +1071,11 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
             if (engine->manualInputIgnoredActive() && !macroInput) {
                 return;
             }
-            return GJBaseGameLayer::handleButton(hold, button, player2);
+            GJBaseGameLayer::handleButton(hold, button, player2);
+            if (!macroInput) {
+                engine->triggerAudio(player2, button, hold);
+            }
+            return;
         }
 
         if (shouldBlockDeferredCapture(this, engine, button, hold, player2, tick_util::current(this, engine))) {
@@ -1078,7 +1083,9 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
 
         if (engine->engineMode != MODE_CAPTURE || !engine->hasMacro()) {
-            return GJBaseGameLayer::handleButton(hold, button, player2);
+            GJBaseGameLayer::handleButton(hold, button, player2);
+            engine->triggerAudio(player2, button, hold);
+            return;
         }
 
         bool recordPlayer2 = player2;
