@@ -1,5 +1,6 @@
 #include "gui/cocos/cells/cells.hpp"
 #include "gui/cocos/frontend.hpp"
+#include "gui/cocos/localized_label.hpp"
 #include "lang/localization.hpp"
 
 #include <Geode/Geode.hpp>
@@ -48,7 +49,7 @@ namespace {
         node->addChild(knob);
 
         auto stateText = localized(active ? "ON" : "OFF");
-        auto* state = CCLabelBMFont::create(stateText.c_str(), "bigFont.fnt");
+        auto* state = LocalizedLabel::create(stateText);
         state->setScale(active ? 0.25f : 0.22f);
         state->setColor(toColor(active ? theme.sectionText : theme.mutedText));
         state->setPosition({ active ? 13.f : 34.f, 12.f });
@@ -117,7 +118,7 @@ bool SectionHeaderCell::init(std::string const& text) {
     }
 
     auto displayText = localized(text);
-    auto* label = CCLabelBMFont::create(displayText.c_str(), "bigFont.fnt");
+    auto* label = LocalizedLabel::create(displayText);
     label->setAnchorPoint({ 0.f, 0.5f });
     label->setScale(0.43f);
     label->setColor(toColor(theme.sectionText));
@@ -151,7 +152,7 @@ bool ToggleCell::init(std::string const& label, std::string const& description, 
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 96.f, 0.46f, 0.2f);
@@ -160,7 +161,7 @@ bool ToggleCell::init(std::string const& label, std::string const& description, 
 
     if (hasDesc) {
         auto displayDescription = localized(description);
-        auto* desc = CCLabelBMFont::create(displayDescription.c_str(), "bigFont.fnt");
+        auto* desc = LocalizedLabel::create(displayDescription);
         desc->setAnchorPoint({ 0.f, 0.5f });
         desc->setScale(0.3f);
         desc->setColor(toColor(cocosTheme().mutedText));
@@ -208,7 +209,7 @@ bool ButtonCell::init(std::string const& label, std::string const& buttonText, s
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 140.f, 0.46f, 0.2f);
@@ -221,7 +222,7 @@ bool ButtonCell::init(std::string const& label, std::string const& buttonText, s
     addChild(menu);
 
     auto displayButtonText = localized(buttonText);
-    auto* spr = ButtonSprite::create(displayButtonText.c_str(), 100, 0, 0.5f, true, "bigFont.fnt", "GJ_button_01.png", 24.f);
+    auto* spr = createLocalizedButtonSprite(displayButtonText, 100, 0, 0.5f, true, "GJ_button_01.png", 24.f);
     auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(
         spr,
         [this](CCMenuItemSpriteExtra*) {
@@ -253,7 +254,7 @@ bool InputCell::init(std::string const& label, std::string const& value, std::st
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 150.f, 0.46f, 0.2f);
@@ -307,7 +308,7 @@ bool ComboCell::init(std::string const& label, std::vector<std::string> options,
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 150.f, 0.46f, 0.2f);
@@ -319,14 +320,14 @@ bool ComboCell::init(std::string const& label, std::vector<std::string> options,
     menu->setPosition({ size.width - 76.f, size.height * 0.5f });
     addChild(menu);
 
-    auto* button = ButtonSprite::create(m_options[m_index].c_str(), 130, 0, 0.46f, true, "bigFont.fnt", "GJ_button_04.png", 26.f);
+    auto* button = createLocalizedButtonSprite(m_options[m_index], 130, 0, 0.46f, true, "GJ_button_04.png", 26.f);
     m_valueNode = button;
     auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(button, [this](CCMenuItemSpriteExtra*) {
         if (m_options.empty()) {
             return;
         }
         m_index = (m_index + 1) % static_cast<int>(m_options.size());
-        static_cast<ButtonSprite*>(m_valueNode)->setString(m_options[m_index].c_str());
+        setLocalizedButtonString(static_cast<ButtonSprite*>(m_valueNode), m_options[m_index]);
         if (m_callback) {
             m_callback(m_index);
         }
@@ -342,7 +343,7 @@ void ComboCell::setIndex(int index) {
     }
     m_index = std::clamp(index, 0, static_cast<int>(m_options.size()) - 1);
     if (m_valueNode) {
-        static_cast<ButtonSprite*>(m_valueNode)->setString(m_options[m_index].c_str());
+        setLocalizedButtonString(static_cast<ButtonSprite*>(m_valueNode), m_options[m_index]);
     }
 }
 
@@ -367,7 +368,7 @@ bool SliderCell::init(std::string const& label, float value, float minValue, flo
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(120.f, 0.46f, 0.18f);
@@ -449,7 +450,7 @@ bool ColorCell::init(std::string const& label, ccColor4B color, std::function<vo
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 90.f, 0.46f, 0.2f);
@@ -515,7 +516,7 @@ bool KeybindCell::init(std::string const& label, std::string settingKey) {
     auto size = getContentSize();
 
     auto displayLabel = localized(label);
-    auto* title = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+    auto* title = LocalizedLabel::create(displayLabel);
     title->setAnchorPoint({ 0.f, 0.5f });
     title->setScale(0.46f);
     title->limitLabelWidth(size.width - 130.f, 0.46f, 0.2f);
@@ -528,7 +529,7 @@ bool KeybindCell::init(std::string const& label, std::string settingKey) {
     addChild(menu);
 
     m_display = toasty::frontend::keybindDisplay(m_settingKey);
-    auto* spr = ButtonSprite::create(m_display.c_str(), 96, 0, 0.46f, true, "bigFont.fnt", "GJ_button_04.png", 26.f);
+    auto* spr = createLocalizedButtonSprite(m_display, 96, 0, 0.46f, true, "GJ_button_04.png", 26.f);
     m_button = spr;
     auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(spr, [this](CCMenuItemSpriteExtra* sender) {
         this->onTap(sender);
@@ -554,7 +555,7 @@ void KeybindCell::refreshLabel() {
     std::string current = toasty::frontend::keybindDisplay(m_settingKey);
     if (current != m_display) {
         m_display = std::move(current);
-        static_cast<ButtonSprite*>(m_button)->setString(m_display.c_str());
+        setLocalizedButtonString(static_cast<ButtonSprite*>(m_button), m_display);
     }
 }
 

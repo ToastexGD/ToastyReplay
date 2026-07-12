@@ -1,6 +1,7 @@
 #include "gui/cocos/tr_menu_popup.hpp"
 
 #include "gui/cocos/cells/cells.hpp"
+#include "gui/cocos/localized_label.hpp"
 #include "gui/cocos/tr_frame_editor_popup.hpp"
 #include "gui/cocos/tr_replay_actions_popup.hpp"
 #include "gui/cocos/frontend.hpp"
@@ -83,7 +84,7 @@ namespace {
         container->addChild(bg);
 
         auto displayLabel = localized(label);
-        auto* text = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+        auto* text = LocalizedLabel::create(displayLabel);
         text->setAnchorPoint({ 0.5f, 0.5f });
         text->setPosition({ width * 0.5f, height * 0.5f });
         text->limitLabelWidth(width - 10.f, 0.42f, 0.18f);
@@ -110,7 +111,7 @@ namespace {
         }
 
         auto displayLabel = localized(label);
-        auto* text = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+        auto* text = LocalizedLabel::create(displayLabel);
         text->setColor(toColor(active ? theme.sectionText : theme.mutedText));
         text->limitLabelWidth(width - 10.f, 0.38f, 0.2f);
         text->setPosition({ width * 0.5f, height * 0.5f + 1.f });
@@ -133,7 +134,7 @@ namespace {
         container->addChild(bg);
 
         auto displayLabel = localized(kTabs[index]);
-        auto* label = CCLabelBMFont::create(displayLabel.c_str(), "bigFont.fnt");
+        auto* label = LocalizedLabel::create(displayLabel);
         label->setAnchorPoint({ 0.5f, 0.5f });
         label->setColor(toColor(active ? theme.sectionText : theme.mutedText));
         label->limitLabelWidth(kTabWidth - 14.f, 0.42f, 0.22f);
@@ -947,7 +948,7 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
         menu->setAnchorPoint({ 1.f, 0.5f });
         menu->setPosition({ kCellWidth - 8.f, 15.f });
 
-        auto* loadSpr = ButtonSprite::create("Load", 30, 0, 0.5f, false, "bigFont.fnt", "GJ_button_01.png", 24.f);
+        auto* loadSpr = createLocalizedButtonSprite(localized("Load"), 30, 0, 0.5f, false, "GJ_button_01.png", 24.f);
         auto* loadItem = geode::cocos::CCMenuItemExt::createSpriteExtra(loadSpr, [this, name, isTTR](CCMenuItemSpriteExtra*) {
             auto* e = ReplayEngine::get();
             if (e->engineMode == MODE_CAPTURE) {
@@ -982,7 +983,7 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
         });
         menu->addChild(loadItem);
 
-        auto* actionsSpr = ButtonSprite::create("Actions", 30, 0, 0.5f, false, "bigFont.fnt", "GJ_button_04.png", 24.f);
+        auto* actionsSpr = createLocalizedButtonSprite(localized("Actions"), 30, 0, 0.5f, false, "GJ_button_04.png", 24.f);
         auto* actionsItem = geode::cocos::CCMenuItemExt::createSpriteExtra(actionsSpr, [this, name, isTTR](CCMenuItemSpriteExtra*) {
             auto onChanged = [this]() { switchTab(0); };
             auto onUpload = [this, name]() {
@@ -1018,7 +1019,7 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
         pageMenu->setAnchorPoint({ 0.5f, 0.5f });
         pageMenu->setPosition({ kCellWidth * 0.5f, 15.f });
 
-        auto* prevSpr = ButtonSprite::create("< Prev", 60, 0, 0.5f, false, "bigFont.fnt", "GJ_button_04.png", 24.f);
+        auto* prevSpr = createLocalizedButtonSprite(localized("< Prev"), 60, 0, 0.5f, false, "GJ_button_04.png", 24.f);
         auto* prevItem = geode::cocos::CCMenuItemExt::createSpriteExtra(prevSpr, [this](CCMenuItemSpriteExtra*) {
             if (m_replayPage > 0) {
                 --m_replayPage;
@@ -1027,7 +1028,7 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
         });
         pageMenu->addChild(prevItem);
 
-        auto* nextSpr = ButtonSprite::create("Next >", 60, 0, 0.5f, false, "bigFont.fnt", "GJ_button_04.png", 24.f);
+        auto* nextSpr = createLocalizedButtonSprite(localized("Next >"), 60, 0, 0.5f, false, "GJ_button_04.png", 24.f);
         auto* nextItem = geode::cocos::CCMenuItemExt::createSpriteExtra(nextSpr, [this, totalPages](CCMenuItemSpriteExtra*) {
             if (m_replayPage < totalPages - 1) {
                 ++m_replayPage;

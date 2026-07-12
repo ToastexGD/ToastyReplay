@@ -21,6 +21,7 @@ set(TOASTYREPLAY_SOURCES
     src/gui/gui.cpp
     src/gui/credits_popup.cpp
     src/gui/cocos/frontend.cpp
+    src/gui/cocos/localized_label.cpp
     src/gui/cocos/tr_menu_popup.cpp
     src/gui/cocos/tr_frame_editor_popup.cpp
     src/gui/cocos/tr_replay_actions_popup.cpp

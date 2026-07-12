@@ -25,6 +25,7 @@ const ccColor3B kColorMuted = ccc3(185, 198, 220);
 
 class CreditsPage;
 CreditsPage* s_openPage = nullptr;
+bool s_openPageQueued = false;
 
 std::vector<std::string> wrapText(std::string message, size_t maxLineLength, size_t maxLines) {
     std::vector<std::string> lines;
@@ -71,6 +72,7 @@ protected:
     CCSize m_size;
     CCLayer* m_contentLayer = nullptr;
     CCMenu* m_actionMenu = nullptr;
+    bool m_closeQueued = false;
 
     bool init() {
         auto winSize = CCDirector::sharedDirector()->getWinSize();
@@ -309,14 +311,21 @@ protected:
     }
 
     void closePage() {
-        if (s_openPage != this) return;
-        s_openPage = nullptr;
+        if (s_openPage != this || m_closeQueued) return;
+        m_closeQueued = true;
         setKeyboardEnabled(false);
         setKeypadEnabled(false);
-        CCDirector::sharedDirector()->popSceneWithTransition(
-            0.35f,
-            PopTransition::kPopTransitionFade
-        );
+        retain();
+        Loader::get()->queueInMainThread([this]() {
+            if (s_openPage == this) {
+                s_openPage = nullptr;
+                CCDirector::sharedDirector()->popSceneWithTransition(
+                    0.35f,
+                    PopTransition::kPopTransitionFade
+                );
+            }
+            release();
+        });
     }
 
     void onBack(CCObject*) {
@@ -347,12 +356,17 @@ public:
 
 namespace toasty::credits {
     void showCreditsPage() {
-        if (s_openPage) return;
-        auto* page = CreditsPage::create();
-        if (!page) return;
-        auto* scene = CCScene::create();
-        scene->addChild(page);
-        s_openPage = page;
-        CCDirector::sharedDirector()->pushScene(CCTransitionFade::create(0.35f, scene));
+        if (s_openPage || s_openPageQueued) return;
+        s_openPageQueued = true;
+        Loader::get()->queueInMainThread([]() {
+            s_openPageQueued = false;
+            if (s_openPage) return;
+            auto* page = CreditsPage::create();
+            if (!page) return;
+            auto* scene = CCScene::create();
+            scene->addChild(page);
+            s_openPage = page;
+            CCDirector::sharedDirector()->pushScene(CCTransitionFade::create(0.35f, scene));
+        });
     }
 }

@@ -1,6 +1,7 @@
 #include "gui/cocos/tr_frame_editor_popup.hpp"
 
 #include "gui/cocos/cells/cells.hpp"
+#include "gui/cocos/localized_label.hpp"
 #include "lang/localization.hpp"
 #include "utils.hpp"
 
@@ -62,7 +63,7 @@ namespace {
 
     CCMenuItemSpriteExtra* makeSmallButton(const char* label, const char* bg, std::function<void()> callback) {
         auto displayLabel = localized(label);
-        auto* spr = ButtonSprite::create(displayLabel.c_str(), 30, 0, 0.5f, false, "bigFont.fnt", bg, 24.f);
+        auto* spr = createLocalizedButtonSprite(displayLabel, 30, 0, 0.5f, false, bg, 24.f);
         return geode::cocos::CCMenuItemExt::createSpriteExtra(spr, [callback](CCMenuItemSpriteExtra*) {
             callback();
         });
@@ -100,7 +101,7 @@ bool TRFrameEditorPopup::init() {
     }
 
     auto titleText = localized("Macro Editor");
-    auto* title = CCLabelBMFont::create(titleText.c_str(), "goldFont.fnt");
+    auto* title = LocalizedLabel::create(titleText, "goldFont.fnt");
     title->setScale(0.55f);
     title->setPosition({ kPopupWidth * 0.5f, kPopupHeight - 20.f });
     m_mainLayer->addChild(title, 10);

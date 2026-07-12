@@ -6910,7 +6910,15 @@ void MenuInterface::initialize() {
 
     if (headFont) {
         fontHeading = io.Fonts->AddFontFromFileTTF(headFont, 24.0f, nullptr, glyphRanges.Data);
+        if (cjkFont) {
+            ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.PixelSnapH = true;
+            io.Fonts->AddFontFromFileTTF(cjkFont, 24.0f, &cjkCfg, cjkRanges);
+        }
         fontTitle   = io.Fonts->AddFontFromFileTTF(headFont, 32.0f, nullptr, glyphRanges.Data);
+        if (cjkFont) {
+            ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.PixelSnapH = true;
+            io.Fonts->AddFontFromFileTTF(cjkFont, 32.0f, &cjkCfg, cjkRanges);
+        }
     } else {
         fontHeading = io.Fonts->AddFontDefault();
         fontTitle   = io.Fonts->AddFontDefault();

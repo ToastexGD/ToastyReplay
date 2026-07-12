@@ -1,5 +1,7 @@
 #include "gui/cocos/tr_replay_actions_popup.hpp"
 
+#include "gui/cocos/localized_label.hpp"
+
 #include "gui/cocos/tr_frame_editor_popup.hpp"
 #include "conversion/macro_converter.hpp"
 #include "ToastyReplay.hpp"
@@ -51,14 +53,14 @@ bool TRReplayActionsPopup::init() {
         m_closeBtn->setScale(0.8f);
     }
 
-    auto* title = CCLabelBMFont::create(m_name.c_str(), "goldFont.fnt");
+    auto* title = LocalizedLabel::create(m_name, "goldFont.fnt");
     title->setScale(0.5f);
     title->limitLabelWidth(kPopupWidth - 60.f, 0.5f, 0.2f);
     title->setPosition({ kPopupWidth * 0.5f, kPopupHeight - 22.f });
     m_mainLayer->addChild(title, 10);
 
     auto renameText = localized("Rename");
-    auto* renameLabel = CCLabelBMFont::create(renameText.c_str(), "bigFont.fnt");
+    auto* renameLabel = LocalizedLabel::create(renameText);
     renameLabel->setScale(0.42f);
     renameLabel->setAnchorPoint({ 0.f, 0.5f });
     renameLabel->setPosition({ 20.f, kPopupHeight - 52.f });
@@ -74,7 +76,7 @@ bool TRReplayActionsPopup::init() {
     auto* renameMenu = CCMenu::create();
     renameMenu->setPosition({ 0.f, 0.f });
     auto saveText = localized("Save");
-    auto* renameSpr = ButtonSprite::create(saveText.c_str(), 30, 0, 0.5f, false, "bigFont.fnt", "GJ_button_01.png", 24.f);
+    auto* renameSpr = createLocalizedButtonSprite(saveText, 30, 0, 0.5f, false, "GJ_button_01.png", 24.f);
     auto* renameItem = geode::cocos::CCMenuItemExt::createSpriteExtra(renameSpr, [this](CCMenuItemSpriteExtra*) {
         this->doRename();
     });
@@ -88,7 +90,7 @@ bool TRReplayActionsPopup::init() {
     float actionY = kPopupHeight - 92.f;
     auto addAction = [&](const char* label, const char* bg, std::function<void()> action) {
         auto displayLabel = localized(label);
-        auto* spr = ButtonSprite::create(displayLabel.c_str(), 140, 0, 0.6f, false, "bigFont.fnt", bg, 28.f);
+        auto* spr = createLocalizedButtonSprite(displayLabel, 140, 0, 0.6f, false, bg, 28.f);
         auto* item = geode::cocos::CCMenuItemExt::createSpriteExtra(spr, [action](CCMenuItemSpriteExtra*) {
             action();
         });
