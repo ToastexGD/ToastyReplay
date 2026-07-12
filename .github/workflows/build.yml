@@ -7,6 +7,7 @@ on:
       - "main"
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
@@ -103,6 +104,7 @@ jobs:
           sdk: "5.8.1"
           configure-args: "-DTOASTYREPLAY_WATERMARK_ROOT=${{ steps.watermark_root.outputs.root }}"
           ccache-variant: sccache
+          combine: true
 
       - name: Verify package has no runtime watermark DLL
         shell: pwsh
@@ -127,11 +129,6 @@ jobs:
 
           Write-Host "OK: no runtime watermark DLL is bundled in the .geode package."
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Build Output
-          path: build/*.geode
-
   build-macos:
     name: macOS
     runs-on: macos-latest
@@ -141,14 +138,26 @@ jobs:
         with:
           submodules: 'recursive'
 
-      # no watermark lib on mac (CMake gates it to WIN32)
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
           cli: "latest"
           sdk: "5.8.1"
+          combine: true
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - build-macos
+
+    steps:
+      - name: Combine platform builds
+        id: build
+        uses: geode-sdk/build-geode-mod/combine@main
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macOS Build Output
-          path: build/*.geode
+          name: Build Output
+          path: ${{ steps.build.outputs.build-output }}
