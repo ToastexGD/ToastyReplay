@@ -917,7 +917,9 @@ void OnlineClient::uploadMacro(std::string const& macroName, std::string const& 
 
 void OnlineClient::doUploadMacro(std::string const& macroName, std::string const& comment) {
     auto* engine = ReplayEngine::get();
-    bool isLegacyCBS = engine->legacyCbsMacros.count(macroName) > 0 && engine->ttr2Macros.count(macroName) == 0;
+    bool isLegacyCBS = engine->legacyCbsMacros.count(macroName) > 0 &&
+        engine->ttr3Macros.count(macroName) == 0 &&
+        engine->ttr2Macros.count(macroName) == 0;
     if (isLegacyCBS) {
         uploadState = RSERROR;
         uploadResultMsg = trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
@@ -953,9 +955,9 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         frameCount = macro->inputs.empty() ? 0 : macro->inputs.back().tick;
         durationSeconds = macro->duration;
         fileData = macro->serialize();
-        filename = macroName + ".ttr2";
-        macroFormat = "ttr2";
-        if (sourceFormat.empty()) macroOrigin = "recorded_ttr2";
+        filename = macroName + ".ttr3";
+        macroFormat = "ttr3";
+        if (sourceFormat.empty()) macroOrigin = "recorded_ttr3";
         delete macro;
     } else {
         auto* gdrMacro = MacroSequence::loadFromDisk(macroName);

@@ -402,6 +402,24 @@ public:
                 }
             }
 
+            if (extension == ".ttr3") {
+                std::unique_ptr<TTRMacro> macro(TTRMacro::loadFromPath(path));
+                if (!macro) {
+                    foreignCandidates.push_back(path);
+                    continue;
+                }
+
+                addUsable(stem, true);
+                ttr3Macros.insert(stem);
+                if (macro->accuracyMode == AccuracyMode::CBS) {
+                    cbsMacros.insert(stem);
+                }
+                if (macro->platformerMode) {
+                    platformerMacros.insert(stem);
+                }
+                continue;
+            }
+
             if (extension == ".ttr2" || extension == ".ttr") {
                 bool isTTR2 = extension == ".ttr2";
                 uint32_t flags = 0;

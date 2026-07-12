@@ -1918,9 +1918,10 @@ void MenuInterface::drawReplayTab() {
         bool isCBS = engine->cbsMacros.count(macroName) > 0;
         bool isPlatformer = engine->platformerMacros.count(macroName) > 0;
         bool isTTR = engine->ttrMacros.count(macroName) > 0;
+        bool isTTR3 = engine->ttr3Macros.count(macroName) > 0;
         bool isTTR2 = engine->ttr2Macros.count(macroName) > 0;
-        bool isLegacyTTR = isTTR && !isTTR2;
-        bool isLegacyCBS = engine->legacyCbsMacros.count(macroName) > 0 && !isTTR2;
+        bool isLegacyTTR = isTTR && !isTTR3 && !isTTR2;
+        bool isLegacyCBS = engine->legacyCbsMacros.count(macroName) > 0 && !isTTR3 && !isTTR2;
         ImGui::PushID(macroName.c_str());
 
         float xBtnW = 20.0f;
@@ -1935,7 +1936,7 @@ void MenuInterface::drawReplayTab() {
         }
         auto incompatibleText = trString("Incompatible");
         auto platformerText = trString("PLAT");
-        const char* ttrFormatTag = isTTR2 ? "TTR2" : "TTR";
+        const char* ttrFormatTag = isTTR3 ? "TTR3" : (isTTR2 ? "TTR2" : "TTR");
         float ttrLabelW = (!isIncompatible && isTTR) ? ImGui::CalcTextSize(ttrFormatTag).x + 16.0f : 0.0f;
         float gdrLabelW = (!isIncompatible && !isTTR) ? ImGui::CalcTextSize("GDR").x + 16.0f : 0.0f;
         float platformerLabelW = (!isIncompatible && isPlatformer) ? ImGui::CalcTextSize(platformerText.c_str()).x + 16.0f : 0.0f;
@@ -2052,7 +2053,7 @@ void MenuInterface::drawReplayTab() {
         if (ImGui::Button("x", ImVec2(xBtnW, xBtnW))) {
             auto dir = getReplayDirectoryPath();
             bool deleted = false;
-            std::filesystem::path targetPath = dir / (macroName + (isTTR ? (isTTR2 ? ".ttr2" : ".ttr") : ".gdr"));
+            std::filesystem::path targetPath = dir / (macroName + (isTTR ? (isTTR3 ? ".ttr3" : (isTTR2 ? ".ttr2" : ".ttr")) : ".gdr"));
             std::error_code deleteEc;
             if (std::filesystem::is_regular_file(targetPath, deleteEc) && !deleteEc) {
                 deleted = std::filesystem::remove(targetPath, deleteEc);
@@ -2065,7 +2066,7 @@ void MenuInterface::drawReplayTab() {
                     });
                     if (entry.is_regular_file() &&
                         toasty::pathToUtf8(entry.path().stem()) == macroName &&
-                        ((isTTR && (ext == ".ttr2" || ext == ".ttr")) || (!isTTR && ext == ".gdr"))) {
+                        ((isTTR && (ext == ".ttr3" || ext == ".ttr2" || ext == ".ttr")) || (!isTTR && ext == ".gdr"))) {
                         std::filesystem::remove(entry.path());
                         deleted = true;
                         break;
@@ -2743,7 +2744,9 @@ void MenuInterface::drawReplayTab() {
         if (engine->ttrMode) {
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, getTTRTagColor());
-            ImGui::TextUnformatted(engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "(TTR)" : "(TTR2)");
+            ImGui::TextUnformatted(engine->activeTTR && engine->activeTTR->loadedFromTTR3()
+                ? "(TTR3)"
+                : (engine->activeTTR && engine->activeTTR->loadedFromLegacyFormat() ? "(TTR)" : "(TTR2)"));
             ImGui::PopStyleColor();
         }
         if (auto* accuracyTag = getAccuracyTag(loadedAccuracyMode)) {
@@ -4931,7 +4934,9 @@ void MenuInterface::drawOnlineTab() {
 
         auto uploadMacroLabel = [engine](std::string const& macroName) {
             std::string label = macroName;
-            if (engine->ttr2Macros.count(macroName)) {
+            if (engine->ttr3Macros.count(macroName)) {
+                label += "  [TTR3]";
+            } else if (engine->ttr2Macros.count(macroName)) {
                 label += "  [TTR2]";
             } else if (engine->ttrMacros.count(macroName)) {
                 label += "  [TTR]";
@@ -4939,7 +4944,7 @@ void MenuInterface::drawOnlineTab() {
                 label += "  [GDR]";
             }
             if (engine->cbsMacros.count(macroName)) label += " [CBS]";
-            if (engine->legacyCbsMacros.count(macroName) && !engine->ttr2Macros.count(macroName)) label += " [PLAYBACK ONLY]";
+            if (engine->legacyCbsMacros.count(macroName) && !engine->ttr3Macros.count(macroName) && !engine->ttr2Macros.count(macroName)) label += " [PLAYBACK ONLY]";
             if (engine->platformerMacros.count(macroName)) {
                 label += " [";
                 label += trString("PLAT");
@@ -4992,6 +4997,7 @@ void MenuInterface::drawOnlineTab() {
 
         bool selectedLegacyCBS = selectedUploadMacro >= 0 &&
             engine->legacyCbsMacros.count(macros[selectedUploadMacro]) &&
+            !engine->ttr3Macros.count(macros[selectedUploadMacro]) &&
             !engine->ttr2Macros.count(macros[selectedUploadMacro]);
         bool canUpload = selectedUploadMacro >= 0 &&
             !selectedLegacyCBS &&
