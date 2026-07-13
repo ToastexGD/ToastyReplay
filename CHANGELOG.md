@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.2.1
+
+- Fixed click sounds going silent when separate Player 2 clicks were enabled without a Player 2 pack selected.
+
 ## v2.2.0
 
 ### What's New?
