@@ -5,7 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(ToastyReplay VERSION 2.2.0 LANGUAGES CXX)
+project(ToastyReplay VERSION 2.2.1 LANGUAGES CXX)
 
 set(TOASTYREPLAY_SOURCES
     src/format/ttr_format.cpp
