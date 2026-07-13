@@ -10,7 +10,9 @@ project(ToastyReplay VERSION 2.2.1 LANGUAGES CXX)
 set(TOASTYREPLAY_SOURCES
     src/format/ttr_format.cpp
     src/format/ttr3_format.cpp
-    src/conversion/macro_converter.cpp
+    src/conversion/gdr_upgrade.cpp
+    src/conversion/tcbot_format.cpp
+    src/conversion/tcbot_import.cpp
     src/core/checkpoint_handler.cpp
     src/core/replay_engine.cpp
     src/core/checkpoint_system.cpp
@@ -132,11 +134,27 @@ add_executable(toastyreplay_gdr_import_tests
 target_include_directories(toastyreplay_gdr_import_tests PRIVATE src)
 target_compile_features(toastyreplay_gdr_import_tests PRIVATE cxx_std_23)
 target_compile_definitions(toastyreplay_gdr_import_tests PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")
-target_compile_definitions(toastyreplay_gdr_import_tests PRIVATE TOASTYREPLAY_GAMEPLAY_LAYER_TEST)
 if (MSVC)
     target_compile_definitions(toastyreplay_gdr_import_tests PRIVATE _HAS_ITERATOR_DEBUGGING=0)
+    target_compile_options(toastyreplay_gdr_import_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(toastyreplay_gdr_import_tests PRIVATE -UNDEBUG)
 endif()
 target_link_libraries(toastyreplay_gdr_import_tests PRIVATE GeodeBindings libGDR)
+
+add_executable(toastyreplay_tcbot_format_tests
+    src/conversion/tcbot_format.cpp
+    tests/tcbot_format_tests.cpp
+)
+target_include_directories(toastyreplay_tcbot_format_tests PRIVATE src)
+target_compile_features(toastyreplay_tcbot_format_tests PRIVATE cxx_std_23)
+if (MSVC)
+    target_compile_definitions(toastyreplay_tcbot_format_tests PRIVATE _HAS_ITERATOR_DEBUGGING=0)
+    target_compile_options(toastyreplay_tcbot_format_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(toastyreplay_tcbot_format_tests PRIVATE -UNDEBUG)
+endif()
+target_link_libraries(toastyreplay_tcbot_format_tests PRIVATE GeodeBindings)
 
 set(TOASTYREPLAY_WATERMARK_ROOT "" CACHE PATH "Private ToastyReplay watermark artifact root")
 if (NOT TOASTYREPLAY_WATERMARK_ROOT AND DEFINED ENV{TOASTYREPLAY_WATERMARK_ROOT})

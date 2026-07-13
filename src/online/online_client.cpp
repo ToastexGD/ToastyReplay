@@ -141,8 +141,8 @@ namespace {
 
         std::string message = trFormat(
             "{fallback} (HTTP {code})",
-            fmt::arg("fallback", toasty::lang::tr(fallback)),
-            fmt::arg("code", res.code())
+            toasty::lang::arg("fallback", toasty::lang::tr(fallback)),
+            toasty::lang::arg("code", res.code())
         );
         if (res.code() >= 500) message += " " + trString("Backend server error.");
         return message;
@@ -281,7 +281,7 @@ void OnlineClient::saveRefreshToken(std::string const& token) {
     }
     std::string encrypted;
     if (!dpapiProtect(token, encrypted)) {
-        log::warn("DPAPI protect failed for online refresh token; not persisting.");
+        log::warn("Could not protect the online refresh token, so it will not be saved");
         clearRefreshToken();
         return;
     }
@@ -297,7 +297,7 @@ std::string OnlineClient::loadRefreshToken() const {
     if (encrypted.empty()) return "";
     std::string plain;
     if (!dpapiUnprotect(encrypted, plain)) {
-        log::warn("DPAPI unprotect failed for online refresh token; clearing.");
+        log::warn("Could not read the saved online refresh token, so it will be cleared");
         Mod::get()->setSavedValue<std::string>(KEY_REFRESH_TOKEN, "");
         return "";
     }
@@ -553,7 +553,7 @@ void OnlineClient::startAuthFlow() {
             if (!res.ok()) {
                 authPolling = false;
                 authPollTimer = 0.0f;
-                log::warn("Online auth start failed: HTTP {}", res.code());
+                log::error("Could not start online authentication: HTTP {}", res.code());
                 return;
             }
             auto json = res.json();
@@ -649,7 +649,7 @@ void OnlineClient::onActivationApproved(matjson::Value const& data) {
     }
 
     if (access.empty() || refresh.empty() || username.empty() || id.empty()) {
-        log::warn("Online activation response was incomplete.");
+        log::error("Could not activate the online session because the response was incomplete");
         return;
     }
 
@@ -922,7 +922,7 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         engine->ttr2Macros.count(macroName) == 0;
     if (isLegacyCBS) {
         uploadState = RSERROR;
-        uploadResultMsg = trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+        uploadResultMsg = trString("Legacy CBS macros are playback only. Re-record in TTR3 CBS mode for exact timing.");
         uploadResultTimer = 5.0f;
         return;
     }
@@ -940,12 +940,6 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
     std::string macroOrigin = "recorded";
     std::string sourceFormat;
 
-    auto convertedSource = engine->convertedMacroSources.find(macroName);
-    if (convertedSource != engine->convertedMacroSources.end()) {
-        macroOrigin = "converted";
-        sourceFormat = convertedSource->second;
-    }
-
     if (auto* macro = TTRMacro::loadFromDisk(macroName)) {
         levelName = macro->levelName;
         levelId = macro->levelId;
@@ -957,7 +951,12 @@ void OnlineClient::doUploadMacro(std::string const& macroName, std::string const
         fileData = macro->serialize();
         filename = macroName + ".ttr3";
         macroFormat = "ttr3";
-        if (sourceFormat.empty()) macroOrigin = "recorded_ttr3";
+        if (macro->macroConverted) {
+            macroOrigin = "converted";
+            sourceFormat = "GDR";
+        } else {
+            macroOrigin = "recorded_ttr3";
+        }
         delete macro;
     } else {
         auto* gdrMacro = MacroSequence::loadFromDisk(macroName);

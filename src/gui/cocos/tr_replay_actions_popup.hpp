@@ -2,6 +2,8 @@
 
 #include <Geode/ui/Popup.hpp>
 #include <Geode/ui/TextInput.hpp>
+#include <Geode/utils/async.hpp>
+#include "conversion/gdr_upgrade.hpp"
 #include <functional>
 #include <string>
 
@@ -14,11 +16,12 @@ protected:
     std::function<void()> m_onChanged;
     std::function<void()> m_onUpload;
     geode::TextInput* m_renameInput = nullptr;
+    geode::async::TaskHolder<geode::Result<toasty::conversion::ReplayImportResult>> m_conversionTask;
+    bool m_converting = false;
 
     bool init() override;
     void doRename();
     void doConvert();
-    void doConvertToGdr();
     void doEdit();
     void doDelete();
     void notifyChanged();

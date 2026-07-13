@@ -631,7 +631,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         auto* engine = ReplayEngine::get();
         if (!engine) return;
         if (engine->executeIndex + 1 >= inputList.size()) {
-            log::warn("[TR-REPLAY][W006] TTR3 swift pair anchor missing its partner");
+            log::warn("TTR3 swift pair at input {} is missing its partner", engine->executeIndex);
             return;
         }
         auto next = makePlaybackInput(inputList[engine->executeIndex + 1]);
@@ -639,7 +639,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
             next.button != input.button ||
             next.player2 != input.player2 ||
             std::abs(next.timeSeconds - input.timeSeconds) > 0.000000001) {
-            log::warn("[TR-REPLAY][W007] TTR3 malformed swift pair in loaded macro");
+            log::warn("TTR3 swift pair at input {} does not match its partner", engine->executeIndex);
             return;
         }
         dispatchImmediatePlaybackAction(tick, input.button, input.pressed, input.player2);

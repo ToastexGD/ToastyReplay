@@ -3,7 +3,7 @@
 #include "gui/cocos/localized_label.hpp"
 
 #include "gui/cocos/tr_frame_editor_popup.hpp"
-#include "conversion/macro_converter.hpp"
+#include "conversion/gdr_upgrade.hpp"
 #include "ToastyReplay.hpp"
 #include "utils.hpp"
 #include "lang/localization.hpp"
@@ -28,19 +28,34 @@ namespace {
         return std::string(toasty::lang::tr(text));
     }
 
-    std::string macroExtension(std::string const& name, bool isTTR) {
+    std::filesystem::path legacyGDRPath(std::string const& name) {
         namespace fs = std::filesystem;
         auto directory = ReplayStorage::getReplayDirectoryPath();
         std::error_code ec;
+        for (auto const& extension : { ".gdr", ".gdr.json" }) {
+            auto path = directory / (name + extension);
+            if (fs::is_regular_file(path, ec) && !ec) {
+                return path;
+            }
+        }
         for (fs::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
             if (!it->is_regular_file()) {
                 continue;
             }
-            if (toasty::pathToUtf8(it->path().stem()) == name) {
-                return toasty::pathToUtf8(it->path().extension());
+            auto filename = toasty::pathToUtf8(it->path().filename());
+            std::string lower = filename;
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            std::string expected = name;
+            std::transform(expected.begin(), expected.end(), expected.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            if (lower == expected + ".gdr" || lower == expected + ".gdr.json") {
+                return it->path();
             }
         }
-        return isTTR ? ".ttr" : ".gdr";
+        return {};
     }
 }
 
@@ -102,8 +117,6 @@ bool TRReplayActionsPopup::init() {
     addAction("Edit", "GJ_button_04.png", [this]() { this->doEdit(); });
     if (!m_isTTR) {
         addAction("Convert to TTR3", "GJ_button_03.png", [this]() { this->doConvert(); });
-    } else {
-        addAction("Convert to GDR", "GJ_button_03.png", [this]() { this->doConvertToGdr(); });
     }
     addAction("Upload", "GJ_button_02.png", [this]() {
         auto onUpload = m_onUpload;
@@ -190,6 +203,9 @@ void TRReplayActionsPopup::doRename() {
 }
 
 void TRReplayActionsPopup::doConvert() {
+    if (m_converting) {
+        return;
+    }
     auto* engine = ReplayEngine::get();
     if (engine && engine->engineMode == MODE_CAPTURE) {
         Notification::create("Stop recording first", NotificationIcon::Warning, 0.8f)->show();
@@ -197,7 +213,7 @@ void TRReplayActionsPopup::doConvert() {
     }
 
     auto directory = ReplayStorage::getReplayDirectoryPath();
-    auto sourcePath = directory / (m_name + macroExtension(m_name, m_isTTR));
+    auto sourcePath = legacyGDRPath(m_name);
     std::error_code ec;
     if (!std::filesystem::is_regular_file(sourcePath, ec) || ec) {
         Notification::create("Replay file not found", NotificationIcon::Error, 1.0f)->show();
@@ -205,47 +221,33 @@ void TRReplayActionsPopup::doConvert() {
     }
 
     std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
-    auto result = toasty::conversion::convertNativeGDRToTTRDuplicate(sourcePath, author, directory);
-    if (result.ok) {
-        Notification::create("Converted to " + result.outputName, NotificationIcon::Success, 1.2f)->show();
-        notifyChanged();
-        this->removeFromParentAndCleanup(true);
-    } else {
-        std::string message = result.message.empty() ? "Conversion failed" : result.message;
-        Notification::create(message, NotificationIcon::Error, 1.4f)->show();
-    }
-}
-
-void TRReplayActionsPopup::doConvertToGdr() {
-    auto* engine = ReplayEngine::get();
-    if (engine && engine->engineMode == MODE_CAPTURE) {
-        Notification::create("Stop recording first", NotificationIcon::Warning, 0.8f)->show();
-        return;
-    }
-
-    auto directory = ReplayStorage::getReplayDirectoryPath();
-    auto sourcePath = directory / (m_name + macroExtension(m_name, m_isTTR));
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(sourcePath, ec) || ec) {
-        Notification::create("Replay file not found", NotificationIcon::Error, 1.0f)->show();
-        return;
-    }
-
-    std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
-    auto result = toasty::conversion::convertReplay(
-        sourcePath,
-        toasty::conversion::ConversionTarget::GDR,
-        m_name,
-        author,
-        directory);
-    if (result.ok) {
-        Notification::create("Converted to " + result.outputName, NotificationIcon::Success, 1.2f)->show();
-        notifyChanged();
-        this->removeFromParentAndCleanup(true);
-    } else {
-        std::string message = result.message.empty() ? "Conversion failed" : result.message;
-        Notification::create(message, NotificationIcon::Error, 1.4f)->show();
-    }
+    m_converting = true;
+    m_conversionTask.spawn(
+        "Upgrade legacy GDR to TTR3",
+        [sourcePath, author = std::move(author), directory]() mutable
+            -> arc::Future<geode::Result<toasty::conversion::ReplayImportResult>> {
+            co_return co_await geode::async::runtime().spawnBlocking<geode::Result<toasty::conversion::ReplayImportResult>>(
+                [sourcePath, author = std::move(author), directory]() mutable {
+                    return toasty::gdr_upgrade::upgradeLegacyGDRToTTR3(
+                        sourcePath,
+                        std::move(author),
+                        directory
+                    );
+                }
+            );
+        },
+        [this](geode::Result<toasty::conversion::ReplayImportResult> result) {
+            m_converting = false;
+            if (!result) {
+                Notification::create(result.unwrapErr(), NotificationIcon::Error, 1.4f)->show();
+                return;
+            }
+            auto upgrade = std::move(result).unwrap();
+            Notification::create("Converted to " + upgrade.outputName, NotificationIcon::Success, 1.2f)->show();
+            notifyChanged();
+            this->removeFromParentAndCleanup(true);
+        }
+    );
 }
 
 void TRReplayActionsPopup::doEdit() {

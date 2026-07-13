@@ -1,37 +1,60 @@
 #include "format/replay.hpp"
 
 #include <cassert>
+#include <vector>
 
-int main() {
-    MacroSequence source;
-    source.gameVersion = 2.2081f;
-    source.description = "dependency-clean";
-    source.version = 1.0f;
-    source.duration = 0.1f;
-    source.framerate = 240.0f;
-    source.levelInfo.id = 123;
-    source.levelInfo.name = "test-level";
-    source.author = "Toast";
-    source.seed = 456;
-    source.coins = 3;
-    source.ldm = true;
-    source.accuracyMode = AccuracyMode::CBS;
-    source.savedAnchorInterval = 120;
-    source.platformerMode = true;
-    source.hasPlatformerModeMetadata = true;
-    source.inputs.emplace_back(24, 1, false, true, 0.5f);
+static gdr::json makeReplayJson(bool timed) {
+    gdr::json input = {
+        {"frame", 24u},
+        {"btn", 1},
+        {"2p", false},
+        {"down", true}
+    };
+    if (timed) {
+        input["accuracy_offset"] = 0.5f;
+    }
 
-    auto bytes = source.exportData(false);
+    gdr::json replay = {
+        {"gameVersion", 2.2081f},
+        {"description", "fixture"},
+        {"version", 1.2f},
+        {"duration", 0.25f},
+        {"bot", {{"name", "ToastyReplay"}, {"version", "2.2.1"}}},
+        {"level", {{"id", 123u}, {"name", "Test Level"}}},
+        {"author", "Toast"},
+        {"seed", 7},
+        {"coins", 0},
+        {"ldm", false},
+        {"framerate", 240.0f},
+        {"platformer_mode", true},
+        {"inputs", gdr::json::array({input})}
+    };
+    if (timed) {
+        replay["accuracy_mode"] = static_cast<int>(AccuracyMode::CBS);
+    }
+    return replay;
+}
+
+static void testGDRImportAcceptsMsgpack() {
+    auto bytes = gdr::json::to_msgpack(makeReplayJson(true));
     auto imported = MacroSequence::tryImportData(bytes);
-
-    assert(imported);
-    assert(imported->gameVersion == source.gameVersion);
-    assert(imported->levelInfo.id == source.levelInfo.id);
+    assert(imported.has_value());
+    assert(imported->author == "Toast");
+    assert(imported->levelInfo.id == 123u);
     assert(imported->accuracyMode == AccuracyMode::CBS);
-    assert(imported->savedAnchorInterval == 12);
     assert(imported->platformerMode);
     assert(imported->inputs.size() == 1);
     assert(imported->inputs.front().frame == 24);
     assert(imported->inputs.front().stepOffset == 0.5f);
+}
+
+static void testGDRImportRejectsMalformedData() {
+    std::vector<uint8_t> malformed = {0xff, 0x00, 0x01};
+    assert(!MacroSequence::tryImportData(malformed).has_value());
+}
+
+int main() {
+    testGDRImportAcceptsMsgpack();
+    testGDRImportRejectsMalformedData();
     return 0;
 }

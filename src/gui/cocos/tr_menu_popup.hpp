@@ -1,7 +1,10 @@
 #pragma once
 
+#include "conversion/replay_import.hpp"
+
 #include <Geode/ui/Popup.hpp>
 #include <Geode/ui/ScrollLayer.hpp>
+#include <Geode/utils/async.hpp>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -36,6 +39,7 @@ protected:
     int m_pendingTab = -1;
     bool m_tabSwitchQueued = false;
     std::uint64_t m_seenRevision = 0;
+    geode::async::TaskHolder<geode::Result<toasty::conversion::ReplayImportResult>> m_replayImportTask;
 
     bool init() override;
 

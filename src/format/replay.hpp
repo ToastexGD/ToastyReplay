@@ -125,24 +125,24 @@ namespace ReplayStorage {
 
         auto size = std::filesystem::file_size(path, ec);
         if (ec) {
-            log::warn("[TR-FMT][W003] failed to inspect replay file {}: {}", toasty::pathToUtf8(path), ec.message());
+            log::warn("Could not inspect replay file '{}': {}", toasty::pathToUtf8(path), ec.message());
             return std::nullopt;
         }
         if (size > kMaxReplayFileSize) {
-            log::warn("[TR-FMT][W004] replay file exceeds max size cap ({} bytes): {}", size, toasty::pathToUtf8(path));
+            log::warn("Replay file '{}' exceeds the {} byte size limit", toasty::pathToUtf8(path), kMaxReplayFileSize);
             return std::nullopt;
         }
 
         auto maxSize = static_cast<uintmax_t>(std::numeric_limits<size_t>::max());
         auto maxStreamSize = static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max());
         if (size > maxSize || size > maxStreamSize) {
-            log::warn("[TR-FMT][W005] replay file too large for platform streams: {}", toasty::pathToUtf8(path));
+            log::warn("Replay file '{}' is too large for this platform", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
         std::ifstream input(path, std::ios::binary);
         if (!input.is_open()) {
-            log::error("[TR-FMT][E001] failed to open replay file for read: {}", toasty::pathToUtf8(path));
+            log::error("Could not open replay file '{}'", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
@@ -151,8 +151,8 @@ namespace ReplayStorage {
             auto streamSize = static_cast<std::streamsize>(size);
             input.read(reinterpret_cast<char*>(bytes.data()), streamSize);
             if (!input || input.gcount() != streamSize) {
-                log::error("[TR-FMT][E007] short read on replay file (got {} of {} bytes): {}",
-                    input.gcount(), streamSize, toasty::pathToUtf8(path));
+                log::error("Could not read replay file '{}': read {} of {} bytes",
+                    toasty::pathToUtf8(path), input.gcount(), streamSize);
                 return std::nullopt;
             }
         }
@@ -424,7 +424,7 @@ public:
     bool hasPlatformerModeMetadata = false;
 
     MacroSequence()
-        : Replay("ToastyReplay PRO", MOD_VERSION) {}
+        : Replay("ToastyReplay", MOD_VERSION) {}
 
     static std::optional<MacroSequence> tryImportData(std::vector<uint8_t> const& data, bool importInputs = true) {
         auto replayJson = gdr::json::from_msgpack(data, true, false);
@@ -609,7 +609,7 @@ public:
         auto bytes = exportData(useJson);
         output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
         output.close();
-        log::info("[TR-FMT][I001] saved legacy GDR replay: {}", toasty::pathToUtf8(dir / (name + extension)));
+        log::debug("Saved legacy GDR replay '{}'", toasty::pathToUtf8(dir / (name + extension)));
     }
 
     static MacroSequence* loadFromDisk(std::string const& filename) {
@@ -641,7 +641,7 @@ public:
             return result;
         }
 
-        log::error("[TR-FMT][E003] GDR import returned no payload (corrupt or unsupported): {}",
+        log::error("Could not import GDR replay '{}': the file is corrupt or unsupported",
             toasty::pathToUtf8(path));
 
         return nullptr;

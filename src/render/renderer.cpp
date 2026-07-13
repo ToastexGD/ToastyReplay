@@ -473,7 +473,7 @@ static bool tryMuxAudioWithExe(
         toasty::pathToUtf8(outputPath)
     );
 
-    log::info("Executing (Audio): {}", command);
+    log::debug("Starting audio mux command: {}", command);
     auto stderrLogPath = (Mod::get()->getSaveDir() / "last_audiomux_ffmpeg.log").wstring();
     auto proc = Subprocess(command, stderrLogPath);
     int exitCode = proc.close();
@@ -984,7 +984,7 @@ void RenderTexture::begin(bool wantNv12, FrameCaptureService& frameCapture) {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture->getName(), 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log::error("[TR-RENDER] FBO incomplete {}x{}", width, height);
+        log::error("Render framebuffer is incomplete at {}x{}", width, height);
         glDeleteFramebuffers(1, &fbo);
         fbo = 0;
         texture->release();
@@ -1137,7 +1137,7 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
 
         if (m_pboFrameCount >= m_pboCount - 1) {
             int readIdx = (m_pboFrameCount - (m_pboCount - 1)) % m_pboCount;
-            submitPbo(readIdx, frameCapture, "Render frame capture aborted before frame submission completed");
+            submitPbo(readIdx, frameCapture);
         }
 
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
@@ -1163,8 +1163,7 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
                     std::memcpy(b, tmp.data(), rowBytes);
                 }
             }
-            if (!frameCapture.submit(std::move(frame)))
-                log::warn("Render frame capture aborted before frame submission completed");
+            frameCapture.submit(std::move(frame));
         }
     }
 
@@ -1204,15 +1203,14 @@ void RenderTexture::capture(FrameCaptureService& frameCapture, cocos2d::CCNode* 
             std::memcpy(a, b, rowBytes);
             std::memcpy(b, tmp.data(), rowBytes);
         }
-        if (!frameCapture.submit(std::move(frame)))
-            log::warn("Render frame capture aborted before frame submission completed");
+        frameCapture.submit(std::move(frame));
     }
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     director->setViewport();
 #endif
 }
 
-void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg) {
+void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture) {
 #ifdef GEODE_IS_WINDOWS
     glBindBuffer(GL_PIXEL_PACK_BUFFER, m_pbos[pboIndex]);
     auto mapStart = std::chrono::steady_clock::now();
@@ -1239,8 +1237,7 @@ void RenderTexture::submitPbo(int pboIndex, FrameCaptureService& frameCapture, c
         else
             copyFlippedRows(frame.data(), static_cast<const uint8_t*>(ptr), width, height);
         m_dbgCopySec += std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
-        if (!frameCapture.submit(std::move(frame)))
-            log::warn("{}", abortMsg);
+        frameCapture.submit(std::move(frame));
     }
     glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
 #endif
@@ -1259,7 +1256,7 @@ void RenderTexture::flushPbo(FrameCaptureService& frameCapture) {
 
     int readDone = std::max(0, m_pboFrameCount - (m_pboCount - 1));
     for (int f = readDone; f < m_pboFrameCount; ++f)
-        submitPbo(f % m_pboCount, frameCapture, "Render frame flush aborted before frame submission completed");
+        submitPbo(f % m_pboCount, frameCapture);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
     {
@@ -1765,7 +1762,7 @@ void Renderer::start() {
         progressLabel = nullptr;
     }
     {
-        auto progressText = trFormat("Rendering... {percent}%", fmt::arg("percent", 0));
+        auto progressText = trFormat("Rendering... {percent}%", toasty::lang::arg("percent", 0));
         progressLabel = cocos2d::CCLabelBMFont::create(progressText.c_str(), "goldFont.fnt");
         progressLabel->setPosition(ccp(ogRes.width / 2.0f, ogRes.height - 20.0f));
         progressLabel->setScale(0.55f);
@@ -1868,7 +1865,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         auto availableCodecs = ffmpeg::events::Recorder::getAvailableCodecs();
 
         if (!availableCodecs.empty() && std::find(availableCodecs.begin(), availableCodecs.end(), settings.m_codec) == availableCodecs.end()) {
-            log::warn("Codec '{}' not found in available codecs, trying fallbacks...", settings.m_codec);
+            auto requestedCodec = settings.m_codec;
             std::vector<std::string> fallbacks;
             bool wantHevc = settings.m_codec.find("hevc") != std::string::npos
                          || settings.m_codec.find("265")  != std::string::npos;
@@ -1889,6 +1886,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 settings.m_codec = availableCodecs[0];
 
             }
+            log::warn("Codec '{}' is unavailable, using '{}'", requestedCodec, settings.m_codec);
         }
 
         if (m_resolvedParams.has_value()) {
@@ -1933,15 +1931,16 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         if (useApiForEncoding) {
             auto res = recorder.init(settings);
             if (res.isErr()) {
-                log::error("FFmpeg init error: {}", res.unwrapErr());
 #ifdef GEODE_IS_WINDOWS
                 if (pathExists(ffmpegPath)) {
+                    log::warn("FFmpeg API initialization failed, using ffmpeg.exe: {}", res.unwrapErr());
                     useApiForEncoding = false;
                     Loader::get()->queueInMainThread([] {
                         Notification::create(trString("FFmpeg API not loaded - falling back to ffmpeg.exe"), NotificationIcon::Warning)->show();
                     });
                 } else {
 #endif
+                    log::error("Could not initialize the FFmpeg encoder: {}", res.unwrapErr());
                     Loader::get()->queueInMainThread([this] {
                         auto errorTitle = trString("Error");
                         auto errorMessage = trString("The FFmpeg API encoder didn't initialize.");
@@ -2240,7 +2239,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
         bool hasAudio = hasRawAudio || (!persistenceRender && audioMode == AUDIO_SONG && (musicVolume > 0.f && pathExists(songFile)));
 
         if (audioMode == AUDIO_SONG && !hasRawAudio && !pathExists(songFile) && !includeClickSounds) {
-            log::error("Song file not found and no raw audio captured: {}", toasty::pathToUtf8(songFile));
+            log::warn("Song file '{}' was not found, so the render will have no audio", toasty::pathToUtf8(songFile));
         }
 
         if (!hasAudio) {
@@ -2302,7 +2301,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     audioMuxed = apiMuxed = true;
 
                 } else {
-                    log::error("Audio mux via API raw audio failed: {}", rawRes.unwrapErr());
+                    log::warn("Raw audio mux failed, trying the WAV fallback: {}", rawRes.unwrapErr());
 
                     if (ensureRawAudioFile()) {
                         auto fileRes = ffmpeg::events::AudioMixer::mixVideoAudio(path, rawAudioPath, tempPath);
@@ -2310,7 +2309,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                             audioMuxed = apiMuxed = true;
 
                         } else {
-                            log::error("Audio mux via API WAV fallback failed: {}", fileRes.unwrapErr());
+                            log::error("Could not mux the temporary WAV audio: {}", fileRes.unwrapErr());
                         }
                     }
                 }
@@ -2320,7 +2319,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     audioMuxed = apiMuxed = true;
 
                 } else {
-                    log::error("Audio mux via API song file failed: {}", fileRes.unwrapErr());
+                    log::error("Could not mux the song audio: {}", fileRes.unwrapErr());
                 }
             }
         }
@@ -2387,11 +2386,11 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
 
         std::error_code ec;
         std::filesystem::remove(path, ec);
-        if (ec) log::warn("Failed to remove old render file: {}", ec.message());
+        if (ec) log::error("Could not replace the old render file: {}", ec.message());
         else {
             ec.clear();
             std::filesystem::rename(tempPath, path, ec);
-            if (ec) log::warn("Failed to rename temp render file: {}", ec.message());
+            if (ec) log::error("Could not move the completed render into place: {}", ec.message());
 
         }
 
@@ -2466,7 +2465,7 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
         int pct = getRenderProgressPercent(*this, pl);
         if (pct != lastProgressPercent) {
             lastProgressPercent = pct;
-            auto progressText = trFormat("Rendering... {percent}%", fmt::arg("percent", pct));
+            auto progressText = trFormat("Rendering... {percent}%", toasty::lang::arg("percent", pct));
             progressLabel->setString(progressText.c_str());
         }
     }

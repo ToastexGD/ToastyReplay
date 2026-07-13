@@ -9,7 +9,6 @@
 #include <Geode/binding/ButtonSprite.hpp>
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -335,8 +334,9 @@ CCNode* TRFrameEditorPopup::makeSegmentRow(int segmentIndex) {
 }
 
 void TRFrameEditorPopup::buildSegmentList(CCNode* content) {
-    bool hasFrameFilter = m_editor.filterFrameBuf[0] != '\0';
-    int frameFilter = hasFrameFilter ? std::atoi(m_editor.filterFrameBuf) : 0;
+    auto parsedFrameFilter = toasty::parseInteger<int>(m_editor.filterFrameBuf);
+    bool hasFrameFilter = parsedFrameFilter.has_value();
+    int frameFilter = parsedFrameFilter.value_or(0);
 
     std::vector<int> visible;
     visible.reserve(m_editor.segments.size());

@@ -8,11 +8,9 @@
 #include <Geode/Geode.hpp>
 
 #include <algorithm>
-#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
-#include <cstdlib>
 #include <fmt/format.h>
 
 static ImVec4 feWithAlpha(ImVec4 c, float a) {
@@ -60,18 +58,9 @@ static std::string feTrf(std::string_view key, Args&&... args) {
 }
 
 static bool feParseInt(char const* text, int& out) {
-    if (!text) return false;
-    while (*text == ' ' || *text == '\t') ++text;
-    if (*text == '\0') return false;
-
-    errno = 0;
-    char* end = nullptr;
-    long value = std::strtol(text, &end, 10);
-    if (text == end || errno == ERANGE) return false;
-    while (end && (*end == ' ' || *end == '\t')) ++end;
-    if (end && *end != '\0') return false;
-
-    out = static_cast<int>(std::clamp<long>(value, 0, std::numeric_limits<int>::max()));
+    int32_t parsed = 0;
+    if (!toasty::frame_editor::parseNonNegativeFrameText(text, parsed)) return false;
+    out = parsed;
     return true;
 }
 
@@ -79,7 +68,7 @@ static std::string feActionLabel(int actionType) {
     if (actionType == static_cast<int>(PlayerButton::Jump)) return feTr("Jump");
     if (actionType == static_cast<int>(PlayerButton::Left)) return feTr("Left");
     if (actionType == static_cast<int>(PlayerButton::Right)) return feTr("Right");
-    return feTrf("Button {id}", fmt::arg("id", actionType));
+    return feTrf("Button {id}", toasty::lang::arg("id", actionType));
 }
 
 static ImVec4 feActionColor(int actionType, ImVec4 base) {
@@ -497,7 +486,7 @@ void FrameEditor::save() {
 
 void FrameEditor::applyToTTR() {
     if (!cachedTTR) {
-        log::error("[FrameEditor] applyToTTR: cachedTTR is null, cannot save");
+        log::error("Could not save frame edits because no replay is loaded");
         return;
     }
 
@@ -1110,7 +1099,7 @@ void FrameEditor::drawToolbar(MenuInterface& ui, ImVec2 origin, float width) {
     x += 56.0f;
 
     float nameX = origin.x + width - 8.0f;
-    auto infoText = feTrf("{count} inputs", fmt::arg("count", inputs.size()));
+    auto infoText = feTrf("{count} inputs", toasty::lang::arg("count", inputs.size()));
     ImVec2 infoSize = ImGui::CalcTextSize(infoText.c_str());
     nameX -= infoSize.x;
     dl->AddText(ImVec2(nameX, origin.y + 12.0f), ui.theme.getTextSecondaryU32(), infoText.c_str());
@@ -1771,7 +1760,7 @@ void FrameEditor::drawDetailBar(MenuInterface& ui, ImVec2 origin, float width, f
         x += 14.0f;
 
         int32_t dur = seg.endFrame - seg.startFrame;
-        auto durText = feTrf("{count} frames", fmt::arg("count", dur));
+        auto durText = feTrf("{count} frames", toasty::lang::arg("count", dur));
         dl->AddText(ImVec2(x, textY), ui.theme.getTextSecondaryU32(), durText.c_str());
     } else {
         auto hintText = feTr("Click a segment to select it");
@@ -1795,8 +1784,8 @@ void FrameEditor::drawDetailBar(MenuInterface& ui, ImVec2 origin, float width, f
     ImGui::PopItemWidth();
 
     if (goSubmitted) {
-        int goFrame = std::atoi(goToFrameBuf);
-        if (goFrame >= 0) {
+        int goFrame = 0;
+        if (feParseInt(goToFrameBuf, goFrame)) {
             float viewFrames = ImGui::GetContentRegionAvail().x / pixelsPerFrame;
             targetScrollX = static_cast<float>(goFrame) - viewFrames * 0.5f;
             targetScrollX = std::max(targetScrollX, 0.0f);

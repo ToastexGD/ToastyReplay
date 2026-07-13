@@ -3,7 +3,6 @@
 
 #include "utils.hpp"
 #include "lang/localization.hpp"
-#include "conversion/macro_converter.hpp"
 #include "format/replay.hpp"
 #include "format/ttr_format.hpp"
 #include "core/noclip_accuracy.hpp"
@@ -190,8 +189,8 @@ public:
 
     enum class RecordingFormat : uint8_t {
         TTR3 = 0,
-        GDR2 = 1,
-        GDR = 2,
+        GDRBinary = 1,
+        GDRJson = 2,
     };
     RecordingFormat selectedRecordingFormat = RecordingFormat::TTR3;
 
@@ -270,10 +269,6 @@ public:
     std::unordered_set<std::string> ttr3Macros;
     std::unordered_set<std::string> legacyTtrMacros;
     std::unordered_set<std::string> legacyCbsMacros;
-    std::vector<toasty::conversion::DetectedReplay> foreignReplays;
-    std::unordered_set<std::string> convertedForeignReplaySources;
-    std::unordered_map<std::string, std::string> convertedMacroSources;
-
     int hotkey_tickStep = 0x56;
     int hotkey_audioPitch = 0;
     int hotkey_protected = 0;
@@ -340,14 +335,12 @@ public:
         ttr3Macros.clear();
         legacyTtrMacros.clear();
         legacyCbsMacros.clear();
-        foreignReplays.clear();
         auto directory = geode::prelude::Mod::get()->getSaveDir() / "replays";
         std::error_code ec;
         if (!std::filesystem::exists(directory, ec) || ec) {
             return;
         }
 
-        std::vector<std::filesystem::path> foreignCandidates;
         std::unordered_set<std::string> usableStems;
 
         auto addUsable = [&](std::string const& stem, bool isTTR) {
@@ -407,7 +400,6 @@ public:
             if (extension == ".ttr3") {
                 std::unique_ptr<TTRMacro> macro(TTRMacro::loadFromPath(path));
                 if (!macro) {
-                    foreignCandidates.push_back(path);
                     continue;
                 }
 
@@ -426,7 +418,6 @@ public:
                 bool isTTR2 = extension == ".ttr2";
                 uint32_t flags = 0;
                 if (!readNativeTTRHeader(path, isTTR2, flags)) {
-                    foreignCandidates.push_back(path);
                     continue;
                 }
 
@@ -449,13 +440,11 @@ public:
             }
 
             if (extension != ".gdr" && !isGdrJson) {
-                foreignCandidates.push_back(path);
                 continue;
             }
 
             auto bytes = ReplayStorage::readReplayBytes(path);
             if (!bytes) {
-                foreignCandidates.push_back(path);
                 continue;
             }
 
@@ -469,14 +458,7 @@ public:
                 if (temp->platformerMode) {
                     platformerMacros.insert(stem);
                 }
-            } else {
-                foreignCandidates.push_back(path);
             }
-        }
-
-        for (auto const& path : foreignCandidates) {
-            auto detected = toasty::conversion::detectReplay(path, convertedForeignReplaySources, usableStems);
-            foreignReplays.push_back(std::move(detected));
         }
 
         if (ec) {
@@ -593,7 +575,7 @@ public:
             double requiredTps = activeTTR->maxSourceTps();
             double runtimeTps = runtimeTickRate();
             if (std::isfinite(requiredTps) && std::isfinite(runtimeTps) && requiredTps > runtimeTps + 1e-6) {
-                log::warn("Playback aborted: macro requires a higher TPS than the current runtime.");
+                log::warn("Playback requires {:.3f} TPS but the runtime is set to {:.3f} TPS", requiredTps, runtimeTps);
                 return false;
             }
         }

@@ -875,7 +875,7 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
         std::string error;
         auto macro = toasty::ttr3::deserialize(data, &error);
         if (!macro) {
-            log::error("[TR-FMT][E006] TTR3 strict deserialize rejected file: {}", error);
+            log::debug("TTR3 parser rejected replay data: {}", error);
             return nullptr;
         }
         return new TTRMacro(toasty::ttr3::toTTRMacro(*macro));
@@ -898,7 +898,7 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
     }
     uint16_t supportedVersion = isTTR2 ? TTR2_FORMAT_VERSION : TTR_FORMAT_VERSION;
     if (version > supportedVersion) {
-        log::error("[TR-FMT][E008] TTR format version {} is newer than max supported ({}); refusing to load",
+        log::debug("Replay format version {} is newer than the supported version {}",
             version, supportedVersion);
         return nullptr;
     }
@@ -1043,32 +1043,30 @@ bool TTRMacro::saveToPath(std::filesystem::path const& path) {
 
     auto bytes = serialize();
     if (bytes.empty()) {
-        log::error("[TR-FMT][E009] serialize returned empty bytes for macro '{}' (engine bug)", name);
+        log::error("Could not save replay '{}': serialization produced no data", toasty::pathToUtf8(path));
         return false;
     }
 
     std::ofstream output(path, std::ios::binary);
     if (!output.is_open()) {
-        log::error("[TR-FMT][E002] failed to open replay file for write: {}",
+        log::error("Could not open replay file '{}' for writing",
             toasty::pathToUtf8(path));
         return false;
     }
     output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
     output.close();
     if (!output) {
-        log::error("[TR-FMT][E010] write of {} bytes failed for {}", bytes.size(),
-            toasty::pathToUtf8(path));
+        log::error("Could not write replay file '{}': attempted {} bytes",
+            toasty::pathToUtf8(path), bytes.size());
         return false;
     }
 
-    char const* tag = "I003";
-    char const* fmt = "TTR3";
-    if (fileFormat == TTRFileFormat::TTR2) { tag = "I002"; fmt = "TTR2"; }
-    else if (fileFormat == TTRFileFormat::LegacyTTR) { tag = "I001"; fmt = "TTR"; }
-    log::info(
-        "[TR-FMT][{}] saved {} macro {} ({} bytes, {} inputs, {} anchors)",
-        tag,
-        fmt,
+    char const* formatName = "TTR3";
+    if (fileFormat == TTRFileFormat::TTR2) formatName = "TTR2";
+    else if (fileFormat == TTRFileFormat::LegacyTTR) formatName = "TTR";
+    log::debug(
+        "Saved {} replay '{}' with {} bytes, {} inputs, and {} anchors",
+        formatName,
         toasty::pathToUtf8(path),
         bytes.size(),
         inputs.size(),
@@ -1085,7 +1083,7 @@ TTRMacro* TTRMacro::loadFromPath(std::filesystem::path const& path) {
 
     auto* macro = deserialize(*bytes);
     if (!macro) {
-        log::error("[TR-FMT][E011] deserialize returned null for {}", toasty::pathToUtf8(path));
+        log::error("Could not load replay '{}': the file is corrupt or unsupported", toasty::pathToUtf8(path));
         return nullptr;
     }
 
@@ -1103,11 +1101,10 @@ TTRMacro* TTRMacro::loadFromPath(std::filesystem::path const& path) {
     } else if (extension == ".ttr3" && macro->loadedFromTTR3()) {
         macro->fileFormat = TTRFileFormat::TTR3;
     }
-    char const* loadTag = "I010";
-    char const* loadFmt = "TTR";
-    if (macro->fileFormat == TTRFileFormat::TTR2) { loadTag = "I011"; loadFmt = "TTR2"; }
-    else if (macro->fileFormat == TTRFileFormat::TTR3) { loadTag = "I012"; loadFmt = "TTR3"; }
-    log::info("[TR-FMT][{}] loaded {} macro {} ({} inputs, {} anchors)", loadTag, loadFmt, stem,
+    char const* formatName = "TTR";
+    if (macro->fileFormat == TTRFileFormat::TTR2) formatName = "TTR2";
+    else if (macro->fileFormat == TTRFileFormat::TTR3) formatName = "TTR3";
+    log::debug("Loaded {} replay '{}' with {} inputs and {} anchors", formatName, stem,
         macro->inputs.size(), macro->anchors.size());
     return macro;
 }
