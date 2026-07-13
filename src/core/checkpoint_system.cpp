@@ -720,6 +720,23 @@ class $modify(MacroPlayLayer, PlayLayer) {
         engine->respawnTickIndex = -1;
         engine->tickAccumulator = 0.0f;
         engine->armPendingPlaybackStart(this);
+        if (engine->engineMode == MODE_CAPTURE) {
+            bool fromStartPosition = toasty::start_position::shouldRecordFromStartPosition(
+                m_startPosObject != nullptr,
+                getCurrentPercentInt()
+            );
+            auto applyStartPosition = [&](auto* macro) {
+                if (!macro) return;
+                macro->recordedFromStartPos = fromStartPosition;
+                macro->startPosX = fromStartPosition ? m_startPosObject->getPositionX() : 0.0f;
+                macro->startPosY = fromStartPosition ? m_startPosObject->getPositionY() : 0.0f;
+            };
+            if (engine->ttrMode) {
+                applyStartPosition(engine->activeTTR);
+            } else {
+                applyStartPosition(engine->activeMacro);
+            }
+        }
         if (engine->engineMode == MODE_EXECUTE) {
             engine->advancePersistencePlaybackAfterReset();
         }

@@ -253,6 +253,8 @@ public:
     int tickStartStep = 0;
     int lastStepDelta = -1;
     double tickStartTimestamp = 0.0;
+    double lastProcessSliceTimestamp = -1.0;
+    double macroStartTimestamp = -1.0;
 
     int tickOffset = 0;
     bool startPosActive = false;
@@ -1007,6 +1009,8 @@ public:
         tickStartStep = 0;
         lastStepDelta = -1;
         tickStartTimestamp = 0.0;
+        lastProcessSliceTimestamp = -1.0;
+        macroStartTimestamp = -1.0;
         respawnTickIndex = -1;
         queuedMacroCommands.clear();
         queuedCaptureCommands.clear();

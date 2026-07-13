@@ -3,6 +3,9 @@
 ## v2.2.1
 
 - Fixed click sounds going silent when separate Player 2 clicks were enabled without a Player 2 pack selected.
+- Fixed recordings from start positions displayed at 0% being blocked when played from the beginning.
+- Fixed TTR3 CBS playback dropping exact timestamps and swift click pairs.
+- Fixed TTR3 timing bridges occasionally moving integer-frame inputs back one tick.
 
 ## v2.2.0
 

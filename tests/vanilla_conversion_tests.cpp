@@ -2,9 +2,12 @@
 #include "hacks/hitbox_overlay_model.hpp"
 #include "conversion/macro_converter.hpp"
 #include "audio/click_audio_math.hpp"
+#include "core/replay_timing.hpp"
 #include "core/start_position_policy.hpp"
+#include "format/ttr3_format.hpp"
 
 #include <cassert>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -44,6 +47,9 @@ static void test_zero_percent_start_position_can_play_from_start() {
     assert(toasty::start_position::isAtLevelStart(0.0f, 5000.0f));
     assert(toasty::start_position::isAtLevelStart(45.0f, 5000.0f));
     assert(!toasty::start_position::isAtLevelStart(250.0f, 5000.0f));
+    assert(!toasty::start_position::shouldRecordFromStartPosition(false, 0));
+    assert(!toasty::start_position::shouldRecordFromStartPosition(true, 0));
+    assert(toasty::start_position::shouldRecordFromStartPosition(true, 1));
 }
 
 static void test_editor_playtest_counts_as_gameplay_active() {
@@ -284,6 +290,30 @@ static void test_integer_frames_materialize_exactly_at_arbitrary_tps() {
     }
 }
 
+static void test_ttr3_bridge_preserves_integer_ticks_at_arbitrary_tps() {
+    for (double tps : { 30.0, 60.0, 144.0, 240.0, 360.0, 1000.0, 2026.0 }) {
+        toasty::ttr3::Macro macro;
+        macro.framerateHint = tps;
+        std::array<int, 8> frames = { 1, 2, 7, 59, 143, 239, 999, 9999 };
+        for (int frame : frames) {
+            macro.inputs.push_back({ static_cast<double>(frame) / tps, 1, false, true, false });
+        }
+        auto bridged = toasty::ttr3::toTTRMacro(macro);
+        assert(bridged.inputs.size() == macro.inputs.size());
+        for (size_t index = 0; index < bridged.inputs.size(); ++index) {
+            assert(bridged.inputs[index].tick == frames[index]);
+        }
+    }
+}
+
+static void test_exact_ttr3_playback_timing() {
+    double target = toasty::replay_timing::targetTimestampForPlaybackInput(10.0, 20.0, 0.125, 0.003);
+    assert(std::abs(target - 10.125) < 0.000001);
+    assert(toasty::replay_timing::classifyExactInputDispatch(target, 10.1, 10.2) == toasty::replay_timing::ExactInputDispatch::QueueNative);
+    assert(toasty::replay_timing::shouldSkipRepeatedProcessSlice(true, 24, 24, true, 2, 2, 1.0, 1.0));
+    assert(!toasty::replay_timing::shouldSkipRepeatedProcessSlice(true, 24, 24, true, 2, 2, 1.0, 1.01));
+}
+
 static void test_deterministic_seed_is_preserved() {
     ImportedReplay replay;
     replay.format = ReplayFormat::TCBot;
@@ -345,6 +375,8 @@ int main() {
     test_ttr3_same_tick_non_swift_taps_preserve_edges_with_cbs_offsets();
     test_single_same_tick_tap_stays_vanilla();
     test_integer_frames_materialize_exactly_at_arbitrary_tps();
+    test_ttr3_bridge_preserves_integer_ticks_at_arbitrary_tps();
+    test_exact_ttr3_playback_timing();
     test_deterministic_seed_is_preserved();
     test_tcm_rate_metadata_supports_tps_and_delta_time();
     test_respawn_override_uses_scheduler_not_dead_update_polling();

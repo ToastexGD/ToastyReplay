@@ -382,7 +382,10 @@ if (TARGET zlibstatic)
     list(APPEND TOASTYREPLAY_LINK_LIBRARIES zlibstatic)
 endif()
 
-add_executable(toastyreplay_vanilla_conversion_tests tests/vanilla_conversion_tests.cpp)
+add_executable(toastyreplay_vanilla_conversion_tests
+    src/format/ttr3_format.cpp
+    tests/vanilla_conversion_tests.cpp
+)
 target_include_directories(toastyreplay_vanilla_conversion_tests PRIVATE src)
 target_compile_features(toastyreplay_vanilla_conversion_tests PRIVATE cxx_std_23)
 target_compile_definitions(toastyreplay_vanilla_conversion_tests PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")

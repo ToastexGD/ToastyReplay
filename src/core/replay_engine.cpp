@@ -1,6 +1,7 @@
 #include "ToastyReplay.hpp"
 #include "core/checkpoint_handler.hpp"
 #include "core/gameplay_layer.hpp"
+#include "core/replay_timing.hpp"
 #include "hacks/autoclicker.hpp"
 #include "gui/gui.hpp"
 #include "gui/frame_editor.hpp"
@@ -26,9 +27,15 @@ namespace {
         bool pressed = false;
         float stepOffset = 0.0f;
         double cbsTimeOffset = -1.0;
+        double timeSeconds = -1.0;
+        bool swiftPairAnchor = false;
 
         bool hasExactCbsTime() const {
             return std::isfinite(cbsTimeOffset) && cbsTimeOffset >= 0.0;
+        }
+
+        bool hasAbsoluteTime() const {
+            return std::isfinite(timeSeconds) && timeSeconds >= 0.0;
         }
     };
 
@@ -146,7 +153,9 @@ namespace {
             input.isPlayer2(),
             input.isPressed(),
             input.stepOffset,
-            sanitizeCbsTimeOffset(input.cbsTimeOffset)
+            sanitizeCbsTimeOffset(input.cbsTimeOffset),
+            input.hasAbsoluteTime() ? input.timeSeconds : -1.0,
+            input.swiftPairAnchor
         };
     }
 
@@ -157,7 +166,9 @@ namespace {
             input.player2,
             input.down,
             input.stepOffset,
-            -1.0f
+            -1.0,
+            input.hasAbsoluteTime() ? input.timeSeconds : -1.0,
+            input.swiftPairAnchor
         };
     }
 
@@ -166,6 +177,19 @@ namespace {
             return 0.0f;
         }
         return std::clamp(offset, 0.0f, 1.0f);
+    }
+
+    static void ensureMacroStartTimestamp(ReplayEngine* engine, double sliceStartTimestamp, int effectiveTick) {
+        if (!engine) return;
+        if (std::isfinite(engine->macroStartTimestamp) && engine->macroStartTimestamp >= 0.0) {
+            return;
+        }
+        double rate = engine->runtimeTickRate();
+        if (!std::isfinite(rate) || rate <= 0.0) {
+            engine->macroStartTimestamp = sliceStartTimestamp;
+            return;
+        }
+        engine->macroStartTimestamp = sliceStartTimestamp - static_cast<double>(std::max(0, effectiveTick)) / rate;
     }
 
     static void clearCollisionLog(PlayerObject* player) {
@@ -515,17 +539,43 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
                 return true;
             }
 
-            if (input.hasExactCbsTime()) {
-                double targetTimestamp = engine->tickStartTimestamp + static_cast<double>(input.cbsTimeOffset);
+            if (input.hasExactCbsTime() || input.hasAbsoluteTime()) {
+                if (input.hasAbsoluteTime()) {
+                    ensureMacroStartTimestamp(engine, m_timestamp, effectiveTick);
+                }
+                double targetTimestamp = toasty::replay_timing::targetTimestampForPlaybackInput(
+                    engine->macroStartTimestamp,
+                    engine->tickStartTimestamp,
+                    input.timeSeconds,
+                    input.cbsTimeOffset
+                );
                 double nextTimestamp = m_timestamp + static_cast<double>(std::max(0.0f, dt));
-                if (targetTimestamp >= nextTimestamp - kTimestampEpsilon) {
-                    return false;
+                auto dispatch = toasty::replay_timing::classifyExactInputDispatch(
+                    targetTimestamp,
+                    m_timestamp,
+                    nextTimestamp,
+                    kTimestampEpsilon
+                );
+
+                if (toasty::replay_timing::shouldPreReconcileAnchorForExactInput(
+                    true,
+                    true,
+                    input.tick,
+                    effectiveTick,
+                    dispatch
+                )) {
+                    reconcileAnchors(effectiveTick);
                 }
 
-                if (targetTimestamp < m_timestamp - kTimestampEpsilon) {
-                    dispatchImmediatePlaybackAction(tick, input.button, input.pressed, input.player2);
-                } else {
-                    queueNativeCBSPlaybackAction(tick, input.button, input.pressed, input.player2, targetTimestamp);
+                switch (dispatch) {
+                    case toasty::replay_timing::ExactInputDispatch::Immediate:
+                        dispatchImmediatePlaybackAction(tick, input.button, input.pressed, input.player2);
+                        break;
+                    case toasty::replay_timing::ExactInputDispatch::QueueNative:
+                        queueNativeCBSPlaybackAction(tick, input.button, input.pressed, input.player2, targetTimestamp);
+                        break;
+                    case toasty::replay_timing::ExactInputDispatch::Wait:
+                        return false;
                 }
                 return true;
             }
@@ -550,7 +600,13 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
             }
             auto& inputList = *inputListPtr;
             while (engine->executeIndex < inputList.size()) {
-                if (!handleInput(makePlaybackInput(inputList[engine->executeIndex]))) {
+                auto input = makePlaybackInput(inputList[engine->executeIndex]);
+                if (input.swiftPairAnchor && input.hasAbsoluteTime() && input.tick <= effectiveTick) {
+                    handleTtr3SwiftPair(tick, input, inputList);
+                    ++engine->executeIndex;
+                    continue;
+                }
+                if (!handleInput(input)) {
                     break;
                 }
                 ++engine->executeIndex;
@@ -571,6 +627,26 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         }
     }
 
+    void handleTtr3SwiftPair(int tick, PlaybackInputView const& input, std::vector<TTRInput> const& inputList) {
+        auto* engine = ReplayEngine::get();
+        if (!engine) return;
+        if (engine->executeIndex + 1 >= inputList.size()) {
+            log::warn("[TR-REPLAY][W006] TTR3 swift pair anchor missing its partner");
+            return;
+        }
+        auto next = makePlaybackInput(inputList[engine->executeIndex + 1]);
+        if (!next.hasAbsoluteTime() ||
+            next.button != input.button ||
+            next.player2 != input.player2 ||
+            std::abs(next.timeSeconds - input.timeSeconds) > 0.000000001) {
+            log::warn("[TR-REPLAY][W007] TTR3 malformed swift pair in loaded macro");
+            return;
+        }
+        dispatchImmediatePlaybackAction(tick, input.button, input.pressed, input.player2);
+        dispatchImmediatePlaybackAction(tick, next.button, next.pressed, next.player2);
+        ++engine->executeIndex;
+    }
+
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         auto* engine = ReplayEngine::get();
         auto* playLayer = PlayLayer::get();
@@ -582,6 +658,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
         refreshRngState();
 
         int tick = tick_util::current(this, engine);
+        double processSliceTimestamp = m_timestamp + static_cast<double>(std::max(0.0f, dt));
         if (engine->shouldResetAfterPersistencePlaybackDeath(playLayer)) {
             if (m_levelSettings->m_platformerMode) {
                 return playLayer->resetLevelFromStart();
@@ -617,10 +694,17 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
                     }
                 }
 
-                if (engine->lastTickIndex == tick && tick != 0 && engine->hasMacro()) {
-                    bool repeatedTimedSlice = timedPlayback && engine->lastStepDelta == stepDelta;
-                    if (!timedPlayback || repeatedTimedSlice)
-                        return std::nullopt;
+                if (toasty::replay_timing::shouldSkipRepeatedProcessSlice(
+                    timedPlayback,
+                    engine->lastTickIndex,
+                    tick,
+                    engine->hasMacro(),
+                    engine->lastStepDelta,
+                    stepDelta,
+                    engine->lastProcessSliceTimestamp,
+                    processSliceTimestamp
+                )) {
+                    return std::nullopt;
                 }
             }
             return tick;
@@ -664,6 +748,7 @@ class $modify(MacroEngineBaseLayer, GJBaseGameLayer) {
 
         engine->lastTickIndex = tick;
         engine->lastStepDelta = stepDelta;
+        engine->lastProcessSliceTimestamp = processSliceTimestamp;
 
         if (engine->engineMode == MODE_DISABLED) {
             return;

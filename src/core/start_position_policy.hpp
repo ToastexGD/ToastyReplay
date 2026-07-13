@@ -12,4 +12,8 @@ inline bool isAtLevelStart(float positionX, float levelLength) {
     }
     return positionX <= tolerance;
 }
+
+inline bool shouldRecordFromStartPosition(bool hasStartPosition, int displayedPercent) {
+    return hasStartPosition && displayedPercent > 0;
+}
 }

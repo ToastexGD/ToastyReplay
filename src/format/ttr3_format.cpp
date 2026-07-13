@@ -1002,7 +1002,7 @@ namespace {
         if (!validTime(timeSeconds)) {
             return 0;
         }
-        double rawTick = std::floor(timeSeconds * bridgeTps(tps));
+        double rawTick = std::floor(timeSeconds * bridgeTps(tps) + 0.000001);
         return static_cast<int32_t>(std::clamp<double>(
             rawTick,
             0.0,
