@@ -426,6 +426,92 @@ public:
     MacroSequence()
         : Replay("ToastyReplay PRO", MOD_VERSION) {}
 
+    static std::optional<MacroSequence> tryImportData(std::vector<uint8_t> const& data, bool importInputs = true) {
+        auto replayJson = gdr::json::from_msgpack(data, true, false);
+        if (replayJson.is_discarded()) {
+            replayJson = gdr::json::parse(data, nullptr, false);
+        }
+
+        auto const* root = ReplayJson::asObject(replayJson);
+        if (!root) {
+            return std::nullopt;
+        }
+
+        auto const* bot = ReplayJson::getObject(*root, "bot");
+        auto const* level = ReplayJson::getObject(*root, "level");
+        if (!bot || !level) {
+            return std::nullopt;
+        }
+
+        auto gameVersion = ReplayJson::getFloat<float>(*root, "gameVersion");
+        auto description = ReplayJson::getString(*root, "description");
+        auto version = ReplayJson::getFloat<float>(*root, "version");
+        auto duration = ReplayJson::getFloat<float>(*root, "duration");
+        auto botName = ReplayJson::getString(*bot, "name");
+        auto botVersion = ReplayJson::getString(*bot, "version");
+        auto levelId = ReplayJson::getInteger<uint32_t>(*level, "id");
+        auto levelName = ReplayJson::getString(*level, "name");
+        auto author = ReplayJson::getString(*root, "author");
+        auto seed = ReplayJson::getInteger<int>(*root, "seed");
+        auto coins = ReplayJson::getInteger<int>(*root, "coins");
+        auto ldm = ReplayJson::getBool(*root, "ldm");
+
+        if (!gameVersion || !description || !version || !duration || !botName || !botVersion
+            || !levelId || !levelName || !author || !seed || !coins || !ldm) {
+            return std::nullopt;
+        }
+
+        MacroSequence replay;
+        replay.gameVersion = *gameVersion;
+        replay.description = std::move(*description);
+        replay.version = *version;
+        replay.duration = *duration;
+        replay.botInfo.name = std::move(*botName);
+        replay.botInfo.version = std::move(*botVersion);
+        replay.levelInfo.id = *levelId;
+        replay.levelInfo.name = std::move(*levelName);
+        replay.author = std::move(*author);
+        replay.seed = *seed;
+        replay.coins = *coins;
+        replay.ldm = *ldm;
+
+        if (auto framerate = ReplayJson::getFloat<float>(*root, "framerate")) {
+            replay.framerate = *framerate;
+        }
+        replay.parseExtension(*root);
+
+        if (!importInputs) {
+            return replay;
+        }
+
+        auto const* inputs = ReplayJson::getArray(*root, "inputs");
+        if (!inputs) {
+            return std::nullopt;
+        }
+
+        replay.inputs.reserve(inputs->size());
+        for (auto const& inputJson : *inputs) {
+            auto const* inputObject = ReplayJson::asObject(inputJson);
+            if (!inputObject) {
+                return std::nullopt;
+            }
+
+            auto frame = ReplayJson::getInteger<uint32_t>(*inputObject, "frame");
+            auto button = ReplayJson::getInteger<int>(*inputObject, "btn");
+            auto player2 = ReplayJson::getBool(*inputObject, "2p");
+            auto down = ReplayJson::getBool(*inputObject, "down");
+            if (!frame || !button || !player2 || !down) {
+                return std::nullopt;
+            }
+
+            MacroAction input(*frame, *button, *player2, *down);
+            input.parseExtension(*inputObject);
+            replay.inputs.push_back(std::move(input));
+        }
+
+        return replay;
+    }
+
     void parseExtension(gdr::json::object_t obj) override {
         if (auto mode = ReplayJson::getInteger<int>(obj, "accuracy_mode")) {
             accuracyMode = sanitizeAccuracyMode(*mode);
