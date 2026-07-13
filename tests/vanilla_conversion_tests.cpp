@@ -36,6 +36,8 @@ static void test_click_audio_controls_change_output() {
     assert(std::abs(toasty::clickaudio::volumeGain(1.5f) - 2.5f) < 0.0001f);
     assert(std::abs(toasty::clickaudio::volumeGain(2.0f) - 4.0f) < 0.0001f);
     assert(std::abs(toasty::clickaudio::pitchFactor(0.25f) - 1.25f) < 0.0001f);
+    assert(!toasty::clickaudio::shouldUseSecondaryPack(true, true, false));
+    assert(toasty::clickaudio::shouldUseSecondaryPack(true, true, true));
 }
 
 static void test_zero_percent_start_position_can_play_from_start() {

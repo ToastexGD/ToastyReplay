@@ -28,4 +28,8 @@ inline float pitchFactor(float jitter) {
     if (!std::isfinite(jitter)) return 1.0f;
     return 1.0f + std::clamp(jitter, -0.5f, 0.5f);
 }
+
+inline bool shouldUseSecondaryPack(bool separate, bool requested, bool hasSamples) {
+    return separate && requested && hasSamples;
+}
 }

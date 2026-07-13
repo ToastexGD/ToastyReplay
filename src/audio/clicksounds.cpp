@@ -37,7 +37,7 @@ ClickSoundManager* ClickSoundManager::get() {
 
 bool ClickSoundManager::shouldUseP2Pack(bool requestedPlayer2, bool trueTwoPlayerMode) const {
     static_cast<void>(trueTwoPlayerMode);
-    return separateP2Clicks && requestedPlayer2;
+    return toasty::clickaudio::shouldUseSecondaryPack(separateP2Clicks, requestedPlayer2, !p2Pack.empty());
 }
 
 std::filesystem::path ClickSoundManager::getClicksDir() const {
