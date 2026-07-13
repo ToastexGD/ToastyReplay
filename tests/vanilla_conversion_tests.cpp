@@ -3,6 +3,7 @@
 #include "audio/click_audio_math.hpp"
 #include "core/replay_timing.hpp"
 #include "core/start_position_policy.hpp"
+#include "format/ttr_format.hpp"
 #include "format/ttr3_format.hpp"
 
 #include <cassert>
