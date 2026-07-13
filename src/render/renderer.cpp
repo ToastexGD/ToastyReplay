@@ -112,7 +112,7 @@ static bool pathContainsMarker(std::filesystem::path const& path, std::string_vi
 }
 
 static bool shouldUseMobileMp4Audio(std::filesystem::path const& outputPath) {
-    auto extension = outputPath.extension().string();
+    auto extension = toasty::pathToUtf8(outputPath.extension());
     std::transform(extension.begin(), extension.end(), extension.begin(), [](char c) {
         return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     });

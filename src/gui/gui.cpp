@@ -2454,12 +2454,12 @@ void MenuInterface::drawReplayTab() {
                     auto destPath = destDir / sourcePath.filename();
                     if (std::filesystem::exists(destPath, ec)) {
                         int suffix = 1;
-                        auto stem = sourcePath.stem();
-                        auto ext = sourcePath.extension();
-                        while (std::filesystem::exists(destDir / (stem.string() + "_" + std::to_string(suffix) + ext.string()), ec)) {
+                        auto stem = toasty::pathToUtf8(sourcePath.stem());
+                        auto extension = toasty::pathToUtf8(sourcePath.extension());
+                        while (std::filesystem::exists(destDir / (stem + "_" + std::to_string(suffix) + extension), ec)) {
                             ++suffix;
                         }
-                        destPath = destDir / (stem.string() + "_" + std::to_string(suffix) + ext.string());
+                        destPath = destDir / (stem + "_" + std::to_string(suffix) + extension);
                     }
                     std::filesystem::copy_file(sourcePath, destPath, std::filesystem::copy_options::overwrite_existing, ec);
                     if (ec) {
