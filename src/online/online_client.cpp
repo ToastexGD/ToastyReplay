@@ -157,7 +157,7 @@ namespace {
     }
 
 #ifdef GEODE_IS_WINDOWS
-    bool dpapiProtect(std::string const& plain, std::string& encrypted) {
+    Result<std::string> protectRefreshToken(std::string const& plain) {
         DATA_BLOB input{};
         input.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()));
         input.cbData = static_cast<DWORD>(plain.size());
@@ -165,46 +165,45 @@ namespace {
         DATA_BLOB output{};
         if (!CryptProtectData(&input, L"ToastyReplay online refresh token",
                               nullptr, nullptr, nullptr, 0, &output)) {
-            return false;
+            return Err("Windows could not protect the refresh token (error {})", GetLastError());
         }
 
         std::span<std::uint8_t const> bytes(
             reinterpret_cast<std::uint8_t const*>(output.pbData),
             static_cast<size_t>(output.cbData)
         );
-        encrypted = geode::utils::base64::encode(bytes, geode::utils::base64::Base64Variant::Normal);
+        auto encrypted = geode::utils::base64::encode(bytes, geode::utils::base64::Base64Variant::Normal);
         LocalFree(output.pbData);
-        return true;
+        return Ok(std::move(encrypted));
     }
 
-    bool dpapiUnprotect(std::string const& encrypted, std::string& plain) {
+    Result<std::string> unprotectRefreshToken(std::string const& encrypted) {
         auto decoded = geode::utils::base64::decode(encrypted, geode::utils::base64::Base64Variant::Normal);
-        if (!decoded.isOk()) return false;
+        if (!decoded) {
+            return Err("The saved refresh token is not valid DPAPI data");
+        }
 
-        auto bytes = decoded.unwrap();
+        auto bytes = std::move(decoded).unwrap();
         DATA_BLOB input{};
         input.pbData = reinterpret_cast<BYTE*>(bytes.data());
         input.cbData = static_cast<DWORD>(bytes.size());
 
         DATA_BLOB output{};
         if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, 0, &output)) {
-            return false;
+            return Err("Windows could not unprotect the refresh token (error {})", GetLastError());
         }
 
-        plain.assign(reinterpret_cast<char const*>(output.pbData), output.cbData);
+        std::string plain(reinterpret_cast<char const*>(output.pbData), output.cbData);
         LocalFree(output.pbData);
-        return true;
+        return Ok(std::move(plain));
     }
 #else
-    bool dpapiProtect(std::string const& plain, std::string& encrypted) {
-        encrypted = geode::utils::base64::encode(plain, geode::utils::base64::Base64Variant::Normal);
-        return true;
+    Result<std::string> protectRefreshToken(std::string const&) {
+        return Err("Secure refresh token persistence is unavailable on this platform");
     }
-    bool dpapiUnprotect(std::string const& encrypted, std::string& plain) {
-        auto decoded = geode::utils::base64::decodeString(encrypted, geode::utils::base64::Base64Variant::Normal);
-        if (!decoded.isOk()) return false;
-        plain = decoded.unwrap();
-        return true;
+
+    Result<std::string> unprotectRefreshToken(std::string const&) {
+        return Err("Secure refresh token persistence is unavailable on this platform");
     }
 #endif
 }
@@ -279,13 +278,13 @@ void OnlineClient::saveRefreshToken(std::string const& token) {
         clearRefreshToken();
         return;
     }
-    std::string encrypted;
-    if (!dpapiProtect(token, encrypted)) {
-        log::warn("Could not protect the online refresh token, so it will not be saved");
+    auto encrypted = protectRefreshToken(token);
+    if (!encrypted) {
+        log::warn("Could not protect the online refresh token, so it will not be saved: {}", encrypted.unwrapErr());
         clearRefreshToken();
         return;
     }
-    Mod::get()->setSavedValue<std::string>(KEY_REFRESH_TOKEN, encrypted);
+    Mod::get()->setSavedValue<std::string>(KEY_REFRESH_TOKEN, std::move(encrypted).unwrap());
 }
 
 void OnlineClient::clearRefreshToken() {
@@ -295,13 +294,13 @@ void OnlineClient::clearRefreshToken() {
 std::string OnlineClient::loadRefreshToken() const {
     auto encrypted = Mod::get()->getSavedValue<std::string>(KEY_REFRESH_TOKEN, "");
     if (encrypted.empty()) return "";
-    std::string plain;
-    if (!dpapiUnprotect(encrypted, plain)) {
-        log::warn("Could not read the saved online refresh token, so it will be cleared");
+    auto plain = unprotectRefreshToken(encrypted);
+    if (!plain) {
+        log::warn("Could not read the saved online refresh token, so it will be cleared: {}", plain.unwrapErr());
         Mod::get()->setSavedValue<std::string>(KEY_REFRESH_TOKEN, "");
         return "";
     }
-    return plain;
+    return std::move(plain).unwrap();
 }
 
 bool OnlineClient::canUploadMacros() const {

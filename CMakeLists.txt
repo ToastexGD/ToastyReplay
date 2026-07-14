@@ -7,6 +7,8 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 project(ToastyReplay VERSION 2.2.1 LANGUAGES CXX)
 
+include(CTest)
+
 set(TOASTYREPLAY_SOURCES
     src/format/ttr_format.cpp
     src/format/ttr3_format.cpp
@@ -127,6 +129,7 @@ if (TARGET zlibstatic)
     target_include_directories(toastyreplay_vanilla_conversion_tests PRIVATE ${ZLIB_SOURCE_DIR} ${ZLIB_BINARY_DIR})
     target_link_libraries(toastyreplay_vanilla_conversion_tests PRIVATE zlibstatic)
 endif()
+add_test(NAME toastyreplay_vanilla_conversion_tests COMMAND toastyreplay_vanilla_conversion_tests)
 
 add_executable(toastyreplay_gdr_import_tests
     tests/gdr_import_tests.cpp
@@ -141,6 +144,7 @@ else()
     target_compile_options(toastyreplay_gdr_import_tests PRIVATE -UNDEBUG)
 endif()
 target_link_libraries(toastyreplay_gdr_import_tests PRIVATE GeodeBindings libGDR)
+add_test(NAME toastyreplay_gdr_import_tests COMMAND toastyreplay_gdr_import_tests)
 
 add_executable(toastyreplay_tcbot_format_tests
     src/conversion/tcbot_format.cpp
@@ -155,6 +159,7 @@ else()
     target_compile_options(toastyreplay_tcbot_format_tests PRIVATE -UNDEBUG)
 endif()
 target_link_libraries(toastyreplay_tcbot_format_tests PRIVATE GeodeBindings)
+add_test(NAME toastyreplay_tcbot_format_tests COMMAND toastyreplay_tcbot_format_tests)
 
 set(TOASTYREPLAY_WATERMARK_ROOT "" CACHE PATH "Private ToastyReplay watermark artifact root")
 if (NOT TOASTYREPLAY_WATERMARK_ROOT AND DEFINED ENV{TOASTYREPLAY_WATERMARK_ROOT})
