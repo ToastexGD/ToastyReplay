@@ -100,12 +100,51 @@ static void test_ttr3_bridge_preserves_integer_ticks_at_arbitrary_tps() {
     }
 }
 
+static void test_vanilla_persistence_keeps_navigation_data() {
+    TTRMacro macro;
+    macro.accuracyMode = AccuracyMode::Vanilla;
+    macro.exactCbsTiming = true;
+
+    TTRInput input;
+    input.tick = 30;
+    input.stepOffset = 0.5f;
+    input.cbsTimeOffset = 0.002;
+    input.timeSeconds = 0.125;
+    input.swiftPairAnchor = true;
+    macro.inputs.push_back(input);
+    macro.anchors.emplace_back();
+    macro.checkpoints.emplace_back();
+
+    TTRAttemptSegment attempt;
+    attempt.inputs.push_back(input);
+    attempt.anchors.emplace_back();
+    macro.persistenceAttempts.push_back(attempt);
+
+    normalizeTTRPersistenceTiming(macro);
+
+    assert(macro.inputs[0].stepOffset == 0.0f);
+    assert(macro.inputs[0].cbsTimeOffset == -1.0);
+    assert(macro.inputs[0].timeSeconds == -1.0);
+    assert(!macro.inputs[0].swiftPairAnchor);
+    assert(macro.anchors.size() == 1);
+    assert(macro.checkpoints.size() == 1);
+    assert(macro.persistenceAttempts[0].anchors.size() == 1);
+    assert(!macro.exactCbsTiming);
+}
+
 static void test_exact_ttr3_playback_timing() {
     double target = toasty::replay_timing::targetTimestampForPlaybackInput(10.0, 20.0, 0.125, 0.003);
     assert(std::abs(target - 10.125) < 0.000001);
     assert(toasty::replay_timing::classifyExactInputDispatch(target, 10.1, 10.2) == toasty::replay_timing::ExactInputDispatch::QueueNative);
     assert(toasty::replay_timing::shouldSkipRepeatedProcessSlice(true, 24, 24, true, 2, 2, 1.0, 1.0));
     assert(!toasty::replay_timing::shouldSkipRepeatedProcessSlice(true, 24, 24, true, 2, 2, 1.0, 1.01));
+}
+
+static void test_playback_uses_required_macro_tps() {
+    assert(toasty::replay_timing::playbackRuntimeTps(240.0, 360.0) == 360.0);
+    assert(toasty::replay_timing::playbackRuntimeTps(240.0, 120.0) == 240.0);
+    assert(toasty::replay_timing::playbackRuntimeTps(144.0, -1.0) == 144.0);
+    assert(toasty::replay_timing::playbackRuntimeTps(-1.0, -1.0) == 240.0);
 }
 
 static void test_respawn_override_uses_scheduler_not_dead_update_polling() {
@@ -115,26 +154,24 @@ static void test_respawn_override_uses_scheduler_not_dead_update_polling() {
     assert(source.find("respawnTimer") == std::string::npos);
 }
 
-static void test_module_card_animation_uses_measured_height_without_snap() {
+static void test_module_card_animation_uses_current_description_fade() {
     auto source = readProjectFile("src/gui/gui.cpp");
-    assert(source.find("moduleContentHeightForProgress") != std::string::npos);
-    assert(source.find("ImGuiChildFlags_None") != std::string::npos);
+    assert(source.find("if (data.progress > 0.0f && !displayDescription.empty())") != std::string::npos);
+    assert(source.find("float fade = anim.easeOutCubic(data.progress);") != std::string::npos);
     assert(source.find("280.0f * t") == std::string::npos);
-    assert(source.find("it->second.height = measured;") != std::string::npos);
 }
 
 static void test_dispatch_keybinds_are_visible_on_module_cards() {
     auto source = readProjectFile("src/gui/gui.cpp");
-    assert(source.find("Widgets::ModuleCard(\"Autoclicker\", \"Auto-click at configurable intervals\", &ac->enabled, theme, anim, &keybinds.autoclicker)") != std::string::npos);
-    assert(source.find("Widgets::ModuleCard(\"Click Sounds\", \"Play click and release sounds on input\", &csm->enabled, theme, anim, &keybinds.clickSounds)") != std::string::npos);
+    assert(source.find("Widgets::ModuleCard(\"Autoclicker\", \"Auto-click at configurable intervals\", &ac->enabled, theme, anim, \"bind_autoclicker\")") != std::string::npos);
+    assert(source.find("Widgets::ModuleCard(\"Click Sounds\", \"Play click and release sounds on input\", &csm->enabled, theme, anim, \"bind_click_sounds\")") != std::string::npos);
 }
 
-static void test_cocos_menu_warning_is_registered_for_frontend_setting() {
+static void test_cocos_menu_frontend_setting_is_persisted() {
     auto frontend = readProjectFile("src/gui/cocos/frontend.cpp");
     auto popup = readProjectFile("src/gui/cocos/tr_menu_popup.cpp");
-    assert(frontend.find("listenForSettingChanges<std::string>(\"menu_frontend\"") != std::string::npos);
-    assert(frontend.find("my cocos menu and structuring sucks") != std::string::npos);
-    assert(frontend.find("FLAlertLayer::create(\"Warning\"") != std::string::npos);
+    assert(frontend.find("mod->setSettingValue<std::string>(\"menu_frontend\"") != std::string::npos);
+    assert(frontend.find("auto result = mod->saveData();") != std::string::npos);
     assert(popup.find("toasty::frontend::setMenuFrontend(idx == 1)") != std::string::npos);
 }
 
@@ -144,10 +181,12 @@ int main() {
     test_editor_playtest_counts_as_gameplay_active();
     test_editor_hitbox_overlay_requires_active_playtest();
     test_ttr3_bridge_preserves_integer_ticks_at_arbitrary_tps();
+    test_vanilla_persistence_keeps_navigation_data();
     test_exact_ttr3_playback_timing();
+    test_playback_uses_required_macro_tps();
     test_respawn_override_uses_scheduler_not_dead_update_polling();
-    test_module_card_animation_uses_measured_height_without_snap();
+    test_module_card_animation_uses_current_description_fade();
     test_dispatch_keybinds_are_visible_on_module_cards();
-    test_cocos_menu_warning_is_registered_for_frontend_setting();
+    test_cocos_menu_frontend_setting_is_persisted();
     return 0;
 }

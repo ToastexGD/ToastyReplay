@@ -5,6 +5,7 @@
 #include "utils.hpp"
 
 #include <Geode/Geode.hpp>
+#include <Geode/utils/file.hpp>
 #include <gdr/gdr.hpp>
 
 #include <algorithm>
@@ -476,6 +477,9 @@ public:
         replay.ldm = *ldm;
 
         if (auto framerate = ReplayJson::getFloat<float>(*root, "framerate")) {
+            if (!std::isfinite(*framerate) || *framerate <= 0.0f) {
+                return std::nullopt;
+            }
             replay.framerate = *framerate;
         }
         replay.parseExtension(*root);
@@ -500,7 +504,7 @@ public:
             auto button = ReplayJson::getInteger<int>(*inputObject, "btn");
             auto player2 = ReplayJson::getBool(*inputObject, "2p");
             auto down = ReplayJson::getBool(*inputObject, "down");
-            if (!frame || !button || !player2 || !down) {
+            if (!frame || !button || *button < 1 || *button > 3 || !player2 || !down) {
                 return std::nullopt;
             }
 
@@ -581,35 +585,57 @@ public:
         return ext;
     }
 
-    void persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240, bool useJson = false) {
-        author = GJAccountManager::get()->m_username;
-        duration = inputs.empty() ? 0.0 : static_cast<double>(inputs.back().frame) / framerate;
-        accuracyMode = writableAccuracyMode(mode);
-        hasPlatformerModeMetadata = true;
-        savedAnchorInterval = std::max(1, anchorInterval);
-        if (!usesTimedAccuracy(accuracyMode)) {
-            for (auto& input : inputs) {
+    bool persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240, bool useJson = false) {
+        MacroSequence pending = *this;
+        pending.author = GJAccountManager::get()->m_username;
+        if (!std::isfinite(pending.framerate) || pending.framerate <= 0.0f) {
+            pending.framerate = 240.0f;
+        }
+        pending.duration = pending.inputs.empty()
+            ? 0.0
+            : static_cast<double>(pending.inputs.back().frame) / pending.framerate;
+        pending.accuracyMode = writableAccuracyMode(mode);
+        pending.hasPlatformerModeMetadata = true;
+        pending.savedAnchorInterval = std::max(1, anchorInterval);
+        if (!usesTimedAccuracy(pending.accuracyMode)) {
+            for (auto& input : pending.inputs) {
                 input.stepOffset = 0.0f;
                 input.timeSeconds = -1.0;
                 input.swiftPairAnchor = false;
             }
-            anchors.clear();
+            pending.anchors.clear();
         }
 
         auto dir = ReplayStorage::getReplayDirectoryPath();
-        if (!std::filesystem::exists(dir)) {
-            std::filesystem::create_directory(dir);
+        std::error_code ec;
+        if (!std::filesystem::exists(dir, ec)) {
+            std::filesystem::create_directories(dir, ec);
+        }
+        if (ec) {
+            log::error("Could not prepare replay directory '{}': {}",
+                toasty::pathToUtf8(dir), ec.message());
+            return false;
         }
 
-        name = ReplayStorage::makeUniqueReplayName(name, persistedName);
-        persistedName = name;
+        pending.name = ReplayStorage::makeUniqueReplayName(pending.name, pending.persistedName);
+        pending.persistedName = pending.name;
 
         std::string const extension = useJson ? ".gdr.json" : ".gdr";
-        std::ofstream output(dir / (name + extension), std::ios::binary);
-        auto bytes = exportData(useJson);
-        output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
-        output.close();
-        log::debug("Saved legacy GDR replay '{}'", toasty::pathToUtf8(dir / (name + extension)));
+        auto outputPath = dir / (pending.name + extension);
+        auto bytes = pending.exportData(useJson);
+        if (bytes.empty()) {
+            log::error("Could not serialize replay '{}'", toasty::pathToUtf8(outputPath));
+            return false;
+        }
+        auto writeResult = utils::file::writeBinarySafe(outputPath, bytes);
+        if (!writeResult) {
+            log::error("Could not write replay file '{}': {}",
+                toasty::pathToUtf8(outputPath), writeResult.unwrapErr());
+            return false;
+        }
+        *this = std::move(pending);
+        log::debug("Saved legacy GDR replay '{}'", toasty::pathToUtf8(outputPath));
+        return true;
     }
 
     static MacroSequence* loadFromDisk(std::string const& filename) {

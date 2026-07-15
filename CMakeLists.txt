@@ -5,7 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(ToastyReplay VERSION 2.2.1 LANGUAGES CXX)
+project(ToastyReplay VERSION 2.2.2 LANGUAGES CXX)
 
 include(CTest)
 
@@ -139,9 +139,6 @@ target_compile_features(toastyreplay_gdr_import_tests PRIVATE cxx_std_23)
 target_compile_definitions(toastyreplay_gdr_import_tests PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")
 if (MSVC)
     target_compile_definitions(toastyreplay_gdr_import_tests PRIVATE _HAS_ITERATOR_DEBUGGING=0)
-    target_compile_options(toastyreplay_gdr_import_tests PRIVATE /UNDEBUG)
-else()
-    target_compile_options(toastyreplay_gdr_import_tests PRIVATE -UNDEBUG)
 endif()
 target_link_libraries(toastyreplay_gdr_import_tests PRIVATE GeodeBindings libGDR)
 add_test(NAME toastyreplay_gdr_import_tests COMMAND toastyreplay_gdr_import_tests)
@@ -154,12 +151,23 @@ target_include_directories(toastyreplay_tcbot_format_tests PRIVATE src)
 target_compile_features(toastyreplay_tcbot_format_tests PRIVATE cxx_std_23)
 if (MSVC)
     target_compile_definitions(toastyreplay_tcbot_format_tests PRIVATE _HAS_ITERATOR_DEBUGGING=0)
-    target_compile_options(toastyreplay_tcbot_format_tests PRIVATE /UNDEBUG)
-else()
-    target_compile_options(toastyreplay_tcbot_format_tests PRIVATE -UNDEBUG)
 endif()
 target_link_libraries(toastyreplay_tcbot_format_tests PRIVATE GeodeBindings)
 add_test(NAME toastyreplay_tcbot_format_tests COMMAND toastyreplay_tcbot_format_tests)
+
+set(TOASTYREPLAY_TEST_TARGETS
+    toastyreplay_vanilla_conversion_tests
+    toastyreplay_gdr_import_tests
+    toastyreplay_tcbot_format_tests
+)
+foreach(test_target IN LISTS TOASTYREPLAY_TEST_TARGETS)
+    if (MSVC)
+        target_compile_options(${test_target} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${test_target} PRIVATE -UNDEBUG)
+    endif()
+    set_tests_properties(${test_target} PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endforeach()
 
 set(TOASTYREPLAY_WATERMARK_ROOT "" CACHE PATH "Private ToastyReplay watermark artifact root")
 if (NOT TOASTYREPLAY_WATERMARK_ROOT AND DEFINED ENV{TOASTYREPLAY_WATERMARK_ROOT})

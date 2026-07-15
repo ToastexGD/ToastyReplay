@@ -51,6 +51,14 @@ static void testGDRImportAcceptsMsgpack() {
 static void testGDRImportRejectsMalformedData() {
     std::vector<uint8_t> malformed = {0xff, 0x00, 0x01};
     assert(!MacroSequence::tryImportData(malformed).has_value());
+
+    auto invalidButton = makeReplayJson(false);
+    invalidButton["inputs"][0]["btn"] = 0;
+    assert(!MacroSequence::tryImportData(gdr::json::to_msgpack(invalidButton)).has_value());
+
+    auto invalidFramerate = makeReplayJson(false);
+    invalidFramerate["framerate"] = 0.0f;
+    assert(!MacroSequence::tryImportData(gdr::json::to_msgpack(invalidFramerate)).has_value());
 }
 
 int main() {

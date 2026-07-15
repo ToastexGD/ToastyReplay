@@ -6,6 +6,7 @@
 #include "format/replay.hpp"
 #include "format/ttr_format.hpp"
 #include "core/noclip_accuracy.hpp"
+#include "core/replay_timing.hpp"
 #include "hacks/autoclicker.hpp"
 #include "trajectory/trajectory.hpp"
 #include "render/renderer.hpp"
@@ -571,15 +572,6 @@ public:
             return false;
         }
 
-        if (hasTTR && activeTTR->loadedFromTTR3()) {
-            double requiredTps = activeTTR->maxSourceTps();
-            double runtimeTps = runtimeTickRate();
-            if (std::isfinite(requiredTps) && std::isfinite(runtimeTps) && requiredTps > runtimeTps + 1e-6) {
-                log::warn("Playback requires {:.3f} TPS but the runtime is set to {:.3f} TPS", requiredTps, runtimeTps);
-                return false;
-            }
-        }
-
         return true;
     }
 
@@ -679,6 +671,12 @@ public:
 
     void haltExecution() {
         pendingPlaybackStart = false;
+        initialRun = false;
+        levelRestarting = false;
+        anchorReconciliation = false;
+        macroInputActive = false;
+        respawnTickIndex = -1;
+        tickAccumulator = 0.0f;
         resetTimingTracking();
         resetDeferredInputState();
         if (auto* playLayer = PlayLayer::get()) {
@@ -697,6 +695,12 @@ public:
         startPosActive = false;
         engineMode = MODE_DISABLED;
         clearPersistenceRuntimeState();
+        for (bool& state : activeButtons) {
+            state = false;
+        }
+        for (bool& state : priorButtonState) {
+            state = false;
+        }
         refreshManualInputIgnoreState();
     }
 
@@ -869,6 +873,15 @@ public:
         return std::max(1.0, framerate);
     }
 
+    double activePlaybackTickRate() const {
+        double macroTps = activeMacroFramerate();
+        double requiredTps = macroTps;
+        if (ttrMode && activeTTR && activeTTR->loadedFromTTR3()) {
+            requiredTps = activeTTR->maxSourceTps();
+        }
+        return toasty::replay_timing::playbackRuntimeTps(macroTps, requiredTps);
+    }
+
     static AccuracyMode runtimeAccuracyModeFor(AccuracyMode mode) {
         return mode == AccuracyMode::CBS ? AccuracyMode::CBS : AccuracyMode::Vanilla;
     }
@@ -904,7 +917,7 @@ public:
 
         if (overridePlaybackTickRate && !playbackTickRateOverrideActive) {
             savedPlaybackTickRate = tickRate;
-            tickRate = activeMacroFramerate();
+            tickRate = activePlaybackTickRate();
             playbackTickRateOverrideActive = true;
         }
 
@@ -1163,7 +1176,7 @@ public:
     }
 
     std::vector<PlaybackAnchor>* activeAnchors() {
-        if (!usesTimedAccuracy(activeMacroAccuracyMode())) {
+        if (!ttrMode && !usesTimedAccuracy(activeMacroAccuracyMode())) {
             return nullptr;
         }
         if (ttrMode) {
@@ -1176,7 +1189,7 @@ public:
     }
 
     std::vector<PlaybackAnchor> const* activeAnchors() const {
-        if (!usesTimedAccuracy(activeMacroAccuracyMode())) {
+        if (!ttrMode && !usesTimedAccuracy(activeMacroAccuracyMode())) {
             return nullptr;
         }
         if (ttrMode) {

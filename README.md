@@ -8,7 +8,7 @@ Frame-accurate recording, playback, editing, conversion, and rendering for Geome
 
 [![Geode](https://img.shields.io/badge/Geode-v5.8.1-blue?style=flat-square)](https://geode-sdk.org)
 [![Geometry Dash](https://img.shields.io/badge/Geometry%20Dash-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
-[![Version](https://img.shields.io/badge/version-v2.2.1-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
+[![Version](https://img.shields.io/badge/version-v2.2.2-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
 
 [Website](https://toastyreplay.xyz/) | [Buy Pro](https://toastyreplay.xyz/) | [Ko-fi](https://ko-fi.com/toastexgd) | [Report an issue](https://github.com/ToastexGD/ToastyReplay/issues)

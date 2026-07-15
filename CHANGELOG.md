@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.2
+
+- Fixed TTR3 start position recordings losing anchor and checkpoint data after saving.
+- Fixed high-TPS TTR3 macros being rejected instead of playing at their required TPS.
+- Fixed replay and held-input state carrying into later playback sessions.
+- Made replay saves fail cleanly when the output file cannot be written.
+- Fixed the orange moving background on the Credits and Support page.
+- Fixed trajectory preview cleanup after leaving a level.
+
 ## v2.2.1
 
 - Fixed click sounds going silent when separate Player 2 clicks were enabled without a Player 2 pack selected.

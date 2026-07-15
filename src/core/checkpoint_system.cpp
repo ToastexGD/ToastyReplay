@@ -248,7 +248,9 @@ bool ReplayEngine::saveActiveMacro() {
             return false;
         }
 
-        activeTTR->persist();
+        if (!activeTTR->persist()) {
+            return false;
+        }
         dataModified = false;
         reloadMacroList();
         return true;
@@ -261,7 +263,9 @@ bool ReplayEngine::saveActiveMacro() {
         }
 
         bool const useJson = selectedRecordingFormat == RecordingFormat::GDRJson;
-        activeMacro->persist(activeMacro->accuracyMode, static_cast<int>(tickRate), useJson);
+        if (!activeMacro->persist(activeMacro->accuracyMode, static_cast<int>(tickRate), useJson)) {
+            return false;
+        }
         dataModified = false;
         reloadMacroList();
         return true;

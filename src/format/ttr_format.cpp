@@ -3,6 +3,8 @@
 #include "core/replay_timing.hpp"
 #include "utils.hpp"
 
+#include <Geode/utils/file.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -937,8 +939,8 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
     return deserializeCompressedPayload(data, ctx.position, version, flags, headerSize, macro);
 }
 
-void TTRMacro::persist() {
-    persistToDirectory(ReplayStorage::getReplayDirectoryPath());
+bool TTRMacro::persist() {
+    return persistToDirectory(ReplayStorage::getReplayDirectoryPath());
 }
 
 double TTRMacro::maxSourceTps() const {
@@ -976,69 +978,61 @@ void TTRMacro::materializeTTR3RuntimeTicks(double runtimeTps) {
     }
 }
 
-void TTRMacro::persistToDirectory(std::filesystem::path const& directory) {
-    author = GJAccountManager::get()->m_username;
-    duration = 0.0;
-    double safeFramerate = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
-    for (auto const& input : inputs) {
+bool TTRMacro::persistToDirectory(std::filesystem::path const& directory) {
+    TTRMacro pending = *this;
+    pending.author = GJAccountManager::get()->m_username;
+    pending.duration = 0.0;
+    double safeFramerate = std::isfinite(pending.framerate) && pending.framerate > 0.0
+        ? pending.framerate
+        : 240.0;
+    for (auto const& input : pending.inputs) {
         double inputTime = input.hasAbsoluteTime()
             ? input.timeSeconds
             : static_cast<double>(std::max(0, input.tick)) / safeFramerate;
         if (!input.hasAbsoluteTime() && std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0) {
             inputTime += input.cbsTimeOffset;
         }
-        duration = std::max(duration, inputTime);
+        pending.duration = std::max(pending.duration, inputTime);
     }
-    recordTimestamp = static_cast<int64_t>(std::time(nullptr));
-    accuracyMode = writableAccuracyMode(accuracyMode);
-    auto stripTimedOffsets = [](std::vector<TTRInput>& inputList) {
-        for (auto& input : inputList) {
-            input.stepOffset = 0.0f;
-            input.cbsTimeOffset = -1.0;
-            input.timeSeconds = -1.0;
-            input.swiftPairAnchor = false;
-        }
-    };
-    if (!usesTimedAccuracy(accuracyMode)) {
-        stripTimedOffsets(inputs);
-        anchors.clear();
-        checkpoints.clear();
-        for (auto& attempt : persistenceAttempts) {
-            stripTimedOffsets(attempt.inputs);
-            attempt.anchors.clear();
-        }
-        exactCbsTiming = false;
-    } else {
-        exactCbsTiming = std::any_of(inputs.begin(), inputs.end(), [](TTRInput const& input) {
-            return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
-        });
-        if (!exactCbsTiming) {
-            exactCbsTiming = std::any_of(persistenceAttempts.begin(), persistenceAttempts.end(), [](TTRAttemptSegment const& attempt) {
-                return std::any_of(attempt.inputs.begin(), attempt.inputs.end(), [](TTRInput const& input) {
-                    return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
-                });
-            });
-        }
+    pending.recordTimestamp = static_cast<int64_t>(std::time(nullptr));
+    normalizeTTRPersistenceTiming(pending);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(directory, ec)) {
+        std::filesystem::create_directories(directory, ec);
+    }
+    if (ec) {
+        log::error("Could not prepare replay directory '{}': {}",
+            toasty::pathToUtf8(directory), ec.message());
+        return false;
     }
 
-    if (!std::filesystem::exists(directory)) {
-        std::filesystem::create_directories(directory);
-    }
+    std::string excludedName = pending.loadedFromLegacyFormat() ? "" : pending.persistedName;
+    pending.name = ReplayStorage::makeUniqueReplayNameInDirectory(
+        directory,
+        pending.name,
+        excludedName
+    );
+    pending.persistedName = pending.name;
 
-    std::string excludedName = loadedFromLegacyFormat() ? "" : persistedName;
-    name = ReplayStorage::makeUniqueReplayNameInDirectory(directory, name, excludedName);
-    persistedName = name;
-
-    fileFormat = TTRFileFormat::TTR3;
-    auto outputPath = directory / (name + ".ttr3");
-    if (!saveToPath(outputPath)) {
-        return;
+    pending.fileFormat = TTRFileFormat::TTR3;
+    auto outputPath = directory / (pending.name + ".ttr3");
+    if (!pending.saveToPath(outputPath)) {
+        return false;
     }
+    *this = std::move(pending);
+    return true;
 }
 
 bool TTRMacro::saveToPath(std::filesystem::path const& path) {
-    if (auto parent = path.parent_path(); !parent.empty() && !std::filesystem::exists(parent)) {
-        std::filesystem::create_directories(parent);
+    std::error_code ec;
+    if (auto parent = path.parent_path(); !parent.empty() && !std::filesystem::exists(parent, ec)) {
+        std::filesystem::create_directories(parent, ec);
+    }
+    if (ec) {
+        log::error("Could not prepare replay path '{}': {}",
+            toasty::pathToUtf8(path), ec.message());
+        return false;
     }
 
     auto bytes = serialize();
@@ -1047,17 +1041,10 @@ bool TTRMacro::saveToPath(std::filesystem::path const& path) {
         return false;
     }
 
-    std::ofstream output(path, std::ios::binary);
-    if (!output.is_open()) {
-        log::error("Could not open replay file '{}' for writing",
-            toasty::pathToUtf8(path));
-        return false;
-    }
-    output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
-    output.close();
-    if (!output) {
-        log::error("Could not write replay file '{}': attempted {} bytes",
-            toasty::pathToUtf8(path), bytes.size());
+    auto writeResult = utils::file::writeBinarySafe(path, bytes);
+    if (!writeResult) {
+        log::error("Could not write replay file '{}': {}",
+            toasty::pathToUtf8(path), writeResult.unwrapErr());
         return false;
     }
 

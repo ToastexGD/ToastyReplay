@@ -128,13 +128,51 @@ public:
     std::vector<uint8_t> serialize() const;
     std::vector<uint8_t> serializeTTR3() const;
     static TTRMacro* deserialize(std::vector<uint8_t> const& data);
-    void persist();
-    void persistToDirectory(std::filesystem::path const& directory);
+    bool persist();
+    bool persistToDirectory(std::filesystem::path const& directory);
     bool saveToPath(std::filesystem::path const& path);
     static TTRMacro* loadFromDisk(std::string const& filename);
     static TTRMacro* loadFromPath(std::filesystem::path const& path);
     std::vector<MacroAction> toMacroActions() const;
     std::vector<MacroAction> toPersistenceMacroActions() const;
 };
+
+inline void normalizeTTRPersistenceTiming(TTRMacro& macro) {
+    macro.accuracyMode = writableAccuracyMode(macro.accuracyMode);
+
+    auto stripTimedOffsets = [](std::vector<TTRInput>& inputList) {
+        for (auto& input : inputList) {
+            input.stepOffset = 0.0f;
+            input.cbsTimeOffset = -1.0;
+            input.timeSeconds = -1.0;
+            input.swiftPairAnchor = false;
+        }
+    };
+
+    if (!usesTimedAccuracy(macro.accuracyMode)) {
+        stripTimedOffsets(macro.inputs);
+        for (auto& attempt : macro.persistenceAttempts) {
+            stripTimedOffsets(attempt.inputs);
+        }
+        macro.exactCbsTiming = false;
+        return;
+    }
+
+    macro.exactCbsTiming = false;
+    for (auto const& input : macro.inputs) {
+        if (std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0) {
+            macro.exactCbsTiming = true;
+            return;
+        }
+    }
+    for (auto const& attempt : macro.persistenceAttempts) {
+        for (auto const& input : attempt.inputs) {
+            if (std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0) {
+                macro.exactCbsTiming = true;
+                return;
+            }
+        }
+    }
+}
 
 #endif
