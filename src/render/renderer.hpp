@@ -120,7 +120,7 @@ private:
     void startCopyWorker(FrameCaptureService& frameCapture);
     void stopCopyWorker();
     void releasePbo(int idx);
-    void submitPbo(int pboIndex, FrameCaptureService& frameCapture, const char* abortMsg);
+    void submitPbo(int pboIndex, FrameCaptureService& frameCapture);
 };
 
 class Renderer {

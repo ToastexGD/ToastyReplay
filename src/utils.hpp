@@ -1,11 +1,8 @@
 #ifndef _utils_hpp
 #define _utils_hpp
 
-#include <Geode/utils/string.hpp>
+#include <Geode/utils/general.hpp>
 
-#include <cerrno>
-#include <charconv>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -22,27 +19,19 @@ namespace toasty {
     inline std::optional<Int> parseInteger(std::string_view text, int base = 10) {
         static_assert(std::is_integral_v<Int>, "parseInteger requires an integral type");
 
-        Int value = 0;
-        auto const* begin = text.data();
-        auto const* end = begin + text.size();
-        auto result = std::from_chars(begin, end, value, base);
-        if (result.ec != std::errc{} || result.ptr != end) {
+        auto result = geode::utils::numFromString<Int>(text, base);
+        if (!result) {
             return std::nullopt;
         }
-        return value;
+        return result.unwrap();
     }
 
     inline std::optional<float> parseFloat(std::string_view text) {
-        if (text.empty()) return std::nullopt;
-        std::string buf(text);
-        char const* begin = buf.c_str();
-        char* end = nullptr;
-        errno = 0;
-        float value = std::strtof(begin, &end);
-        if (errno != 0 || end != begin + buf.size()) {
+        auto result = geode::utils::numFromString<float>(text);
+        if (!result) {
             return std::nullopt;
         }
-        return value;
+        return result.unwrap();
     }
 
     inline std::string pathToUtf8(std::filesystem::path const& path) {

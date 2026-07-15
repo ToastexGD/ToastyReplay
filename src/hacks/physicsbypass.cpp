@@ -146,7 +146,7 @@ namespace {
         auto* base = reinterpret_cast<uint8_t*>(geode::base::get());
         size_t size = getModuleSize(base);
         if (!base || size == 0) {
-            log::error("TPS bypass: failed to read module size");
+            log::error("TPS bypass could not read the game module");
             return false;
         }
 
@@ -155,7 +155,7 @@ namespace {
 
         auto match = findHexPattern(base, size, kExpectedTicksSig);
         if (!match) {
-            log::error("TPS bypass: failed to find expected-ticks pattern");
+            log::error("TPS bypass could not find the expected-ticks pattern");
             return false;
         }
 
@@ -163,12 +163,12 @@ namespace {
         auto patchBytes = buildExpectedTicksPatch(patchAddress);
         auto result = Mod::get()->patch(reinterpret_cast<void*>(patchAddress), patchBytes);
         if (!result) {
-            log::error("TPS bypass: failed to patch expected ticks: {}", result.unwrapErr());
+            log::error("TPS bypass could not install the expected-ticks patch: {}", result.unwrapErr());
             return false;
         }
 
         g_expectedTicksPatch = result.unwrap();
-        log::info("TPS bypass: installed expected-ticks patch at 0x{:X}", patchAddress - reinterpret_cast<uintptr_t>(base));
+        log::debug("Installed the TPS bypass patch at module offset 0x{:X}", patchAddress - reinterpret_cast<uintptr_t>(base));
         return true;
     }
 #else
@@ -230,7 +230,7 @@ namespace {
         auto* base = reinterpret_cast<uint8_t*>(geode::base::get());
         size_t size = getModuleSize(base);
         if (!base || size == 0) {
-            log::error("[TR-HACK][E002] TPS bypass: failed to read module size");
+            log::error("TPS bypass could not read the game module");
             return false;
         }
 
@@ -239,7 +239,7 @@ namespace {
 
         auto match = findHexPattern(base, size, kExpectedTicksSig);
         if (!match) {
-            log::error("[TR-HACK][E003] TPS bypass: pattern scan miss for expected-ticks");
+            log::error("TPS bypass could not find the expected-ticks pattern");
             return false;
         }
 
@@ -247,12 +247,12 @@ namespace {
         auto patchBytes = buildExpectedTicksPatch();
         auto result = Mod::get()->patch(reinterpret_cast<void*>(patchAddress), patchBytes);
         if (!result) {
-            log::error("[TR-HACK][E004] TPS bypass: patch write failed: {}", result.unwrapErr());
+            log::error("TPS bypass could not install the expected-ticks patch: {}", result.unwrapErr());
             return false;
         }
 
         g_expectedTicksPatch = result.unwrap();
-        log::info("[TR-HACK][I003] TPS bypass: patch installed at 0x{:X}", patchAddress - reinterpret_cast<uintptr_t>(base));
+        log::debug("Installed the TPS bypass patch at module offset 0x{:X}", patchAddress - reinterpret_cast<uintptr_t>(base));
         return true;
     }
 #endif
@@ -275,7 +275,7 @@ namespace {
             : g_expectedTicksPatch->disable();
         if (!result) {
             log::error(
-                "TPS bypass: failed to {} expected-ticks patch: {}",
+                "TPS bypass could not {} the expected-ticks patch: {}",
                 enabled ? "enable" : "disable",
                 result.unwrapErr()
             );

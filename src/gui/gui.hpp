@@ -3,12 +3,11 @@
 
 #include <imgui-cocos.hpp>
 #include <filesystem>
-#include <future>
 #include <unordered_map>
 #include <string>
 #include <vector>
 
-#include "conversion/macro_converter.hpp"
+#include "conversion/gdr_upgrade.hpp"
 #include "gui/frame_editor.hpp"
 #include "render/render_preset.hpp"
 #include "render/render_config.hpp"
@@ -218,26 +217,15 @@ private:
     std::string replayLoadPendingMacroName;
     bool replayLoadPendingIsTTR = false;
     double replayLoadReadyTime = 0.0;
-    std::string replayConvertSelectedPath;
-    char replayConvertNameBuffer[256] = {0};
-    bool replayConvertTargetTTR = true;
     bool replayConvertRunning = false;
     bool replayConvertStatusOk = false;
     std::string replayConvertStatus;
-    std::vector<std::string> replayConvertWarnings;
-    std::future<toasty::conversion::ConversionResult> replayConvertFuture;
-    bool replayConvertMarkSourceOnComplete = false;
-    bool replayConvertSelectOutputOnComplete = false;
+    geode::async::TaskHolder<geode::Result<toasty::conversion::ReplayImportResult>> replayConvertTask;
     bool replayConvertShowStandaloneStatus = false;
-    std::string replayConvertSourceKeyOnComplete;
-    bool replayConversionsExpanded = false;
 
     char replaySearchBuffer[64] = "";
     int replayCurrentPage = 0;
     static constexpr int replayPageSize = 6;
-    static constexpr int replayPageSizeConversion = 4;
-    char foreignSearchBuffer[64] = "";
-    int foreignCurrentPage = 0;
 
     std::vector<std::string> presetNames;
     int presetSelectedIndex = -1;
@@ -274,6 +262,7 @@ private:
     void refreshReplayListIfNeeded(bool force);
     bool hasReplayDirectoryChanged() const;
     void captureReplayDirectoryTimestamp();
+    void finishReplayImport(geode::Result<toasty::conversion::ReplayImportResult> result);
 
     void switchTab(int newTab);
 

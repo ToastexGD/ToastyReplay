@@ -1,28 +1,26 @@
 #ifndef _frame_editor_commit_model_hpp
 #define _frame_editor_commit_model_hpp
 
+#include "utils.hpp"
+
 #include <algorithm>
-#include <cerrno>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 namespace toasty::frame_editor {
 
 inline bool parseNonNegativeFrameText(char const* text, int32_t& out) {
     if (!text) return false;
-    while (*text == ' ' || *text == '\t') ++text;
-    if (*text == '\0') return false;
+    std::string_view value(text);
+    size_t first = value.find_first_not_of(" \t");
+    if (first == std::string_view::npos) return false;
+    size_t last = value.find_last_not_of(" \t");
+    auto parsed = toasty::parseInteger<int64_t>(value.substr(first, last - first + 1));
+    if (!parsed) return false;
 
-    errno = 0;
-    char* end = nullptr;
-    long value = std::strtol(text, &end, 10);
-    if (text == end || errno == ERANGE) return false;
-    while (end && (*end == ' ' || *end == '\t')) ++end;
-    if (end && *end != '\0') return false;
-
-    out = static_cast<int32_t>(std::clamp<long>(value, 0, std::numeric_limits<int32_t>::max()));
+    out = static_cast<int32_t>(std::clamp<int64_t>(*parsed, 0, std::numeric_limits<int32_t>::max()));
     return true;
 }
 

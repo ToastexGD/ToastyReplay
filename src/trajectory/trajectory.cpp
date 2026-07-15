@@ -820,6 +820,7 @@ void TrajectoryPredictionService::attach(GJBaseGameLayer* playLayer) {
         previewPlayer->setVisible(false);
         previewPlayer->setPosition({ -99999.f, -99999.f });
         previewPlayer->m_playEffects = false;
+        previewPlayer->retain();
         playLayer->m_objectLayer->addChild(previewPlayer);
         m_context.previewPlayers[playerIndex] = previewPlayer;
         resetPreviewStreak(previewPlayer);
@@ -844,8 +845,10 @@ void TrajectoryPredictionService::detach() {
     for (auto*& previewPlayer : m_context.previewPlayers) {
         resetPreviewStreak(previewPlayer);
         if (previewPlayer) {
-            previewPlayer->removeFromParent();
+            auto* ownedPreviewPlayer = previewPlayer;
             previewPlayer = nullptr;
+            ownedPreviewPlayer->removeFromParent();
+            ownedPreviewPlayer->release();
         }
     }
     m_context.activeSimulation = false;

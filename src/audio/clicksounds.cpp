@@ -671,8 +671,8 @@ std::vector<float> ClickSoundManager::generateClickAudio(
     size_t totalSamples = static_cast<size_t>(duration * sampleRate) * 2;
     std::vector<float> output(totalSamples, 0.0f);
 
-    geode::log::info("generateClickAudio: tickRate={}, duration={:.3f}s, sampleRate={}, startTick={}, actions={}, totalSamples={}",
-        tickRate, duration, sampleRate, startTick, actions.size(), totalSamples);
+    geode::log::debug("Preparing click audio: {} actions at {} TPS, {:.3f}s, {} Hz, start tick {}",
+        actions.size(), tickRate, duration, sampleRate, startTick);
 
     if (tickRate <= 0.0f || sampleRate <= 0) return output;
 
@@ -736,7 +736,7 @@ std::vector<float> ClickSoundManager::generateClickAudio(
         lastClickTime = timeSec;
     }
 
-    geode::log::info("generateClickAudio: placed {} clicks, first={:.3f}s last={:.3f}s (duration={:.3f}s)",
+    geode::log::debug("Mixed {} clicks from {:.3f}s to {:.3f}s into {:.3f}s of audio",
         clicksPlaced, firstClickTime, lastClickTime, duration);
 
     if (backgroundNoiseEnabled && backgroundNoiseVolume > 0.0f && !p1Pack.noiseFiles.empty()) {

@@ -3,10 +3,10 @@
 
 #include "utils.hpp"
 #include "lang/localization.hpp"
-#include "conversion/macro_converter.hpp"
 #include "format/replay.hpp"
 #include "format/ttr_format.hpp"
 #include "core/noclip_accuracy.hpp"
+#include "core/replay_timing.hpp"
 #include "hacks/autoclicker.hpp"
 #include "trajectory/trajectory.hpp"
 #include "render/renderer.hpp"
@@ -190,8 +190,8 @@ public:
 
     enum class RecordingFormat : uint8_t {
         TTR3 = 0,
-        GDR2 = 1,
-        GDR = 2,
+        GDRBinary = 1,
+        GDRJson = 2,
     };
     RecordingFormat selectedRecordingFormat = RecordingFormat::TTR3;
 
@@ -270,10 +270,6 @@ public:
     std::unordered_set<std::string> ttr3Macros;
     std::unordered_set<std::string> legacyTtrMacros;
     std::unordered_set<std::string> legacyCbsMacros;
-    std::vector<toasty::conversion::DetectedReplay> foreignReplays;
-    std::unordered_set<std::string> convertedForeignReplaySources;
-    std::unordered_map<std::string, std::string> convertedMacroSources;
-
     int hotkey_tickStep = 0x56;
     int hotkey_audioPitch = 0;
     int hotkey_protected = 0;
@@ -340,14 +336,12 @@ public:
         ttr3Macros.clear();
         legacyTtrMacros.clear();
         legacyCbsMacros.clear();
-        foreignReplays.clear();
         auto directory = geode::prelude::Mod::get()->getSaveDir() / "replays";
         std::error_code ec;
         if (!std::filesystem::exists(directory, ec) || ec) {
             return;
         }
 
-        std::vector<std::filesystem::path> foreignCandidates;
         std::unordered_set<std::string> usableStems;
 
         auto addUsable = [&](std::string const& stem, bool isTTR) {
@@ -407,7 +401,6 @@ public:
             if (extension == ".ttr3") {
                 std::unique_ptr<TTRMacro> macro(TTRMacro::loadFromPath(path));
                 if (!macro) {
-                    foreignCandidates.push_back(path);
                     continue;
                 }
 
@@ -426,7 +419,6 @@ public:
                 bool isTTR2 = extension == ".ttr2";
                 uint32_t flags = 0;
                 if (!readNativeTTRHeader(path, isTTR2, flags)) {
-                    foreignCandidates.push_back(path);
                     continue;
                 }
 
@@ -449,13 +441,11 @@ public:
             }
 
             if (extension != ".gdr" && !isGdrJson) {
-                foreignCandidates.push_back(path);
                 continue;
             }
 
             auto bytes = ReplayStorage::readReplayBytes(path);
             if (!bytes) {
-                foreignCandidates.push_back(path);
                 continue;
             }
 
@@ -469,14 +459,7 @@ public:
                 if (temp->platformerMode) {
                     platformerMacros.insert(stem);
                 }
-            } else {
-                foreignCandidates.push_back(path);
             }
-        }
-
-        for (auto const& path : foreignCandidates) {
-            auto detected = toasty::conversion::detectReplay(path, convertedForeignReplaySources, usableStems);
-            foreignReplays.push_back(std::move(detected));
         }
 
         if (ec) {
@@ -589,15 +572,6 @@ public:
             return false;
         }
 
-        if (hasTTR && activeTTR->loadedFromTTR3()) {
-            double requiredTps = activeTTR->maxSourceTps();
-            double runtimeTps = runtimeTickRate();
-            if (std::isfinite(requiredTps) && std::isfinite(runtimeTps) && requiredTps > runtimeTps + 1e-6) {
-                log::warn("Playback aborted: macro requires a higher TPS than the current runtime.");
-                return false;
-            }
-        }
-
         return true;
     }
 
@@ -697,6 +671,12 @@ public:
 
     void haltExecution() {
         pendingPlaybackStart = false;
+        initialRun = false;
+        levelRestarting = false;
+        anchorReconciliation = false;
+        macroInputActive = false;
+        respawnTickIndex = -1;
+        tickAccumulator = 0.0f;
         resetTimingTracking();
         resetDeferredInputState();
         if (auto* playLayer = PlayLayer::get()) {
@@ -715,6 +695,12 @@ public:
         startPosActive = false;
         engineMode = MODE_DISABLED;
         clearPersistenceRuntimeState();
+        for (bool& state : activeButtons) {
+            state = false;
+        }
+        for (bool& state : priorButtonState) {
+            state = false;
+        }
         refreshManualInputIgnoreState();
     }
 
@@ -887,6 +873,15 @@ public:
         return std::max(1.0, framerate);
     }
 
+    double activePlaybackTickRate() const {
+        double macroTps = activeMacroFramerate();
+        double requiredTps = macroTps;
+        if (ttrMode && activeTTR && activeTTR->loadedFromTTR3()) {
+            requiredTps = activeTTR->maxSourceTps();
+        }
+        return toasty::replay_timing::playbackRuntimeTps(macroTps, requiredTps);
+    }
+
     static AccuracyMode runtimeAccuracyModeFor(AccuracyMode mode) {
         return mode == AccuracyMode::CBS ? AccuracyMode::CBS : AccuracyMode::Vanilla;
     }
@@ -922,7 +917,7 @@ public:
 
         if (overridePlaybackTickRate && !playbackTickRateOverrideActive) {
             savedPlaybackTickRate = tickRate;
-            tickRate = activeMacroFramerate();
+            tickRate = activePlaybackTickRate();
             playbackTickRateOverrideActive = true;
         }
 
@@ -1181,7 +1176,7 @@ public:
     }
 
     std::vector<PlaybackAnchor>* activeAnchors() {
-        if (!usesTimedAccuracy(activeMacroAccuracyMode())) {
+        if (!ttrMode && !usesTimedAccuracy(activeMacroAccuracyMode())) {
             return nullptr;
         }
         if (ttrMode) {
@@ -1194,7 +1189,7 @@ public:
     }
 
     std::vector<PlaybackAnchor> const* activeAnchors() const {
-        if (!usesTimedAccuracy(activeMacroAccuracyMode())) {
+        if (!ttrMode && !usesTimedAccuracy(activeMacroAccuracyMode())) {
             return nullptr;
         }
         if (ttrMode) {

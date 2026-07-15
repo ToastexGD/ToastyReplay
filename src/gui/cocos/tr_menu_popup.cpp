@@ -5,6 +5,7 @@
 #include "gui/cocos/tr_frame_editor_popup.hpp"
 #include "gui/cocos/tr_replay_actions_popup.hpp"
 #include "gui/cocos/frontend.hpp"
+#include "conversion/tcbot_import.hpp"
 #include "ToastyReplay.hpp"
 #include "audio/clicksounds.hpp"
 #include "hacks/autoclicker.hpp"
@@ -15,7 +16,9 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/ButtonSprite.hpp>
+#include <Geode/binding/GJAccountManager.hpp>
 #include <Geode/ui/Scrollbar.hpp>
+#include <Geode/utils/file.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -582,14 +585,13 @@ void TRMenuPopup::buildToolsSection(CCNode* content) {
     content->addChild(ButtonCell::create("Apply Speed", "Apply", [this]() {
         auto* e = ReplayEngine::get();
         std::string source = m_toolsSpeed.empty() ? std::to_string(e->gameSpeed) : m_toolsSpeed;
-        char* end = nullptr;
-        float parsed = std::strtof(source.c_str(), &end);
-        if (end == source.c_str() || *end != '\0' || !std::isfinite(parsed) || parsed < 0.01f || parsed > 1000.f) {
+        auto parsed = toasty::parseFloat(source);
+        if (!parsed || !std::isfinite(*parsed) || *parsed < 0.01f || *parsed > 1000.f) {
             Notification::create("Speed must be between 0.01x and 1000x", NotificationIcon::Warning, 1.2f)->show();
             return;
         }
-        e->gameSpeed = parsed;
-        Mod::get()->setSavedValue<float>("eng_speed", parsed);
+        e->gameSpeed = *parsed;
+        Mod::get()->setSavedValue<float>("eng_speed", *parsed);
         TrajectoryPredictionService::get().markDirty();
         m_toolsSpeed.clear();
         switchTab(0);
@@ -810,6 +812,65 @@ void TRMenuPopup::buildReplaySection(CCNode* content) {
             switchTab(0);
         }));
     }
+
+    content->addChild(ButtonCell::create("Import TCBot replay", "Browse", [this]() {
+        geode::utils::file::FilePickOptions options;
+        options.filters = {
+            geode::utils::file::FilePickOptions::Filter { "TCBot replay", { "*.tcm" } },
+            geode::utils::file::FilePickOptions::Filter { "All files", { "*" } }
+        };
+        geode::WeakRef<TRMenuPopup> source(this);
+        geode::async::spawn(
+            geode::utils::file::pick(geode::utils::file::PickMode::OpenFile, std::move(options)),
+            [source](geode::Result<std::optional<std::filesystem::path>> result) {
+                auto popup = source.lock();
+                if (!popup) {
+                    return;
+                }
+                if (!result) {
+                    Notification::create(result.unwrapErr(), NotificationIcon::Error, 1.2f)->show();
+                    return;
+                }
+                auto selected = result.unwrap();
+                if (!selected) {
+                    return;
+                }
+                auto sourcePath = *selected;
+                auto directory = ReplayStorage::getReplayDirectoryPath();
+                std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
+                popup->m_replayImportTask.spawn(
+                    "Import TCBot replay",
+                    [sourcePath, author = std::move(author), directory]() mutable
+                        -> arc::Future<geode::Result<toasty::conversion::ReplayImportResult>> {
+                        co_return co_await geode::async::runtime().spawnBlocking<geode::Result<toasty::conversion::ReplayImportResult>>(
+                            [sourcePath, author = std::move(author), directory]() mutable {
+                                return toasty::tcbot::importToTTR3(
+                                    sourcePath,
+                                    std::move(author),
+                                    directory
+                                );
+                            }
+                        );
+                    },
+                    [source](geode::Result<toasty::conversion::ReplayImportResult> importResult) {
+                        auto current = source.lock();
+                        if (!current) {
+                            return;
+                        }
+                        if (!importResult) {
+                            Notification::create(importResult.unwrapErr(), NotificationIcon::Error, 1.4f)->show();
+                            return;
+                        }
+                        auto imported = std::move(importResult).unwrap();
+                        Notification::create("Imported " + imported.outputName, NotificationIcon::Success, 1.2f)->show();
+                        ReplayEngine::get()->reloadMacroList();
+                        current->m_replayListLoaded = false;
+                        current->switchTab(0);
+                    }
+                );
+            }
+        );
+    }));
 
     content->addChild(SectionHeaderCell::create("Saved Macros"));
 

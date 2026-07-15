@@ -3,6 +3,8 @@
 #include "core/replay_timing.hpp"
 #include "utils.hpp"
 
+#include <Geode/utils/file.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -875,7 +877,7 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
         std::string error;
         auto macro = toasty::ttr3::deserialize(data, &error);
         if (!macro) {
-            log::error("[TR-FMT][E006] TTR3 strict deserialize rejected file: {}", error);
+            log::debug("TTR3 parser rejected replay data: {}", error);
             return nullptr;
         }
         return new TTRMacro(toasty::ttr3::toTTRMacro(*macro));
@@ -898,7 +900,7 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
     }
     uint16_t supportedVersion = isTTR2 ? TTR2_FORMAT_VERSION : TTR_FORMAT_VERSION;
     if (version > supportedVersion) {
-        log::error("[TR-FMT][E008] TTR format version {} is newer than max supported ({}); refusing to load",
+        log::debug("Replay format version {} is newer than the supported version {}",
             version, supportedVersion);
         return nullptr;
     }
@@ -937,8 +939,8 @@ TTRMacro* TTRMacro::deserialize(std::vector<uint8_t> const& data) {
     return deserializeCompressedPayload(data, ctx.position, version, flags, headerSize, macro);
 }
 
-void TTRMacro::persist() {
-    persistToDirectory(ReplayStorage::getReplayDirectoryPath());
+bool TTRMacro::persist() {
+    return persistToDirectory(ReplayStorage::getReplayDirectoryPath());
 }
 
 double TTRMacro::maxSourceTps() const {
@@ -976,99 +978,82 @@ void TTRMacro::materializeTTR3RuntimeTicks(double runtimeTps) {
     }
 }
 
-void TTRMacro::persistToDirectory(std::filesystem::path const& directory) {
-    author = GJAccountManager::get()->m_username;
-    duration = 0.0;
-    double safeFramerate = std::isfinite(framerate) && framerate > 0.0 ? framerate : 240.0;
-    for (auto const& input : inputs) {
+bool TTRMacro::persistToDirectory(std::filesystem::path const& directory) {
+    TTRMacro pending = *this;
+    pending.author = GJAccountManager::get()->m_username;
+    pending.duration = 0.0;
+    double safeFramerate = std::isfinite(pending.framerate) && pending.framerate > 0.0
+        ? pending.framerate
+        : 240.0;
+    for (auto const& input : pending.inputs) {
         double inputTime = input.hasAbsoluteTime()
             ? input.timeSeconds
             : static_cast<double>(std::max(0, input.tick)) / safeFramerate;
         if (!input.hasAbsoluteTime() && std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0) {
             inputTime += input.cbsTimeOffset;
         }
-        duration = std::max(duration, inputTime);
+        pending.duration = std::max(pending.duration, inputTime);
     }
-    recordTimestamp = static_cast<int64_t>(std::time(nullptr));
-    accuracyMode = writableAccuracyMode(accuracyMode);
-    auto stripTimedOffsets = [](std::vector<TTRInput>& inputList) {
-        for (auto& input : inputList) {
-            input.stepOffset = 0.0f;
-            input.cbsTimeOffset = -1.0;
-            input.timeSeconds = -1.0;
-            input.swiftPairAnchor = false;
-        }
-    };
-    if (!usesTimedAccuracy(accuracyMode)) {
-        stripTimedOffsets(inputs);
-        anchors.clear();
-        checkpoints.clear();
-        for (auto& attempt : persistenceAttempts) {
-            stripTimedOffsets(attempt.inputs);
-            attempt.anchors.clear();
-        }
-        exactCbsTiming = false;
-    } else {
-        exactCbsTiming = std::any_of(inputs.begin(), inputs.end(), [](TTRInput const& input) {
-            return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
-        });
-        if (!exactCbsTiming) {
-            exactCbsTiming = std::any_of(persistenceAttempts.begin(), persistenceAttempts.end(), [](TTRAttemptSegment const& attempt) {
-                return std::any_of(attempt.inputs.begin(), attempt.inputs.end(), [](TTRInput const& input) {
-                    return std::isfinite(input.cbsTimeOffset) && input.cbsTimeOffset >= 0.0f;
-                });
-            });
-        }
+    pending.recordTimestamp = static_cast<int64_t>(std::time(nullptr));
+    normalizeTTRPersistenceTiming(pending);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(directory, ec)) {
+        std::filesystem::create_directories(directory, ec);
+    }
+    if (ec) {
+        log::error("Could not prepare replay directory '{}': {}",
+            toasty::pathToUtf8(directory), ec.message());
+        return false;
     }
 
-    if (!std::filesystem::exists(directory)) {
-        std::filesystem::create_directories(directory);
-    }
+    std::string excludedName = pending.loadedFromLegacyFormat() ? "" : pending.persistedName;
+    pending.name = ReplayStorage::makeUniqueReplayNameInDirectory(
+        directory,
+        pending.name,
+        excludedName
+    );
+    pending.persistedName = pending.name;
 
-    std::string excludedName = loadedFromLegacyFormat() ? "" : persistedName;
-    name = ReplayStorage::makeUniqueReplayNameInDirectory(directory, name, excludedName);
-    persistedName = name;
-
-    fileFormat = TTRFileFormat::TTR3;
-    auto outputPath = directory / (name + ".ttr3");
-    if (!saveToPath(outputPath)) {
-        return;
+    pending.fileFormat = TTRFileFormat::TTR3;
+    auto outputPath = directory / (pending.name + ".ttr3");
+    if (!pending.saveToPath(outputPath)) {
+        return false;
     }
+    *this = std::move(pending);
+    return true;
 }
 
 bool TTRMacro::saveToPath(std::filesystem::path const& path) {
-    if (auto parent = path.parent_path(); !parent.empty() && !std::filesystem::exists(parent)) {
-        std::filesystem::create_directories(parent);
+    std::error_code ec;
+    if (auto parent = path.parent_path(); !parent.empty() && !std::filesystem::exists(parent, ec)) {
+        std::filesystem::create_directories(parent, ec);
+    }
+    if (ec) {
+        log::error("Could not prepare replay path '{}': {}",
+            toasty::pathToUtf8(path), ec.message());
+        return false;
     }
 
     auto bytes = serialize();
     if (bytes.empty()) {
-        log::error("[TR-FMT][E009] serialize returned empty bytes for macro '{}' (engine bug)", name);
+        log::error("Could not save replay '{}': serialization produced no data", toasty::pathToUtf8(path));
         return false;
     }
 
-    std::ofstream output(path, std::ios::binary);
-    if (!output.is_open()) {
-        log::error("[TR-FMT][E002] failed to open replay file for write: {}",
-            toasty::pathToUtf8(path));
-        return false;
-    }
-    output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
-    output.close();
-    if (!output) {
-        log::error("[TR-FMT][E010] write of {} bytes failed for {}", bytes.size(),
-            toasty::pathToUtf8(path));
+    auto writeResult = utils::file::writeBinarySafe(path, bytes);
+    if (!writeResult) {
+        log::error("Could not write replay file '{}': {}",
+            toasty::pathToUtf8(path), writeResult.unwrapErr());
         return false;
     }
 
-    char const* tag = "I003";
-    char const* fmt = "TTR3";
-    if (fileFormat == TTRFileFormat::TTR2) { tag = "I002"; fmt = "TTR2"; }
-    else if (fileFormat == TTRFileFormat::LegacyTTR) { tag = "I001"; fmt = "TTR"; }
-    log::info(
-        "[TR-FMT][{}] saved {} macro {} ({} bytes, {} inputs, {} anchors)",
-        tag,
-        fmt,
+    char const* formatName = "TTR3";
+    if (fileFormat == TTRFileFormat::TTR2) formatName = "TTR2";
+    else if (fileFormat == TTRFileFormat::LegacyTTR) formatName = "TTR";
+    log::debug(
+        "Saved {} replay '{}' with {} bytes, {} inputs, and {} anchors",
+        formatName,
         toasty::pathToUtf8(path),
         bytes.size(),
         inputs.size(),
@@ -1085,7 +1070,7 @@ TTRMacro* TTRMacro::loadFromPath(std::filesystem::path const& path) {
 
     auto* macro = deserialize(*bytes);
     if (!macro) {
-        log::error("[TR-FMT][E011] deserialize returned null for {}", toasty::pathToUtf8(path));
+        log::error("Could not load replay '{}': the file is corrupt or unsupported", toasty::pathToUtf8(path));
         return nullptr;
     }
 
@@ -1103,11 +1088,10 @@ TTRMacro* TTRMacro::loadFromPath(std::filesystem::path const& path) {
     } else if (extension == ".ttr3" && macro->loadedFromTTR3()) {
         macro->fileFormat = TTRFileFormat::TTR3;
     }
-    char const* loadTag = "I010";
-    char const* loadFmt = "TTR";
-    if (macro->fileFormat == TTRFileFormat::TTR2) { loadTag = "I011"; loadFmt = "TTR2"; }
-    else if (macro->fileFormat == TTRFileFormat::TTR3) { loadTag = "I012"; loadFmt = "TTR3"; }
-    log::info("[TR-FMT][{}] loaded {} macro {} ({} inputs, {} anchors)", loadTag, loadFmt, stem,
+    char const* formatName = "TTR";
+    if (macro->fileFormat == TTRFileFormat::TTR2) formatName = "TTR2";
+    else if (macro->fileFormat == TTRFileFormat::TTR3) formatName = "TTR3";
+    log::debug("Loaded {} replay '{}' with {} inputs and {} anchors", formatName, stem,
         macro->inputs.size(), macro->anchors.size());
     return macro;
 }

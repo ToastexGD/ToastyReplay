@@ -3,7 +3,9 @@
 
 #include <Geode/loader/SettingV3.hpp>
 #include <Geode/utils/file.hpp>
+#include <Geode/utils/string.hpp>
 
+#include <algorithm>
 #include <array>
 #include <mutex>
 #include <unordered_map>
@@ -76,13 +78,13 @@ namespace toasty::lang {
         void loadLanguageTable(UiLanguage language, std::filesystem::path const& path, Table& outTable) {
             auto jsonResult = utils::file::readJson(path);
             if (!jsonResult) {
-                log::warn("Failed to load localization file '{}': {}", path.string(), jsonResult.unwrapErr());
+                log::warn("Could not load localization file '{}': {}", utils::string::pathToString(path), jsonResult.unwrapErr());
                 return;
             }
 
             auto tableResult = jsonResult.unwrap().as<Table>();
             if (!tableResult) {
-                log::warn("Failed to parse localization file '{}': {}", path.string(), tableResult.unwrapErr());
+                log::warn("Could not parse localization file '{}': {}", utils::string::pathToString(path), tableResult.unwrapErr());
                 return;
             }
             outTable = tableResult.unwrap();
@@ -94,13 +96,13 @@ namespace toasty::lang {
             auto const& english = state().english;
             for (auto const& [key, _] : english) {
                 if (!outTable.contains(key)) {
-                    log::warn("Localization file '{}' is missing key '{}', falling back to English", path.string(), key);
+                    log::debug("Localization file '{}' is missing key '{}'", utils::string::pathToString(path), key);
                 }
             }
 
             for (auto const& [key, _] : outTable) {
                 if (!english.contains(key)) {
-                    log::warn("Localization file '{}' contains unexpected key '{}'", path.string(), key);
+                    log::debug("Localization file '{}' contains unexpected key '{}'", utils::string::pathToString(path), key);
                 }
             }
         }
@@ -237,19 +239,55 @@ namespace toasty::lang {
         return lookupLocked(s, key);
     }
 
-    std::string trf(std::string_view key, fmt::format_args args) {
-        return detail::trfImpl(key, args);
-    }
-
     namespace detail {
-        std::string trfImpl(std::string_view key, fmt::format_args args) {
+        Result<std::string> interpolate(std::string_view pattern, std::span<FormatArg const> args) {
+            std::string output;
+            output.reserve(pattern.size());
+            size_t cursor = 0;
+            while (cursor < pattern.size()) {
+                if (pattern[cursor] == '{') {
+                    if (cursor + 1 < pattern.size() && pattern[cursor + 1] == '{') {
+                        output.push_back('{');
+                        cursor += 2;
+                        continue;
+                    }
+                    size_t close = pattern.find('}', cursor + 1);
+                    if (close == std::string_view::npos) {
+                        return Err("missing closing brace");
+                    }
+                    auto name = pattern.substr(cursor + 1, close - cursor - 1);
+                    auto value = std::find_if(args.begin(), args.end(), [name](FormatArg const& arg) {
+                        return arg.name == name;
+                    });
+                    if (value == args.end()) {
+                        return Err("unknown placeholder '{}'", name);
+                    }
+                    output += value->value;
+                    cursor = close + 1;
+                    continue;
+                }
+                if (pattern[cursor] == '}') {
+                    if (cursor + 1 < pattern.size() && pattern[cursor + 1] == '}') {
+                        output.push_back('}');
+                        cursor += 2;
+                        continue;
+                    }
+                    return Err("unexpected closing brace");
+                }
+                output.push_back(pattern[cursor]);
+                ++cursor;
+            }
+            return Ok(std::move(output));
+        }
+
+        std::string trfImpl(std::string_view key, std::span<FormatArg const> args) {
             auto pattern = std::string(tr(key));
-            try {
-                return fmt::vformat(pattern, args);
-            } catch (std::exception const& error) {
-                log::warn("Failed to format localization key '{}': {}", key, error.what());
+            auto formatted = interpolate(pattern, args);
+            if (!formatted) {
+                log::warn("Failed to format localization key '{}': {}", key, formatted.unwrapErr());
                 return pattern;
             }
+            return std::move(formatted).unwrap();
         }
     }
 }

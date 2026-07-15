@@ -308,9 +308,12 @@ inline bool shouldPreReconcileAnchorForExactInput(
     return dispatch == ExactInputDispatch::QueueNative;
 }
 
-inline bool requiresHigherRuntimeTps(double requiredTps, double runtimeTps) {
-    return std::isfinite(requiredTps) && std::isfinite(runtimeTps) &&
-        requiredTps > runtimeTps + 0.000001;
+inline double playbackRuntimeTps(double macroTps, double requiredTps) {
+    double result = std::isfinite(macroTps) && macroTps > 0.0 ? macroTps : 240.0;
+    if (std::isfinite(requiredTps) && requiredTps > result) {
+        result = requiredTps;
+    }
+    return result;
 }
 
 inline int materializeTickFromTime(double timeSeconds, double runtimeTps) {

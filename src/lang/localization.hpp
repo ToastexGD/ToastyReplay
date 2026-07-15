@@ -2,8 +2,12 @@
 
 #include <Geode/Geode.hpp>
 #include <fmt/format.h>
+#include <array>
+#include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace toasty::lang {
     enum class UiLanguage {
@@ -25,14 +29,25 @@ namespace toasty::lang {
     std::string_view getLanguageDisplayName(UiLanguage language);
 
     std::string_view tr(std::string_view key);
-    std::string trf(std::string_view key, fmt::format_args args);
+
+    struct FormatArg {
+        std::string name;
+        std::string value;
+    };
+
+    template <class T>
+    FormatArg arg(std::string_view name, T&& value) {
+        return {std::string(name), fmt::format("{}", std::forward<T>(value))};
+    }
 
     namespace detail {
-        std::string trfImpl(std::string_view key, fmt::format_args args);
+        std::string trfImpl(std::string_view key, std::span<FormatArg const> args);
     }
 
     template <class... Args>
     std::string trf(std::string_view key, Args&&... args) {
-        return detail::trfImpl(key, fmt::make_format_args(args...));
+        static_assert((std::is_same_v<std::remove_cvref_t<Args>, FormatArg> && ...));
+        std::array<FormatArg, sizeof...(Args)> values{std::forward<Args>(args)...};
+        return detail::trfImpl(key, values);
     }
 }

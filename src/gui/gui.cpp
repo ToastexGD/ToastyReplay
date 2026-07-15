@@ -3,6 +3,7 @@
 #include "gui/cocos/frontend.hpp"
 #include "gui/pride_mode.hpp"
 #include "lang/localization.hpp"
+#include "conversion/tcbot_import.hpp"
 #include "ToastyReplay.hpp"
 #include "audio/clicksounds.hpp"
 #include "hacks/autoclicker.hpp"
@@ -263,10 +264,6 @@ static std::string trString(std::string_view key) {
     return std::string(toasty::lang::tr(key));
 }
 
-static std::string trFormat(std::string_view key, fmt::format_args args) {
-    return toasty::lang::trf(key, args);
-}
-
 template <class... Args>
 static std::string trFormat(std::string_view key, Args&&... args) {
     return toasty::lang::trf(key, std::forward<Args>(args)...);
@@ -421,6 +418,12 @@ namespace {
         auto targetPath = replayDir / (macroName + std::string(requestedExtension));
         if (std::filesystem::is_regular_file(targetPath, ec) && !ec) {
             return targetPath;
+        }
+        if (requestedExtension == ".gdr") {
+            auto jsonPath = replayDir / (macroName + ".gdr.json");
+            if (std::filesystem::is_regular_file(jsonPath, ec) && !ec) {
+                return jsonPath;
+            }
         }
 
         std::string wantedExtension(requestedExtension);
@@ -702,6 +705,37 @@ void MenuInterface::refreshReplayListIfNeeded(bool force) {
     replayListDirty = false;
     replayRefreshQueued = false;
     captureReplayDirectoryTimestamp();
+}
+
+void MenuInterface::finishReplayImport(Result<toasty::conversion::ReplayImportResult> result) {
+    replayConvertRunning = false;
+    replayConvertShowStandaloneStatus = true;
+    if (!result) {
+        replayConvertStatusOk = false;
+        replayConvertStatus = result.unwrapErr();
+        return;
+    }
+
+    auto upgrade = std::move(result).unwrap();
+    replayConvertStatusOk = true;
+    replayConvertStatus = upgrade.message;
+    markReplayListDirty();
+    refreshReplayListIfNeeded(true);
+
+    if (TTRMacro* loaded = TTRMacro::loadFromDisk(upgrade.outputName)) {
+        if (auto* engine = ReplayEngine::get()) {
+            engine->pendingPlaybackStart = false;
+            engine->discardActiveMacro();
+            engine->activeTTR = loaded;
+            engine->ttrMode = true;
+            engine->clearActiveMacroDirty();
+        } else {
+            delete loaded;
+        }
+    } else {
+        replayConvertStatusOk = false;
+        replayConvertStatus += "\nThe TTR3 file was written but could not be loaded.";
+    }
 }
 
 MenuInterface* MenuInterface::get() {
@@ -1602,9 +1636,9 @@ void MenuInterface::drawStatusBar() {
     int tick = PlayLayer::get() ? engine->lastTickIndex : 0;
     auto statusText = trFormat(
         "TPS: {tps}    Speed: {speed}x    Tick: {tick}",
-        fmt::arg("tps", fmt::format("{:.0f}", engine->tickRate)),
-        fmt::arg("speed", fmt::format("{:.2f}", engine->gameSpeed)),
-        fmt::arg("tick", tick)
+        toasty::lang::arg("tps", fmt::format("{:.0f}", engine->tickRate)),
+        toasty::lang::arg("speed", fmt::format("{:.2f}", engine->gameSpeed)),
+        toasty::lang::arg("tick", tick)
     );
 
     ImVec2 textSize = ImGui::CalcTextSize(statusText.c_str());
@@ -1617,7 +1651,7 @@ void MenuInterface::drawStatusBar() {
     if (auto* statusAccuracyTag = getAccuracyTag(statusAccuracyMode)) {
         std::string accuracyText = trFormat(
             "{mode} ON",
-            fmt::arg("mode", statusAccuracyTag)
+            toasty::lang::arg("mode", statusAccuracyTag)
         );
         const char* cbfTxt = accuracyText.c_str();
         ImVec2 cbfSize = ImGui::CalcTextSize(cbfTxt);
@@ -1722,7 +1756,7 @@ void MenuInterface::drawReplayTab() {
             Widgets::StatusBadge("PLAT", getPlatformerTagColor());
         }
         ImGui::SameLine();
-        auto actionsText = trFormat("Actions: {count}", fmt::arg("count", actionCount));
+        auto actionsText = trFormat("Actions: {count}", toasty::lang::arg("count", actionCount));
         ImGui::TextUnformatted(actionsText.c_str());
         ImGui::Dummy(ImVec2(0, 4));
 
@@ -1816,15 +1850,15 @@ void MenuInterface::drawReplayTab() {
         ImGui::SameLine();
         auto playbackInfo = trFormat(
             "{name} | Actions: {count}",
-            fmt::arg("name", macName),
-            fmt::arg("count", actionCount)
+            toasty::lang::arg("name", macName),
+            toasty::lang::arg("count", actionCount)
         );
         ImGui::TextUnformatted(playbackInfo.c_str());
 
         if (engine->startPosActive) {
             Widgets::StatusBadge("STARTPOS", ImVec4(0.3f, 0.7f, 1.0f, 1.0f));
             ImGui::SameLine();
-            auto offsetText = trFormat("Offset: {ticks} ticks", fmt::arg("ticks", engine->tickOffset));
+            auto offsetText = trFormat("Offset: {ticks} ticks", toasty::lang::arg("ticks", engine->tickOffset));
             ImGui::TextUnformatted(offsetText.c_str());
         }
 
@@ -1873,8 +1907,8 @@ void MenuInterface::drawReplayTab() {
     if (ImGui::ArrowButton("##prevPageReplay", ImGuiDir_Up) && replayCurrentPage > 0) replayCurrentPage--;
     ImGui::SameLine();
     auto replayPageText = trFormat("Page {current} / {total}",
-        fmt::arg("current", replayCurrentPage + 1),
-        fmt::arg("total", totalPages));
+        toasty::lang::arg("current", replayCurrentPage + 1),
+        toasty::lang::arg("total", totalPages));
     ImGui::TextUnformatted(replayPageText.c_str());
     ImGui::SameLine();
     if (ImGui::ArrowButton("##nextPageReplay", ImGuiDir_Down) && replayCurrentPage < totalPages - 1) replayCurrentPage++;
@@ -1960,7 +1994,7 @@ void MenuInterface::drawReplayTab() {
         if (ImGui::IsItemHovered() && ImGui::IsMouseDown(1)) {
             std::string tooltip;
             if (isLegacyCBS) {
-                tooltip += trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+                tooltip += trString("Legacy CBS macros are playback only. Re-record in TTR3 CBS mode for exact timing.");
             } else if (isCBS) {
                 tooltip += trString("CBS macros do not work on other menus!");
             }
@@ -2168,7 +2202,7 @@ void MenuInterface::drawReplayTab() {
                 ImVec2 tipPos = ImGui::GetItemRectMin();
                 tipPos.y += 34.0f;
                 auto tipText = replayActionIsLegacyCBS
-                    ? trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.")
+                    ? trString("Legacy CBS macros are playback only. Re-record in TTR3 CBS mode for exact timing.")
                     : trString("CBS/CBF macros cannot be edited");
                 ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), tipText.c_str());
             } else if (Widgets::StyledButton("Open Macro Editor##actionEdit", ImVec2(actionBtnW, 30.0f), theme, anim, 6.0f)) {
@@ -2197,7 +2231,7 @@ void MenuInterface::drawReplayTab() {
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f);
             }
             bool convertClicked = Widgets::StyledButton(
-                replayConvertRunning ? "Converting...##actionConvertTTR" : "Convert to TTR2##actionConvertTTR",
+                replayConvertRunning ? "Converting...##actionConvertTTR" : "Convert to TTR3##actionConvertTTR",
                 ImVec2(actionBtnW, 30.0f),
                 theme,
                 anim,
@@ -2209,7 +2243,7 @@ void MenuInterface::drawReplayTab() {
             if (replayActionIsLegacyCBS) {
                 ImVec2 tipPos = ImGui::GetItemRectMin();
                 tipPos.y += 34.0f;
-                auto tipText = trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+                auto tipText = trString("Legacy CBS macros are playback only. Re-record in TTR3 CBS mode for exact timing.");
                 ImGui::GetWindowDrawList()->AddText(tipPos, IM_COL32(255, 180, 80, 200), tipText.c_str());
             }
             if (convertClicked && canStartConversion) {
@@ -2220,11 +2254,7 @@ void MenuInterface::drawReplayTab() {
                         replayConvertRunning = false;
                         replayConvertStatusOk = false;
                         replayConvertStatus = "Replay file was not found.";
-                        replayConvertWarnings.clear();
                         replayConvertShowStandaloneStatus = true;
-                        replayConvertMarkSourceOnComplete = false;
-                        replayConvertSelectOutputOnComplete = false;
-                        replayConvertSourceKeyOnComplete.clear();
                         return;
                     }
 
@@ -2233,14 +2263,25 @@ void MenuInterface::drawReplayTab() {
                     replayConvertRunning = true;
                     replayConvertStatusOk = false;
                     replayConvertStatus = trString("Converting...");
-                    replayConvertWarnings.clear();
                     replayConvertShowStandaloneStatus = true;
-                    replayConvertMarkSourceOnComplete = false;
-                    replayConvertSelectOutputOnComplete = true;
-                    replayConvertSourceKeyOnComplete.clear();
-                    replayConvertFuture = std::async(std::launch::async, [sourcePath, author, outputDirectory]() {
-                        return toasty::conversion::convertNativeGDRToTTRDuplicate(sourcePath, author, outputDirectory);
-                    });
+                    replayConvertTask.spawn(
+                        "Upgrade legacy GDR to TTR3",
+                        [sourcePath, author = std::move(author), outputDirectory]() mutable
+                            -> arc::Future<Result<toasty::conversion::ReplayImportResult>> {
+                            co_return co_await async::runtime().spawnBlocking<Result<toasty::conversion::ReplayImportResult>>(
+                                [sourcePath, author = std::move(author), outputDirectory]() mutable {
+                                    return toasty::gdr_upgrade::upgradeLegacyGDRToTTR3(
+                                        sourcePath,
+                                        std::move(author),
+                                        outputDirectory
+                                    );
+                                }
+                            );
+                        },
+                        [this](Result<toasty::conversion::ReplayImportResult> result) {
+                            finishReplayImport(std::move(result));
+                        }
+                    );
                 };
                 ImGui::CloseCurrentPopup();
                 engine->runWithUnsavedMacroGuard(std::move(startConversion));
@@ -2351,14 +2392,7 @@ void MenuInterface::drawReplayTab() {
                     "All ToastyReplay-compatible macros",
                     {
                         "*.ttr3", "*.ttr2", "*.ttr",
-                        "*.gdr", "*.gdr.json", "*.gdr2",
-                        "*.mhr", "*.mhr.json", "*.echo", "*.echo.json",
-                        "*.zbf", "*.ybf", "*.ybot", "*.thyst", "*.osr",
-                        "*.macro", "*.replaybot", "*.rsh", "*.kd", "*.txt",
-                        "*.re", "*.re2", "*.re3", "*.ddhor",
-                        "*.xbot", "*.xd", "*.qb", "*.rbot",
-                        "*.zr", "*.slc", "*.slc2", "*.slc3",
-                        "*.uv", "*.tcm", "*.json", "*.replay"
+                        "*.gdr", "*.gdr.json", "*.tcm"
                     }
                 },
                 geode::utils::file::FilePickOptions::Filter { "All files", { "*" } }
@@ -2366,7 +2400,7 @@ void MenuInterface::drawReplayTab() {
             auto destDir = replayDir;
             geode::async::spawn(
                 geode::utils::file::pick(geode::utils::file::PickMode::OpenFile, std::move(options)),
-                [destDir](geode::Result<std::optional<std::filesystem::path>> result) {
+                [this, destDir](geode::Result<std::optional<std::filesystem::path>> result) {
                     if (!result.isOk()) {
                         Notification::create(
                             fmt::format("Import failed: {}", result.unwrapErr()),
@@ -2379,6 +2413,40 @@ void MenuInterface::drawReplayTab() {
                         return;
                     }
                     auto sourcePath = picked.value();
+                    std::string extension = toasty::pathToUtf8(sourcePath.extension());
+                    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+                        return static_cast<char>(std::tolower(ch));
+                    });
+                    if (extension == ".tcm") {
+                        if (replayConvertRunning) {
+                            Notification::create("A replay import is already running.", NotificationIcon::Warning)->show();
+                            return;
+                        }
+                        std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
+                        replayConvertRunning = true;
+                        replayConvertStatusOk = false;
+                        replayConvertStatus = "Importing TCBot replay...";
+                        replayConvertShowStandaloneStatus = true;
+                        replayConvertTask.spawn(
+                            "Import TCBot replay",
+                            [sourcePath, author = std::move(author), destDir]() mutable
+                                -> arc::Future<Result<toasty::conversion::ReplayImportResult>> {
+                                co_return co_await async::runtime().spawnBlocking<Result<toasty::conversion::ReplayImportResult>>(
+                                    [sourcePath, author = std::move(author), destDir]() mutable {
+                                        return toasty::tcbot::importToTTR3(
+                                            sourcePath,
+                                            std::move(author),
+                                            destDir
+                                        );
+                                    }
+                                );
+                            },
+                            [this](Result<toasty::conversion::ReplayImportResult> importResult) {
+                                finishReplayImport(std::move(importResult));
+                            }
+                        );
+                        return;
+                    }
                     std::error_code ec;
                     if (!std::filesystem::exists(destDir, ec)) {
                         std::filesystem::create_directories(destDir, ec);
@@ -2386,12 +2454,12 @@ void MenuInterface::drawReplayTab() {
                     auto destPath = destDir / sourcePath.filename();
                     if (std::filesystem::exists(destPath, ec)) {
                         int suffix = 1;
-                        auto stem = sourcePath.stem();
-                        auto ext = sourcePath.extension();
-                        while (std::filesystem::exists(destDir / (stem.string() + "_" + std::to_string(suffix) + ext.string()), ec)) {
+                        auto stem = toasty::pathToUtf8(sourcePath.stem());
+                        auto extension = toasty::pathToUtf8(sourcePath.extension());
+                        while (std::filesystem::exists(destDir / (stem + "_" + std::to_string(suffix) + extension), ec)) {
                             ++suffix;
                         }
-                        destPath = destDir / (stem.string() + "_" + std::to_string(suffix) + ext.string());
+                        destPath = destDir / (stem + "_" + std::to_string(suffix) + extension);
                     }
                     std::filesystem::copy_file(sourcePath, destPath, std::filesystem::copy_options::overwrite_existing, ec);
                     if (ec) {
@@ -2418,309 +2486,14 @@ void MenuInterface::drawReplayTab() {
         }
     }
 
-    if (replayConvertRunning && replayConvertFuture.valid() &&
-        replayConvertFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        auto result = replayConvertFuture.get();
-        replayConvertRunning = false;
-        replayConvertStatusOk = result.ok;
-        replayConvertStatus = result.message;
-        replayConvertWarnings = result.warnings;
-        if (result.ok) {
-            if (replayConvertMarkSourceOnComplete && !replayConvertSourceKeyOnComplete.empty()) {
-                engine->convertedForeignReplaySources.insert(replayConvertSourceKeyOnComplete);
-            }
-            if (!result.outputName.empty() && result.detectedFormat != toasty::conversion::ReplayFormat::Unknown) {
-                engine->convertedMacroSources[result.outputName] = toasty::conversion::formatDisplayName(result.detectedFormat);
-            }
-            markReplayListDirty();
-            refreshReplayListIfNeeded(true);
-            if (replayConvertSelectOutputOnComplete && !result.outputName.empty()) {
-                if (TTRMacro* loaded = TTRMacro::loadFromDisk(result.outputName)) {
-                    engine->pendingPlaybackStart = false;
-                    engine->discardActiveMacro();
-                    engine->activeTTR = loaded;
-                    engine->ttrMode = true;
-                    engine->clearActiveMacroDirty();
-                } else {
-                    replayConvertStatusOk = false;
-                    replayConvertStatus += "\nConverted, but failed to load the new TTR2.";
-                }
-            }
-        }
-        replayConvertMarkSourceOnComplete = false;
-        replayConvertSelectOutputOnComplete = false;
-        replayConvertSourceKeyOnComplete.clear();
-    }
-
     if (replayConvertShowStandaloneStatus && !replayConvertStatus.empty()) {
         ImGui::Dummy(ImVec2(0, 6));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
         ImGui::PushStyleColor(ImGuiCol_Text, replayConvertStatusOk ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f) : ImVec4(1.0f, 0.7f, 0.25f, 1.0f));
         ImGui::TextWrapped("%s", replayConvertStatus.c_str());
         ImGui::PopStyleColor();
-        for (auto const& warning : replayConvertWarnings) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
-            ImGui::TextWrapped("%s", warning.c_str());
-            ImGui::PopStyleColor();
-        }
     }
 
-    ImGui::Dummy(ImVec2(0, 6));
-    if (Widgets::CollapsibleSectionHeader("Conversions", replayConversionsExpanded, theme)) {
-        replayConversionsExpanded = !replayConversionsExpanded;
-    }
-
-    if (replayConversionsExpanded) {
-    ImGui::Dummy(ImVec2(0, 2));
-    Widgets::SectionHeader("Needs Conversion", theme);
-
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputTextWithHint("##foreignSearch", trString("Search...").c_str(), foreignSearchBuffer, sizeof(foreignSearchBuffer))) {
-        foreignCurrentPage = 0;
-    }
-    ImGui::Dummy(ImVec2(0, 4));
-
-    std::vector<toasty::conversion::DetectedReplay> filteredForeign;
-    std::string foreignSearchLower = foreignSearchBuffer;
-    std::transform(foreignSearchLower.begin(), foreignSearchLower.end(), foreignSearchLower.begin(), ::tolower);
-    for (auto const& entry : engine->foreignReplays) {
-        std::string nameLower = entry.filename;
-        std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-        if (foreignSearchLower.empty() || nameLower.find(foreignSearchLower) != std::string::npos) {
-            filteredForeign.push_back(entry);
-        }
-    }
-
-    int totalForeign = (int)filteredForeign.size();
-    int totalForeignPages = (totalForeign + replayPageSizeConversion - 1) / replayPageSizeConversion;
-    if (totalForeignPages == 0) totalForeignPages = 1;
-    if (foreignCurrentPage >= totalForeignPages) foreignCurrentPage = totalForeignPages - 1;
-    if (foreignCurrentPage < 0) foreignCurrentPage = 0;
-
-    ImGui::BeginGroup();
-    if (ImGui::ArrowButton("##prevForeignPage", ImGuiDir_Up) && foreignCurrentPage > 0) foreignCurrentPage--;
-    ImGui::SameLine();
-    auto foreignPageText = trFormat("Page {current} / {total}",
-        fmt::arg("current", foreignCurrentPage + 1),
-        fmt::arg("total", totalForeignPages));
-    ImGui::TextUnformatted(foreignPageText.c_str());
-    ImGui::SameLine();
-    if (ImGui::ArrowButton("##nextForeignPage", ImGuiDir_Down) && foreignCurrentPage < totalForeignPages - 1) foreignCurrentPage++;
-    ImGui::EndGroup();
-    ImGui::Dummy(ImVec2(0, 8));
-
-    float convertListH = std::max(60.0f, std::min(150.0f, (float)filteredForeign.size() * 28.0f + listPadY * 2.0f));
-    ImVec2 convertListPos = ImGui::GetCursorScreenPos();
-    float convertListW = ImGui::GetContentRegionAvail().x;
-    drawSolidRect(ImGui::GetWindowDrawList(), convertListPos, ImVec2(convertListPos.x + convertListW, convertListPos.y + convertListH), theme.cornerRadius, theme, 0.42f);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-    ImGui::BeginChild("##ForeignMacroList", ImVec2(-1, convertListH), false);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-    ImGui::Dummy(ImVec2(0, listPadY));
-
-    if (filteredForeign.empty()) {
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.4f));
-        imguiTextTr("No old macros found");
-        ImGui::PopStyleColor();
-    }
-
-    int foreignStartIdx = foreignCurrentPage * replayPageSizeConversion;
-    int foreignEndIdx = std::min(foreignStartIdx + replayPageSizeConversion, totalForeign);
-    for (int foreignIdx = foreignStartIdx; foreignIdx < foreignEndIdx; ++foreignIdx) {
-        auto const& entry = filteredForeign[foreignIdx];
-        auto pathKey = toasty::conversion::normalizedPathKey(entry.path);
-        bool selected = replayConvertSelectedPath == pathKey;
-        bool converted = entry.converted || engine->convertedForeignReplaySources.count(pathKey) > 0;
-        bool canConvert = entry.supported && !replayConvertRunning;
-        std::string statusText = converted ? "Converted" : (entry.supported ? "Convert" : (entry.recognized ? "Unsupported" : "Error"));
-        ImVec4 statusColor = converted
-            ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f)
-            : (entry.supported ? theme.getAccent() : ImVec4(1.0f, 0.35f, 0.28f, 1.0f));
-
-        ImGui::PushID(pathKey.c_str());
-        float rowH = ImGui::GetTextLineHeight() + 8.0f;
-        float fullRowW = ImGui::GetContentRegionAvail().x;
-        ImVec2 rowStart = ImGui::GetCursorScreenPos();
-        bool rowActivated = ImGui::Selectable("##foreignrow", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(fullRowW, rowH));
-        if (ImGui::IsItemHovered() && !entry.detail.empty()) {
-            ImGui::SetTooltip("%s", entry.detail.c_str());
-        }
-        if (rowActivated) {
-            replayConvertSelectedPath = pathKey;
-            std::strncpy(replayConvertNameBuffer, entry.stem.c_str(), sizeof(replayConvertNameBuffer) - 1);
-            replayConvertNameBuffer[sizeof(replayConvertNameBuffer) - 1] = '\0';
-            replayConvertTargetTTR = true;
-            replayConvertStatus.clear();
-            replayConvertWarnings.clear();
-            replayConvertStatusOk = false;
-            replayConvertShowStandaloneStatus = false;
-        }
-
-        std::string nameLabel = entry.filename.empty() ? entry.stem : entry.filename;
-        std::string formatLabel = toasty::conversion::formatDisplayName(entry.format);
-        float statusW = ImGui::CalcTextSize(statusText.c_str()).x + 10.0f;
-        float formatW = ImGui::CalcTextSize(formatLabel.c_str()).x + 12.0f;
-        float maxNameW = std::max(40.0f, fullRowW - statusW - formatW - listPadX * 2.0f - 22.0f);
-        if (ImGui::CalcTextSize(nameLabel.c_str()).x > maxNameW) {
-            while (!nameLabel.empty() && ImGui::CalcTextSize((nameLabel + "...").c_str()).x > maxNameW) {
-                nameLabel.pop_back();
-            }
-            nameLabel += "...";
-        }
-
-        float itemMinY = rowStart.y;
-        float itemH = rowH;
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(rowStart.x + listPadX, itemMinY + (itemH - ImGui::GetTextLineHeight()) * 0.5f),
-            entry.supported ? theme.getTextU32() : toU32(ImVec4(1.0f, 1.0f, 1.0f, 0.55f)),
-            nameLabel.c_str()
-        );
-
-        float tagX = rowStart.x + fullRowW - listPadX;
-        ImVec2 statusSize = ImGui::CalcTextSize(statusText.c_str());
-        tagX -= statusSize.x;
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(tagX, itemMinY + (itemH - statusSize.y) * 0.5f),
-            toU32(statusColor),
-            statusText.c_str()
-        );
-        ImVec2 formatSize = ImGui::CalcTextSize(formatLabel.c_str());
-        tagX -= formatSize.x + 12.0f;
-        ImGui::GetWindowDrawList()->AddText(
-            ImVec2(tagX, itemMinY + (itemH - formatSize.y) * 0.5f),
-            toU32(ImVec4(1.0f, 0.85f, 0.35f, entry.recognized ? 1.0f : 0.55f)),
-            formatLabel.c_str()
-        );
-
-        if (rowActivated && canConvert && ImGui::IsMouseDoubleClicked(0)) {
-            replayConvertStatus.clear();
-        }
-        ImGui::PopID();
-    }
-
-    ImGui::EndChild();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor();
-
-    auto selectedForeign = std::find_if(engine->foreignReplays.begin(), engine->foreignReplays.end(), [&](auto const& entry) {
-        return toasty::conversion::normalizedPathKey(entry.path) == replayConvertSelectedPath;
-    });
-
-    if (selectedForeign != engine->foreignReplays.end()) {
-        bool converted = selectedForeign->converted || engine->convertedForeignReplaySources.count(replayConvertSelectedPath) > 0;
-        ImGui::Dummy(ImVec2(0, 6));
-        ImVec2 panelPos = ImGui::GetCursorScreenPos();
-        float panelW = ImGui::GetContentRegionAvail().x;
-        float panelH = selectedForeign->supported ? 134.0f : 82.0f;
-        drawSolidRect(ImGui::GetWindowDrawList(), panelPos, ImVec2(panelPos.x + panelW, panelPos.y + panelH), theme.cornerRadius, theme, 0.38f);
-        ImGui::Dummy(ImVec2(0, 8));
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-        ImGui::TextColored(theme.getAccent(), "%s", selectedForeign->filename.c_str());
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-        auto detectedText = fmt::format("{}{}", toasty::conversion::formatDisplayName(selectedForeign->format), converted ? " | Converted" : "");
-        ImGui::TextUnformatted(detectedText.c_str());
-
-        if (!selectedForeign->detail.empty()) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.35f, 1.0f));
-            ImGui::TextWrapped("%s", selectedForeign->detail.c_str());
-            ImGui::PopStyleColor();
-        }
-
-        if (selectedForeign->supported) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-            float targetW = (ImGui::GetContentRegionAvail().x - listPadX - 10.0f) / 2.0f;
-            if (Widgets::PillButton("TTR2##convertTarget", replayConvertTargetTTR, targetW, theme, anim)) {
-                replayConvertTargetTTR = true;
-            }
-            ImGui::SameLine(0, 10);
-            if (Widgets::PillButton("GDR##convertTarget", !replayConvertTargetTTR, targetW, theme, anim)) {
-                replayConvertTargetTTR = false;
-            }
-
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - listPadX);
-            ImGui::InputText("##convertOutputName", replayConvertNameBuffer, sizeof(replayConvertNameBuffer));
-
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-            bool canStartConversion = !replayConvertRunning;
-            if (!canStartConversion) {
-                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f);
-            }
-            bool convertClicked = Widgets::StyledButton(replayConvertRunning ? "Converting..." : "Convert", ImVec2(ImGui::GetContentRegionAvail().x - listPadX, 28.0f), theme, anim, 6.0f);
-            if (!canStartConversion) {
-                ImGui::PopStyleVar();
-            }
-            if (convertClicked && canStartConversion) {
-                auto sourcePath = selectedForeign->path;
-                auto target = replayConvertTargetTTR ? toasty::conversion::ConversionTarget::TTR3 : toasty::conversion::ConversionTarget::GDR;
-                std::string requestedName = replayConvertNameBuffer;
-                std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
-                auto outputDirectory = getReplayDirectoryPath();
-                replayConvertRunning = true;
-                replayConvertStatusOk = false;
-                replayConvertStatus = trString("Converting...");
-                replayConvertWarnings.clear();
-                replayConvertShowStandaloneStatus = false;
-                replayConvertMarkSourceOnComplete = true;
-                replayConvertSelectOutputOnComplete = false;
-                replayConvertSourceKeyOnComplete = replayConvertSelectedPath;
-                replayConvertFuture = std::async(std::launch::async, [sourcePath, target, requestedName, author, outputDirectory]() {
-                    return toasty::conversion::convertReplay(sourcePath, target, requestedName, author, outputDirectory);
-                });
-            }
-        }
-
-        if (!replayConvertShowStandaloneStatus && !replayConvertStatus.empty()) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-            ImGui::PushStyleColor(ImGuiCol_Text, replayConvertStatusOk ? ImVec4(0.3f, 1.0f, 0.45f, 1.0f) : ImVec4(1.0f, 0.7f, 0.25f, 1.0f));
-            ImGui::TextWrapped("%s", replayConvertStatus.c_str());
-            ImGui::PopStyleColor();
-        }
-        if (!replayConvertShowStandaloneStatus) {
-            for (auto const& warning : replayConvertWarnings) {
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
-                ImGui::TextWrapped("%s", warning.c_str());
-                ImGui::PopStyleColor();
-            }
-        }
-        ImGui::Dummy(ImVec2(0, 4));
-    }
-
-    static std::string convertibleFormatsText = [] {
-        std::string text;
-        for (auto format : toasty::conversion::supportedFormats()) {
-            if (!text.empty()) {
-                text += ", ";
-            }
-            text += toasty::conversion::formatDisplayName(format);
-        }
-        return text;
-    }();
-
-    ImGui::Dummy(ImVec2(0, 6));
-    Widgets::SectionHeader("Convertible Formats", theme);
-    ImVec2 formatsPos = ImGui::GetCursorScreenPos();
-    float formatsW = ImGui::GetContentRegionAvail().x;
-    float formatsWrapW = std::max(40.0f, formatsW - listPadX * 2.0f);
-    float formatsTextH = ImGui::CalcTextSize(convertibleFormatsText.c_str(), nullptr, false, formatsWrapW).y;
-    float formatsH = std::max(54.0f, formatsTextH + listPadY * 2.0f + 4.0f);
-    float formatsCursorY = ImGui::GetCursorPosY();
-    drawSolidRect(ImGui::GetWindowDrawList(), formatsPos, ImVec2(formatsPos.x + formatsW, formatsPos.y + formatsH), theme.cornerRadius, theme, 0.34f);
-    ImGui::SetCursorPosY(formatsCursorY + listPadY);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + listPadX);
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + formatsWrapW);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.72f));
-    ImGui::TextUnformatted(convertibleFormatsText.c_str());
-    ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
-    ImGui::SetCursorPosY(formatsCursorY + formatsH);
-    }
 
     if (engine->hasMacro() && engine->engineMode == MODE_EXECUTE && PlayLayer::get()) {
         size_t actionCount = 0;
@@ -2739,7 +2512,7 @@ void MenuInterface::drawReplayTab() {
 
         ImGui::Dummy(ImVec2(0, 4));
         Widgets::SectionHeader("Loaded Macro", theme);
-        auto nameText = trFormat("Name: {name}", fmt::arg("name", loadedName));
+        auto nameText = trFormat("Name: {name}", toasty::lang::arg("name", loadedName));
         ImGui::TextUnformatted(nameText.c_str());
         if (engine->ttrMode) {
             ImGui::SameLine();
@@ -2762,10 +2535,10 @@ void MenuInterface::drawReplayTab() {
             ImGui::Text("(%s)", platformerText.c_str());
             ImGui::PopStyleColor();
         }
-        auto loadedActions = trFormat("Actions: {count}", fmt::arg("count", actionCount));
+        auto loadedActions = trFormat("Actions: {count}", toasty::lang::arg("count", actionCount));
         ImGui::TextUnformatted(loadedActions.c_str());
         if (engine->ttrMode && engine->activeTTR) {
-            auto anchorsText = trFormat("Anchors: {count}", fmt::arg("count", engine->activeTTR->anchors.size()));
+            auto anchorsText = trFormat("Anchors: {count}", toasty::lang::arg("count", engine->activeTTR->anchors.size()));
             ImGui::TextUnformatted(anchorsText.c_str());
         }
 
@@ -2777,7 +2550,7 @@ void MenuInterface::drawToolsTab() {
     ReplayEngine* engine = ReplayEngine::get();
 
     Widgets::SectionHeader("TPS Control", theme);
-    auto currentTpsText = trFormat("Current: {value} TPS", fmt::arg("value", fmt::format("{:.0f}", engine->tickRate)));
+    auto currentTpsText = trFormat("Current: {value} TPS", toasty::lang::arg("value", fmt::format("{:.0f}", engine->tickRate)));
     ImGui::TextColored(theme.getAccent(), "%s", currentTpsText.c_str());
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
@@ -2820,7 +2593,7 @@ void MenuInterface::drawToolsTab() {
 
     ImGui::Dummy(ImVec2(0, 8));
     Widgets::SectionHeader("Speed Control", theme);
-    auto currentSpeedText = trFormat("Current: {value}x", fmt::arg("value", fmt::format("{:.2f}", engine->gameSpeed)));
+    auto currentSpeedText = trFormat("Current: {value}x", toasty::lang::arg("value", fmt::format("{:.2f}", engine->gameSpeed)));
     ImGui::TextColored(theme.getAccent(), "%s", currentSpeedText.c_str());
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 90);
@@ -2954,9 +2727,9 @@ void MenuInterface::drawHacksTab() {
         ImGui::TextColored(hitColor, "%s", accuracyText.c_str());
         auto deathFrameText = trFormat(
             "Deaths: {deaths} | Unsafe: {unsafe} | Frames: {frames}",
-            fmt::arg("deaths", engine->noclipDeathEvents),
-            fmt::arg("unsafe", engine->noclipUnsafeFrames),
-            fmt::arg("frames", engine->noclipTotalFrames)
+            toasty::lang::arg("deaths", engine->noclipDeathEvents),
+            toasty::lang::arg("unsafe", engine->noclipUnsafeFrames),
+            toasty::lang::arg("frames", engine->noclipTotalFrames)
         );
         ImGui::TextUnformatted(deathFrameText.c_str());
 
@@ -3609,8 +3382,11 @@ void MenuInterface::drawRenderTab() {
     imguiTextTr("FPS");
     ImGui::SameLine(inputW);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputText("##renderFPS", renderFpsBuf, sizeof(renderFpsBuf), ImGuiInputTextFlags_CharsDecimal))
-        mod->setSavedValue("render_fps", (int64_t)std::atoi(renderFpsBuf));
+    if (ImGui::InputText("##renderFPS", renderFpsBuf, sizeof(renderFpsBuf), ImGuiInputTextFlags_CharsDecimal)) {
+        if (auto fps = toasty::parseInteger<int64_t>(renderFpsBuf)) {
+            mod->setSavedValue("render_fps", *fps);
+        }
+    }
 
     if (showAdvancedWarning) {
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -4017,12 +3793,12 @@ void MenuInterface::drawAutoclickerTab() {
     auto cpsText = ac->isTimedMode()
         ? trFormat(
             "~{cps} clicks/sec with fractional substeps",
-            fmt::arg("cps", fmt::format("{:.0f}", cps))
+            toasty::lang::arg("cps", fmt::format("{:.0f}", cps))
         )
         : trFormat(
             "~{cps} clicks/sec at {tps} TPS",
-            fmt::arg("cps", fmt::format("{:.1f}", cps)),
-            fmt::arg("tps", fmt::format("{:.0f}", eng->tickRate))
+            toasty::lang::arg("cps", fmt::format("{:.1f}", cps)),
+            toasty::lang::arg("tps", fmt::format("{:.0f}", eng->tickRate))
         );
     ImGui::TextUnformatted(cpsText.c_str());
     if (ac->isTimedMode()) {
@@ -4118,10 +3894,10 @@ void MenuInterface::drawClicksTab() {
         ImGui::PushStyleColor(ImGuiCol_Text, theme.getAccentU32() ? ImVec4(theme.textSecondary) : ImVec4(0.6f, 0.6f, 0.65f, 1.0f));
         auto packStats = trFormat(
             "Hard: {hard}  Soft: {soft}  Release: {release}  Noise: {noise}",
-            fmt::arg("hard", csm->p1Pack.hardCount()),
-            fmt::arg("soft", csm->p1Pack.softCount()),
-            fmt::arg("release", csm->p1Pack.releaseCount()),
-            fmt::arg("noise", csm->p1Pack.noiseCount())
+            toasty::lang::arg("hard", csm->p1Pack.hardCount()),
+            toasty::lang::arg("soft", csm->p1Pack.softCount()),
+            toasty::lang::arg("release", csm->p1Pack.releaseCount()),
+            toasty::lang::arg("noise", csm->p1Pack.noiseCount())
         );
         ImGui::TextUnformatted(packStats.c_str());
         ImGui::PopStyleColor();
@@ -4259,10 +4035,10 @@ void MenuInterface::drawClicksTab() {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.65f, 1.0f));
             auto packStats = trFormat(
                 "Hard: {hard}  Soft: {soft}  Release: {release}  Noise: {noise}",
-                fmt::arg("hard", csm->p2Pack.hardCount()),
-                fmt::arg("soft", csm->p2Pack.softCount()),
-                fmt::arg("release", csm->p2Pack.releaseCount()),
-                fmt::arg("noise", csm->p2Pack.noiseCount())
+                toasty::lang::arg("hard", csm->p2Pack.hardCount()),
+                toasty::lang::arg("soft", csm->p2Pack.softCount()),
+                toasty::lang::arg("release", csm->p2Pack.releaseCount()),
+                toasty::lang::arg("noise", csm->p2Pack.noiseCount())
             );
             ImGui::TextUnformatted(packStats.c_str());
             ImGui::PopStyleColor();
@@ -4446,12 +4222,12 @@ void MenuInterface::drawSettingsTab() {
             chooseRecordingFormat(ReplayEngine::RecordingFormat::TTR3);
         }
         ImGui::SameLine(0, formatPillGap);
-        if (Widgets::PillButton("GDR2", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDR2, formatPillW, theme, anim)) {
-            chooseRecordingFormat(ReplayEngine::RecordingFormat::GDR2);
+        if (Widgets::PillButton("GDR Binary", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDRBinary, formatPillW, theme, anim)) {
+            chooseRecordingFormat(ReplayEngine::RecordingFormat::GDRBinary);
         }
         ImGui::SameLine(0, formatPillGap);
-        if (Widgets::PillButton("GDR", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDR, formatPillW, theme, anim)) {
-            chooseRecordingFormat(ReplayEngine::RecordingFormat::GDR);
+        if (Widgets::PillButton("GDR JSON", eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDRJson, formatPillW, theme, anim)) {
+            chooseRecordingFormat(ReplayEngine::RecordingFormat::GDRJson);
         }
         if (eng->engineMode != MODE_DISABLED) ImGui::EndDisabled();
 
@@ -4459,8 +4235,8 @@ void MenuInterface::drawSettingsTab() {
         char const* formatHint =
             eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::TTR3
                 ? "Native format (.ttr3). Lossless, supports all accuracy modes and persistence attempts."
-                : (eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDR2
-                    ? "Binary GDR (.gdr). Compatible with xdBot / MegaHack / Silicate."
+                : (eng->selectedRecordingFormat == ReplayEngine::RecordingFormat::GDRBinary
+                    ? "Binary GDR (.gdr). Compact legacy format."
                     : "JSON GDR (.gdr.json). Human-readable, larger file size.");
         imguiTextWrappedTr(formatHint);
         ImGui::PopStyleColor();
@@ -4861,7 +4637,7 @@ void MenuInterface::drawOnlineTab() {
             ImGui::PopStyleColor();
             if (fontHeading) ImGui::PopFont();
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            auto idText = trFormat("ID: {id}", fmt::arg("id", online->discordId));
+            auto idText = trFormat("ID: {id}", toasty::lang::arg("id", online->discordId));
             ImGui::TextUnformatted(idText.c_str());
             ImGui::PopStyleColor();
             auto blacklistText = online->getBlacklistStatusText();
@@ -4880,7 +4656,7 @@ void MenuInterface::drawOnlineTab() {
             ImGui::PopStyleColor();
             if (fontHeading) ImGui::PopFont();
             ImGui::PushStyleColor(ImGuiCol_Text, theme.textSecondary);
-            auto idText = trFormat("ID: {id}", fmt::arg("id", online->discordId));
+            auto idText = trFormat("ID: {id}", toasty::lang::arg("id", online->discordId));
             ImGui::TextUnformatted(idText.c_str());
             ImGui::PopStyleColor();
             auto blacklistText = online->getBlacklistStatusText();
@@ -5012,7 +4788,7 @@ void MenuInterface::drawOnlineTab() {
         if (!canUpload) ImGui::EndDisabled();
         if (selectedLegacyCBS) {
             ImGui::Dummy(ImVec2(0, 4));
-            auto legacyText = trString("Legacy CBS macros are playback only. Re-record in TTR2 CBS mode for exact timing.");
+            auto legacyText = trString("Legacy CBS macros are playback only. Re-record in TTR3 CBS mode for exact timing.");
             ImGui::TextWrapped("%s", legacyText.c_str());
         }
     }
@@ -5198,9 +4974,9 @@ void MenuInterface::saveSettings() {
     mod->setSavedValue("eng_completion_autosave", eng->completionAutosave);
     mod->setSavedValue("eng_persistence_mode", eng->persistenceMode);
 
-    mod->setSavedValue("render_width", (int64_t)std::atoi(renderWidthBuf));
-    mod->setSavedValue("render_height", (int64_t)std::atoi(renderHeightBuf));
-    mod->setSavedValue("render_fps", (int64_t)std::atoi(renderFpsBuf));
+    mod->setSavedValue("render_width", toasty::parseInteger<int64_t>(renderWidthBuf).value_or(0));
+    mod->setSavedValue("render_height", toasty::parseInteger<int64_t>(renderHeightBuf).value_or(0));
+    mod->setSavedValue("render_fps", toasty::parseInteger<int64_t>(renderFpsBuf).value_or(0));
     mod->setSavedValue("render_codec", std::string(renderCodecBuf));
     mod->setSavedValue("render_bitrate", std::string(renderBitrateBuf));
     mod->setSavedValue("render_file_extension", std::string(renderExtBuf));
@@ -6609,11 +6385,11 @@ void MenuInterface::loadSettings() {
     {
         int savedFormat = mod->getSavedValue<int>("eng_recording_format", static_cast<int>(ReplayEngine::RecordingFormat::TTR3));
         switch (savedFormat) {
-            case static_cast<int>(ReplayEngine::RecordingFormat::GDR2):
-                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::GDR2;
+            case static_cast<int>(ReplayEngine::RecordingFormat::GDRBinary):
+                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::GDRBinary;
                 break;
-            case static_cast<int>(ReplayEngine::RecordingFormat::GDR):
-                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::GDR;
+            case static_cast<int>(ReplayEngine::RecordingFormat::GDRJson):
+                eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::GDRJson;
                 break;
             default:
                 eng->selectedRecordingFormat = ReplayEngine::RecordingFormat::TTR3;

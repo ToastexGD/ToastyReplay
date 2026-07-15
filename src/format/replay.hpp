@@ -5,6 +5,7 @@
 #include "utils.hpp"
 
 #include <Geode/Geode.hpp>
+#include <Geode/utils/file.hpp>
 #include <gdr/gdr.hpp>
 
 #include <algorithm>
@@ -125,24 +126,24 @@ namespace ReplayStorage {
 
         auto size = std::filesystem::file_size(path, ec);
         if (ec) {
-            log::warn("[TR-FMT][W003] failed to inspect replay file {}: {}", toasty::pathToUtf8(path), ec.message());
+            log::warn("Could not inspect replay file '{}': {}", toasty::pathToUtf8(path), ec.message());
             return std::nullopt;
         }
         if (size > kMaxReplayFileSize) {
-            log::warn("[TR-FMT][W004] replay file exceeds max size cap ({} bytes): {}", size, toasty::pathToUtf8(path));
+            log::warn("Replay file '{}' exceeds the {} byte size limit", toasty::pathToUtf8(path), kMaxReplayFileSize);
             return std::nullopt;
         }
 
         auto maxSize = static_cast<uintmax_t>(std::numeric_limits<size_t>::max());
         auto maxStreamSize = static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max());
         if (size > maxSize || size > maxStreamSize) {
-            log::warn("[TR-FMT][W005] replay file too large for platform streams: {}", toasty::pathToUtf8(path));
+            log::warn("Replay file '{}' is too large for this platform", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
         std::ifstream input(path, std::ios::binary);
         if (!input.is_open()) {
-            log::error("[TR-FMT][E001] failed to open replay file for read: {}", toasty::pathToUtf8(path));
+            log::error("Could not open replay file '{}'", toasty::pathToUtf8(path));
             return std::nullopt;
         }
 
@@ -151,8 +152,8 @@ namespace ReplayStorage {
             auto streamSize = static_cast<std::streamsize>(size);
             input.read(reinterpret_cast<char*>(bytes.data()), streamSize);
             if (!input || input.gcount() != streamSize) {
-                log::error("[TR-FMT][E007] short read on replay file (got {} of {} bytes): {}",
-                    input.gcount(), streamSize, toasty::pathToUtf8(path));
+                log::error("Could not read replay file '{}': read {} of {} bytes",
+                    toasty::pathToUtf8(path), input.gcount(), streamSize);
                 return std::nullopt;
             }
         }
@@ -424,7 +425,96 @@ public:
     bool hasPlatformerModeMetadata = false;
 
     MacroSequence()
-        : Replay("ToastyReplay PRO", MOD_VERSION) {}
+        : Replay("ToastyReplay", MOD_VERSION) {}
+
+    static std::optional<MacroSequence> tryImportData(std::vector<uint8_t> const& data, bool importInputs = true) {
+        auto replayJson = gdr::json::from_msgpack(data, true, false);
+        if (replayJson.is_discarded()) {
+            replayJson = gdr::json::parse(data, nullptr, false);
+        }
+
+        auto const* root = ReplayJson::asObject(replayJson);
+        if (!root) {
+            return std::nullopt;
+        }
+
+        auto const* bot = ReplayJson::getObject(*root, "bot");
+        auto const* level = ReplayJson::getObject(*root, "level");
+        if (!bot || !level) {
+            return std::nullopt;
+        }
+
+        auto gameVersion = ReplayJson::getFloat<float>(*root, "gameVersion");
+        auto description = ReplayJson::getString(*root, "description");
+        auto version = ReplayJson::getFloat<float>(*root, "version");
+        auto duration = ReplayJson::getFloat<float>(*root, "duration");
+        auto botName = ReplayJson::getString(*bot, "name");
+        auto botVersion = ReplayJson::getString(*bot, "version");
+        auto levelId = ReplayJson::getInteger<uint32_t>(*level, "id");
+        auto levelName = ReplayJson::getString(*level, "name");
+        auto author = ReplayJson::getString(*root, "author");
+        auto seed = ReplayJson::getInteger<int>(*root, "seed");
+        auto coins = ReplayJson::getInteger<int>(*root, "coins");
+        auto ldm = ReplayJson::getBool(*root, "ldm");
+
+        if (!gameVersion || !description || !version || !duration || !botName || !botVersion
+            || !levelId || !levelName || !author || !seed || !coins || !ldm) {
+            return std::nullopt;
+        }
+
+        MacroSequence replay;
+        replay.gameVersion = *gameVersion;
+        replay.description = std::move(*description);
+        replay.version = *version;
+        replay.duration = *duration;
+        replay.botInfo.name = std::move(*botName);
+        replay.botInfo.version = std::move(*botVersion);
+        replay.levelInfo.id = *levelId;
+        replay.levelInfo.name = std::move(*levelName);
+        replay.author = std::move(*author);
+        replay.seed = *seed;
+        replay.coins = *coins;
+        replay.ldm = *ldm;
+
+        if (auto framerate = ReplayJson::getFloat<float>(*root, "framerate")) {
+            if (!std::isfinite(*framerate) || *framerate <= 0.0f) {
+                return std::nullopt;
+            }
+            replay.framerate = *framerate;
+        }
+        replay.parseExtension(*root);
+
+        if (!importInputs) {
+            return replay;
+        }
+
+        auto const* inputs = ReplayJson::getArray(*root, "inputs");
+        if (!inputs) {
+            return std::nullopt;
+        }
+
+        replay.inputs.reserve(inputs->size());
+        for (auto const& inputJson : *inputs) {
+            auto const* inputObject = ReplayJson::asObject(inputJson);
+            if (!inputObject) {
+                return std::nullopt;
+            }
+
+            auto frame = ReplayJson::getInteger<uint32_t>(*inputObject, "frame");
+            auto button = ReplayJson::getInteger<int>(*inputObject, "btn");
+            auto player2 = ReplayJson::getBool(*inputObject, "2p");
+            auto down = ReplayJson::getBool(*inputObject, "down");
+            if (!frame || !button || *button < 1 || *button > 3 || !player2 || !down) {
+                return std::nullopt;
+            }
+
+            MacroAction input(*frame, *button, *player2, *down);
+            input.parseExtension(*inputObject);
+            replay.inputs.push_back(std::move(input));
+        }
+
+        return replay;
+    }
 
     void parseExtension(gdr::json::object_t obj) override {
         if (auto mode = ReplayJson::getInteger<int>(obj, "accuracy_mode")) {
@@ -495,35 +585,57 @@ public:
         return ext;
     }
 
-    void persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240, bool useJson = false) {
-        author = GJAccountManager::get()->m_username;
-        duration = inputs.empty() ? 0.0 : static_cast<double>(inputs.back().frame) / framerate;
-        accuracyMode = writableAccuracyMode(mode);
-        hasPlatformerModeMetadata = true;
-        savedAnchorInterval = std::max(1, anchorInterval);
-        if (!usesTimedAccuracy(accuracyMode)) {
-            for (auto& input : inputs) {
+    bool persist(AccuracyMode mode = AccuracyMode::Vanilla, int anchorInterval = 240, bool useJson = false) {
+        MacroSequence pending = *this;
+        pending.author = GJAccountManager::get()->m_username;
+        if (!std::isfinite(pending.framerate) || pending.framerate <= 0.0f) {
+            pending.framerate = 240.0f;
+        }
+        pending.duration = pending.inputs.empty()
+            ? 0.0
+            : static_cast<double>(pending.inputs.back().frame) / pending.framerate;
+        pending.accuracyMode = writableAccuracyMode(mode);
+        pending.hasPlatformerModeMetadata = true;
+        pending.savedAnchorInterval = std::max(1, anchorInterval);
+        if (!usesTimedAccuracy(pending.accuracyMode)) {
+            for (auto& input : pending.inputs) {
                 input.stepOffset = 0.0f;
                 input.timeSeconds = -1.0;
                 input.swiftPairAnchor = false;
             }
-            anchors.clear();
+            pending.anchors.clear();
         }
 
         auto dir = ReplayStorage::getReplayDirectoryPath();
-        if (!std::filesystem::exists(dir)) {
-            std::filesystem::create_directory(dir);
+        std::error_code ec;
+        if (!std::filesystem::exists(dir, ec)) {
+            std::filesystem::create_directories(dir, ec);
+        }
+        if (ec) {
+            log::error("Could not prepare replay directory '{}': {}",
+                toasty::pathToUtf8(dir), ec.message());
+            return false;
         }
 
-        name = ReplayStorage::makeUniqueReplayName(name, persistedName);
-        persistedName = name;
+        pending.name = ReplayStorage::makeUniqueReplayName(pending.name, pending.persistedName);
+        pending.persistedName = pending.name;
 
         std::string const extension = useJson ? ".gdr.json" : ".gdr";
-        std::ofstream output(dir / (name + extension), std::ios::binary);
-        auto bytes = exportData(useJson);
-        output.write(reinterpret_cast<char const*>(bytes.data()), bytes.size());
-        output.close();
-        log::info("[TR-FMT][I001] saved legacy GDR replay: {}", toasty::pathToUtf8(dir / (name + extension)));
+        auto outputPath = dir / (pending.name + extension);
+        auto bytes = pending.exportData(useJson);
+        if (bytes.empty()) {
+            log::error("Could not serialize replay '{}'", toasty::pathToUtf8(outputPath));
+            return false;
+        }
+        auto writeResult = utils::file::writeBinarySafe(outputPath, bytes);
+        if (!writeResult) {
+            log::error("Could not write replay file '{}': {}",
+                toasty::pathToUtf8(outputPath), writeResult.unwrapErr());
+            return false;
+        }
+        *this = std::move(pending);
+        log::debug("Saved legacy GDR replay '{}'", toasty::pathToUtf8(outputPath));
+        return true;
     }
 
     static MacroSequence* loadFromDisk(std::string const& filename) {
@@ -555,7 +667,7 @@ public:
             return result;
         }
 
-        log::error("[TR-FMT][E003] GDR import returned no payload (corrupt or unsupported): {}",
+        log::error("Could not import GDR replay '{}': the file is corrupt or unsupported",
             toasty::pathToUtf8(path));
 
         return nullptr;
