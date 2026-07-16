@@ -251,6 +251,7 @@ struct PredictionWatchKey {
 
 struct PredictionContext {
     PlayerObject* previewPlayers[2] = { nullptr, nullptr };
+    HardStreak* expectedStreak[2] = { nullptr, nullptr };
     bool activeSimulation = false;
     bool traceCancelled = false;
     bool holdingTrace = false;
