@@ -823,6 +823,7 @@ void TrajectoryPredictionService::attach(GJBaseGameLayer* playLayer) {
         previewPlayer->retain();
         playLayer->m_objectLayer->addChild(previewPlayer);
         m_context.previewPlayers[playerIndex] = previewPlayer;
+        m_context.expectedStreak[playerIndex] = previewPlayer->m_waveTrail;
         resetPreviewStreak(previewPlayer);
     }
 
@@ -842,13 +843,13 @@ void TrajectoryPredictionService::attach(GJBaseGameLayer* playLayer) {
 }
 
 void TrajectoryPredictionService::detach() {
-    for (auto*& previewPlayer : m_context.previewPlayers) {
-        resetPreviewStreak(previewPlayer);
+    for (int i = 0; i < 2; ++i) {
+        auto* previewPlayer = m_context.previewPlayers[i];
+        m_context.previewPlayers[i] = nullptr;
+        m_context.expectedStreak[i] = nullptr;
         if (previewPlayer) {
-            auto* ownedPreviewPlayer = previewPlayer;
-            previewPlayer = nullptr;
-            ownedPreviewPlayer->removeFromParent();
-            ownedPreviewPlayer->release();
+            previewPlayer->removeFromParent();
+            previewPlayer->release();
         }
     }
     m_context.activeSimulation = false;
@@ -879,8 +880,8 @@ bool TrajectoryPredictionService::ownsPreviewStreak(HardStreak* streak) const {
         return false;
     }
 
-    for (auto* player : m_context.previewPlayers) {
-        if (player && player->m_waveTrail == streak) {
+    for (int i = 0; i < 2; ++i) {
+        if (m_context.expectedStreak[i] == streak) {
             return true;
         }
     }
@@ -889,7 +890,22 @@ bool TrajectoryPredictionService::ownsPreviewStreak(HardStreak* streak) const {
 }
 
 void TrajectoryPredictionService::resetPreviewStreak(PlayerObject* player) {
-    if (!ownsPreviewPlayer(player) || !player->m_waveTrail) {
+    if (!ownsPreviewPlayer(player)) {
+        return;
+    }
+
+    int idx = (player == m_context.previewPlayers[0]) ? 0 : 1;
+
+    if (!player->m_waveTrail || player->m_waveTrail != m_context.expectedStreak[idx]) {
+        auto* newStreak = HardStreak::create();
+        if (newStreak) {
+            newStreak->setVisible(false);
+            newStreak->setOpacity(0);
+            newStreak->m_drawStreak = false;
+            player->addChild(newStreak);
+            player->m_waveTrail = newStreak;
+            m_context.expectedStreak[idx] = newStreak;
+        }
         return;
     }
 
