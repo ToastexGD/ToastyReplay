@@ -8,6 +8,7 @@
 
 using namespace geode::prelude;
 
+#ifdef GEODE_IS_ANDROID
 namespace {
 
 constexpr const char* kSavedX = "mobile_float_x";
@@ -118,7 +119,6 @@ class $modify(MobileFloatPlayLayer, PlayLayer) {
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) {
             return false;
         }
-#ifdef GEODE_IS_ANDROID
         if (toasty::frontend::isCocos() && !this->getChildByID("cocos-mobile-float"_spr)) {
             if (auto* button = MobileFloatButton::create()) {
                 button->setID("cocos-mobile-float"_spr);
@@ -126,7 +126,7 @@ class $modify(MobileFloatPlayLayer, PlayLayer) {
                 this->addChild(button);
             }
         }
-#endif
         return true;
     }
 };
+#endif
