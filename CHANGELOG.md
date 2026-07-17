@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.2.3
+
+- Fixed the Android floating menu button adding an unnecessary gameplay hook on Windows and macOS.
+
 ## v2.2.2
 
 - Fixed TTR3 start position recordings losing anchor and checkpoint data after saving.
