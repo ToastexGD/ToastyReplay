@@ -4,6 +4,7 @@
 
 #include "gui/cocos/tr_frame_editor_popup.hpp"
 #include "conversion/gdr_upgrade.hpp"
+#include "conversion/ttr_upgrade.hpp"
 #include "ToastyReplay.hpp"
 #include "utils.hpp"
 #include "lang/localization.hpp"
@@ -28,11 +29,18 @@ namespace {
         return std::string(toasty::lang::tr(text));
     }
 
-    std::filesystem::path legacyGDRPath(std::string const& name) {
+    std::filesystem::path conversionSourcePath(std::string const& name, bool isTTR) {
         namespace fs = std::filesystem;
         auto directory = ReplayStorage::getReplayDirectoryPath();
+        std::string expected = name;
+        std::transform(expected.begin(), expected.end(), expected.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
         std::error_code ec;
-        for (auto const& extension : { ".gdr", ".gdr.json" }) {
+        auto extensions = isTTR
+            ? std::initializer_list<char const*>{ ".ttr2", ".ttr" }
+            : std::initializer_list<char const*>{ ".gdr", ".gdr.json" };
+        for (auto const& extension : extensions) {
             auto path = directory / (name + extension);
             if (fs::is_regular_file(path, ec) && !ec) {
                 return path;
@@ -47,11 +55,10 @@ namespace {
             std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) {
                 return static_cast<char>(std::tolower(ch));
             });
-            std::string expected = name;
-            std::transform(expected.begin(), expected.end(), expected.begin(), [](unsigned char ch) {
-                return static_cast<char>(std::tolower(ch));
-            });
-            if (lower == expected + ".gdr" || lower == expected + ".gdr.json") {
+            bool matches = isTTR
+                ? (lower == expected + ".ttr2" || lower == expected + ".ttr")
+                : (lower == expected + ".gdr" || lower == expected + ".gdr.json");
+            if (matches) {
                 return it->path();
             }
         }
@@ -115,7 +122,11 @@ bool TRReplayActionsPopup::init() {
     };
 
     addAction("Edit", "GJ_button_04.png", [this]() { this->doEdit(); });
-    if (!m_isTTR) {
+    auto* engine = ReplayEngine::get();
+    bool isTTR3 = engine && engine->ttr3Macros.count(m_name) > 0;
+    bool isLegacyCBS = engine && engine->legacyCbsMacros.count(m_name) > 0 &&
+        engine->ttr2Macros.count(m_name) == 0 && engine->ttr3Macros.count(m_name) == 0;
+    if (!isTTR3 && !isLegacyCBS) {
         addAction("Convert to TTR3", "GJ_button_03.png", [this]() { this->doConvert(); });
     }
     addAction("Upload", "GJ_button_02.png", [this]() {
@@ -213,7 +224,7 @@ void TRReplayActionsPopup::doConvert() {
     }
 
     auto directory = ReplayStorage::getReplayDirectoryPath();
-    auto sourcePath = legacyGDRPath(m_name);
+    auto sourcePath = conversionSourcePath(m_name, m_isTTR);
     std::error_code ec;
     if (!std::filesystem::is_regular_file(sourcePath, ec) || ec) {
         Notification::create("Replay file not found", NotificationIcon::Error, 1.0f)->show();
@@ -223,11 +234,18 @@ void TRReplayActionsPopup::doConvert() {
     std::string author = GJAccountManager::get() ? GJAccountManager::get()->m_username : "";
     m_converting = true;
     m_conversionTask.spawn(
-        "Upgrade legacy GDR to TTR3",
-        [sourcePath, author = std::move(author), directory]() mutable
+        "Upgrade replay to TTR3",
+        [sourcePath, author = std::move(author), directory, sourceIsTTR = m_isTTR]() mutable
             -> arc::Future<geode::Result<toasty::conversion::ReplayImportResult>> {
             co_return co_await geode::async::runtime().spawnBlocking<geode::Result<toasty::conversion::ReplayImportResult>>(
-                [sourcePath, author = std::move(author), directory]() mutable {
+                [sourcePath, author = std::move(author), directory, sourceIsTTR]() mutable {
+                    if (sourceIsTTR) {
+                        return toasty::ttr_upgrade::upgradeLegacyTTRToTTR3(
+                            sourcePath,
+                            std::move(author),
+                            directory
+                        );
+                    }
                     return toasty::gdr_upgrade::upgradeLegacyGDRToTTR3(
                         sourcePath,
                         std::move(author),

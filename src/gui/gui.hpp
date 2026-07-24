@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "conversion/gdr_upgrade.hpp"
+#include "conversion/ttr_upgrade.hpp"
 #include "gui/frame_editor.hpp"
 #include "render/render_preset.hpp"
 #include "render/render_config.hpp"
@@ -211,6 +212,7 @@ private:
     bool replayActionPopupRequested = false;
     std::string replayActionMacroName;
     bool replayActionIsTTR = false;
+    bool replayActionIsTTR3 = false;
     bool replayActionIsLegacyCBS = false;
     bool replayActionCanEdit = true;
     bool replayLoadPending = false;

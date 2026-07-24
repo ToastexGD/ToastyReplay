@@ -762,6 +762,7 @@ std::vector<uint8_t> serialize(Macro const& macro, WriteOptions options) {
     writeLE<int64_t>(output, macro.recordTimestamp);
     writeLE<uint32_t>(output, macro.rngSeed);
     writeLE<uint8_t>(output, static_cast<uint8_t>(sanitizeAccuracyMode(static_cast<int>(macro.accuracyMode))));
+    writeLE<double>(output, macro.duration);
 
     if (output.size() > std::numeric_limits<uint32_t>::max()) {
         return {};
@@ -868,6 +869,12 @@ std::optional<Macro> deserialize(std::vector<uint8_t> const& data, std::string* 
         macro.accuracyMode = sanitizeAccuracyMode(static_cast<int>(modeByte));
     } else {
         macro.accuracyMode = AccuracyMode::Vanilla;
+    }
+    if (metadataCtx.remaining() >= sizeof(double)) {
+        macro.duration = readLE<double>(metadataCtx);
+        if (!validTime(macro.duration)) return fail("invalid TTR3 duration");
+    } else if (metadataCtx.remaining() != 0) {
+        return fail("invalid TTR3 metadata");
     }
 
     ReadContext tableCtx { data, headerLen };

@@ -8,7 +8,7 @@ Frame-accurate recording, playback, editing, conversion, and rendering for Geome
 
 [![Geode](https://img.shields.io/badge/Geode-v5.8.1-blue?style=flat-square)](https://geode-sdk.org)
 [![Geometry Dash](https://img.shields.io/badge/Geometry%20Dash-2.2081-green?style=flat-square)](https://store.steampowered.com/app/322170/Geometry_Dash/)
-[![Version](https://img.shields.io/badge/version-v2.2.2-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
+[![Version](https://img.shields.io/badge/version-v2.2.4-orange?style=flat-square)](https://github.com/ToastexGD/ToastyReplay/releases)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/JWkVm7cUhH)
 
 [Website](https://toastyreplay.xyz/) | [Buy Pro](https://toastyreplay.xyz/) | [Ko-fi](https://ko-fi.com/toastexgd) | [Report an issue](https://github.com/ToastexGD/ToastyReplay/issues)
@@ -20,6 +20,11 @@ Frame-accurate recording, playback, editing, conversion, and rendering for Geome
 ToastyReplay is a replay bot for Geometry Dash. It records and plays Vanilla and CBS macros, supports classic and platformer levels, handles both players, and includes macro conversion, editing, click sounds, rendering, and practice tools.
 
 Version 2.2.0 is a major rebuild. TTR3 is now the default recording format, the menu can use either ImGui or native Cocos2d controls, conversion is stricter, and the renderer is available as an optional beta.
+
+## What is new in v2.2.4
+
+- TTR and TTR2 macros can be upgraded from either menu style.
+- TTR2 upgrades preserve exact input timing, anchors, checkpoints, persistence attempts, replay metadata, and duration.
 
 ## What is new in v2.2.0
 
@@ -47,7 +52,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for the complete release notes.
 
 ## Legacy replay support
 
-ToastyReplay loads TTR, TTR2, TTR3, GDR, and GDR JSON replays. Vanilla GDR replays can be copied into TTR3 without changing the original file. Timed legacy GDR replays remain playback-only because exact conversion has not been verified. TCBot `.tcm` versions 1 and 2 can be imported to TTR3. Unknown TCM versions and malformed records are rejected instead of guessed.
+ToastyReplay loads TTR, TTR2, TTR3, GDR, and GDR JSON replays. TTR and TTR2 upgrades preserve input timing, anchors, checkpoints, persistence attempts, replay metadata, and duration. Vanilla GDR replays can be copied into TTR3 without changing the original file. Timed legacy GDR replays remain playback-only because exact conversion has not been verified. TCBot `.tcm` versions 1 and 2 can be imported to TTR3. Unknown TCM versions and malformed records are rejected instead of guessed.
 
 ## Rendering and click sounds
 

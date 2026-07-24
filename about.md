@@ -4,6 +4,11 @@ Frame-perfect recording, playback, editing, conversion, and rendering for Geomet
 
 ToastyReplay Free includes Vanilla and CBS recording and playback, TTR3 recording, classic and platformer support, two-player macros, macro conversion, click sounds, gameplay tools, and an optional beta renderer.
 
+## New in v2.2.4
+
+- Fixed the missing TTR and TTR2 upgrade action in both menu styles.
+- TTR2 upgrades now preserve exact input timing, anchors, checkpoints, persistence attempts, replay metadata, and duration.
+
 ## New in v2.2.0
 
 - TTR3 is now the default recording format.

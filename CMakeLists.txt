@@ -5,7 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(ToastyReplay VERSION 2.2.2 LANGUAGES CXX)
+project(ToastyReplay VERSION 2.2.4 LANGUAGES CXX)
 
 include(CTest)
 
@@ -13,6 +13,8 @@ set(TOASTYREPLAY_SOURCES
     src/format/ttr_format.cpp
     src/format/ttr3_format.cpp
     src/conversion/gdr_upgrade.cpp
+    src/conversion/ttr_upgrade.cpp
+    src/conversion/ttr_upgrade_file.cpp
     src/conversion/tcbot_format.cpp
     src/conversion/tcbot_import.cpp
     src/core/checkpoint_handler.cpp
@@ -143,6 +145,24 @@ endif()
 target_link_libraries(toastyreplay_gdr_import_tests PRIVATE GeodeBindings libGDR)
 add_test(NAME toastyreplay_gdr_import_tests COMMAND toastyreplay_gdr_import_tests)
 
+add_executable(toastyreplay_ttr_upgrade_tests
+    src/conversion/ttr_upgrade.cpp
+    src/format/ttr3_format.cpp
+    tests/ttr_upgrade_tests.cpp
+)
+target_include_directories(toastyreplay_ttr_upgrade_tests PRIVATE src)
+target_compile_features(toastyreplay_ttr_upgrade_tests PRIVATE cxx_std_23)
+target_compile_definitions(toastyreplay_ttr_upgrade_tests PRIVATE MOD_VERSION="${CMAKE_PROJECT_VERSION}")
+if (MSVC)
+    target_compile_definitions(toastyreplay_ttr_upgrade_tests PRIVATE _HAS_ITERATOR_DEBUGGING=0)
+endif()
+target_link_libraries(toastyreplay_ttr_upgrade_tests PRIVATE GeodeBindings libGDR)
+if (TARGET zlibstatic)
+    target_include_directories(toastyreplay_ttr_upgrade_tests PRIVATE ${ZLIB_SOURCE_DIR} ${ZLIB_BINARY_DIR})
+    target_link_libraries(toastyreplay_ttr_upgrade_tests PRIVATE zlibstatic)
+endif()
+add_test(NAME toastyreplay_ttr_upgrade_tests COMMAND toastyreplay_ttr_upgrade_tests)
+
 add_executable(toastyreplay_tcbot_format_tests
     src/conversion/tcbot_format.cpp
     tests/tcbot_format_tests.cpp
@@ -158,6 +178,7 @@ add_test(NAME toastyreplay_tcbot_format_tests COMMAND toastyreplay_tcbot_format_
 set(TOASTYREPLAY_TEST_TARGETS
     toastyreplay_vanilla_conversion_tests
     toastyreplay_gdr_import_tests
+    toastyreplay_ttr_upgrade_tests
     toastyreplay_tcbot_format_tests
 )
 foreach(test_target IN LISTS TOASTYREPLAY_TEST_TARGETS)

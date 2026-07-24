@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.2.4
+
+- Fixed TTR and TTR2 macros missing the Convert to TTR3 action.
+- Fixed TTR2 upgrades losing exact input timing, anchors, checkpoints, persistence attempts, or replay metadata.
+- Updated TTR3 saves to preserve replay duration while remaining compatible with existing TTR3 files.
+
 ## v2.2.3
 
 - Fixed the Android floating menu button adding an unnecessary gameplay hook on Windows and macOS.

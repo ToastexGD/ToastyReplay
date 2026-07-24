@@ -2019,6 +2019,7 @@ void MenuInterface::drawReplayTab() {
             replayLoadPending = false;
             replayActionMacroName = macroName;
             replayActionIsTTR = isTTR;
+            replayActionIsTTR3 = isTTR3;
             replayActionIsLegacyCBS = isLegacyCBS;
             replayActionCanEdit = !isCBS;
             replayActionPopupRequested = true;
@@ -2225,7 +2226,7 @@ void MenuInterface::drawReplayTab() {
 
         ImGui::Dummy(ImVec2(0, 6));
 
-        if (!replayActionIsTTR) {
+        if (!replayActionIsTTR3) {
             bool canStartConversion = !replayConvertRunning && !replayActionIsLegacyCBS;
             if (!canStartConversion) {
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f);
@@ -2248,8 +2249,14 @@ void MenuInterface::drawReplayTab() {
             }
             if (convertClicked && canStartConversion) {
                 auto macroName = replayActionMacroName;
-                auto startConversion = [this, macroName]() {
-                    auto sourcePath = findStoredReplayFile(macroName, ".gdr");
+                bool sourceIsTTR = replayActionIsTTR;
+                auto startConversion = [this, macroName, sourceIsTTR]() {
+                    auto sourcePath = sourceIsTTR
+                        ? findStoredReplayFile(macroName, ".ttr2")
+                        : findStoredReplayFile(macroName, ".gdr");
+                    if (sourcePath.empty() && sourceIsTTR) {
+                        sourcePath = findStoredReplayFile(macroName, ".ttr");
+                    }
                     if (sourcePath.empty()) {
                         replayConvertRunning = false;
                         replayConvertStatusOk = false;
@@ -2265,11 +2272,18 @@ void MenuInterface::drawReplayTab() {
                     replayConvertStatus = trString("Converting...");
                     replayConvertShowStandaloneStatus = true;
                     replayConvertTask.spawn(
-                        "Upgrade legacy GDR to TTR3",
-                        [sourcePath, author = std::move(author), outputDirectory]() mutable
+                        "Upgrade replay to TTR3",
+                        [sourcePath, author = std::move(author), outputDirectory, sourceIsTTR]() mutable
                             -> arc::Future<Result<toasty::conversion::ReplayImportResult>> {
                             co_return co_await async::runtime().spawnBlocking<Result<toasty::conversion::ReplayImportResult>>(
-                                [sourcePath, author = std::move(author), outputDirectory]() mutable {
+                                [sourcePath, author = std::move(author), outputDirectory, sourceIsTTR]() mutable {
+                                    if (sourceIsTTR) {
+                                        return toasty::ttr_upgrade::upgradeLegacyTTRToTTR3(
+                                            sourcePath,
+                                            std::move(author),
+                                            outputDirectory
+                                        );
+                                    }
                                     return toasty::gdr_upgrade::upgradeLegacyGDRToTTR3(
                                         sourcePath,
                                         std::move(author),
