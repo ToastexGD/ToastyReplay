@@ -1537,44 +1537,46 @@ void Renderer::start(const RenderConfig& config) {
             return q;
         };
 
-        if (isGpuCodec) {
-            if (!testCodec(ffmpegPath, gpuCodec, withTuning(*m_resolvedParams))) {
-                if (!m_resolvedParams->tuning.empty()
-                    && testCodec(ffmpegPath, gpuCodec, buildQualitySection(*m_resolvedParams))) {
-                    m_resolvedParams->tuning.clear();
-                    Loader::get()->queueInMainThread([] {
-                        Notification::create(trString("Encoder tuning unsupported - using standard GPU settings"), NotificationIcon::Warning)->show();
-                    });
-                } else {
-                    RenderConfig cpuCfg = config;
-                    cpuCfg.useGpu = false;
-                    cpuCfg.gpuEncoder.clear();
-                    m_resolvedParams = resolve(cpuCfg);
-                    const std::string cpuCodec = m_resolvedParams->codec;
-                    if (!testCodec(ffmpegPath, cpuCodec, withTuning(*m_resolvedParams))) {
-                        m_resolvedParams.reset();
-                        Loader::get()->queueInMainThread([cpuCodec] {
-                            auto title = trString("Error");
-                            auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", cpuCodec);
-                            auto ok = trString("Ok");
-                            FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
-                        });
-                        return;
-                    }
-                    Loader::get()->queueInMainThread([gpuCodec, cpuCodec] {
-                        auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
-                        Notification::create(msg, NotificationIcon::Warning)->show();
-                    });
-                }
-            }
-        } else if (!testCodec(ffmpegPath, gpuCodec, withTuning(*m_resolvedParams))) {
-            m_resolvedParams.reset();
-            Loader::get()->queueInMainThread([gpuCodec] {
+        auto codecUsable = [&](std::string const& codecName) {
+            if (testCodec(ffmpegPath, codecName, withTuning(*m_resolvedParams))) return true;
+            if (m_resolvedParams->tuning.empty()) return false;
+            if (!testCodec(ffmpegPath, codecName, buildQualitySection(*m_resolvedParams))) return false;
+            m_resolvedParams->tuning.clear();
+            Loader::get()->queueInMainThread([] {
+                Notification::create(trString("Encoder tuning unsupported - using standard settings"), NotificationIcon::Warning)->show();
+            });
+            return true;
+        };
+
+        auto reportMissingCodec = [](std::string const& codecName) {
+            Loader::get()->queueInMainThread([codecName] {
                 auto title = trString("Error");
-                auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", gpuCodec);
+                auto msg = fmt::format("Codec <cl>{}</c> not available in your ffmpeg.exe. Use a full-featured build.", codecName);
                 auto ok = trString("Ok");
                 FLAlertLayer::create(title.c_str(), msg.c_str(), ok.c_str())->show();
             });
+        };
+
+        if (isGpuCodec) {
+            if (!codecUsable(gpuCodec)) {
+                RenderConfig cpuCfg = config;
+                cpuCfg.useGpu = false;
+                cpuCfg.gpuEncoder.clear();
+                m_resolvedParams = resolve(cpuCfg);
+                const std::string cpuCodec = m_resolvedParams->codec;
+                if (!codecUsable(cpuCodec)) {
+                    m_resolvedParams.reset();
+                    reportMissingCodec(cpuCodec);
+                    return;
+                }
+                Loader::get()->queueInMainThread([gpuCodec, cpuCodec] {
+                    auto msg = fmt::format("GPU encoder {} not supported, using {}", gpuCodec, cpuCodec);
+                    Notification::create(msg, NotificationIcon::Warning)->show();
+                });
+            }
+        } else if (!codecUsable(gpuCodec)) {
+            m_resolvedParams.reset();
+            reportMissingCodec(gpuCodec);
             return;
         }
     }
@@ -1816,15 +1818,6 @@ void Renderer::start() {
     bool fadeIn = pl->m_levelSettings->m_fadeIn;
     bool fadeOut = pl->m_levelSettings->m_fadeOut;
 
-    bool preferExe = false;
-#ifdef GEODE_IS_WINDOWS
-    preferExe = pathExists(ffmpegPath);
-#endif
-    bool willMixRawAudio = audioMode == AUDIO_SONG
-        && (!preferExe || includeClickSounds || musicVolume != 1.0f
-            || std::max(songOffset, 0.0f) > 0.0f || fadeIn || fadeOut
-            || isPersistenceRender(ReplayEngine::get()));
-    leadInFixEligible = !willMixRawAudio;
     int64_t bitrateApi = m_resolvedParams.has_value()
         ? m_resolvedParams->apiBitrate
         : geode::utils::numFromString<int64_t>(
@@ -2020,14 +2013,9 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
             process = Subprocess(command, stderrLogPath);
 #endif
         }
-        auto encodeWallStart = std::chrono::steady_clock::now();
-        int  framesEncoded = 0;
-        double waitSeconds = 0.0;
 
         while (recording || pause || frameCapture.hasPendingFrame()) {
-            auto waitStart = std::chrono::steady_clock::now();
             auto frame = frameCapture.takeFrame();
-            waitSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - waitStart).count();
             if (!frame.empty()) {
                 auto writeFrame = [&](std::vector<uint8_t> const& data) {
                     if (useApiForEncoding) {
@@ -2064,7 +2052,6 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                 };
                 if (!writeFrame(frame)) break;
                 frameCapture.releaseBuffer(std::move(frame));
-                ++framesEncoded;
             }
         }
 
@@ -2348,6 +2335,7 @@ void Renderer::runEncodeLoop(std::filesystem::path songFile, float songOffset, b
                     return;
                 }
                 audioInput = rawAudioPath;
+                audioOffset = static_cast<float>(leadInSeconds);
             } else {
                 audioInput = songFile;
                 audioOffset = nonNegativeSongOffset + static_cast<float>(leadInSeconds);
@@ -2498,9 +2486,7 @@ void Renderer::handleRecording(PlayLayer* pl, int frame) {
         if (!clockPrimed) {
 
             clockPrimed = true;
-            if (leadInFixEligible) {
-                leadInSeconds = renderTime;
-            }
+            leadInSeconds = renderTime;
             lastFrame_t = renderTime - s_renderClock.frameDelta;
             extra_t = 0.0;
         }

@@ -411,7 +411,7 @@ struct MacroAction : gdr::Input {
     }
 };
 
-class MacroSequence : public gdr::Replay<MacroSequence, MacroAction> {
+class MacroSequence final : public gdr::Replay<MacroSequence, MacroAction> {
 public:
     std::string name;
     std::string persistedName;

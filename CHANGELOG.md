@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.2.5
+
+- Auto Safe Mode can now be turned on without Safe Mode already being on.
+- Fixed rendered footage starting seconds ahead of the audio when click sounds, custom music volume, a song offset or fades were used.
+- Stopped reporting a working encoder as missing when only its tuning options were unsupported.
+
 ## v2.2.4
 
 - Fixed TTR and TTR2 macros missing the Convert to TTR3 action.

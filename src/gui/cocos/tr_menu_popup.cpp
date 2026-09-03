@@ -426,8 +426,9 @@ void TRMenuPopup::addHackSubOptions(CCNode* content, std::string const& id) {
     };
 
     if (id == "safe_mode") {
-        if (!engine->protectedMode) return;
-        addKeybind();
+        if (engine->protectedMode) {
+            addKeybind();
+        }
         addSub(content, ToggleCell::create("Auto Safe Mode", "Turn it on while recording or playing", engine->autoSafeMode, [](bool value) {
             ReplayEngine::get()->autoSafeMode = value;
             toasty::frontend::persistSettings();

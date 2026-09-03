@@ -2660,14 +2660,15 @@ void MenuInterface::drawHacksTab() {
     ReplayEngine* engine = ReplayEngine::get();
     ImGui::Dummy(ImVec2(0, 4));
 
-    if (Widgets::ModuleCardBegin("Safe Mode", "Prevents stats and percentage gain",
-        &engine->protectedMode, theme, anim, "bind_safe_mode")) {
-        Widgets::ToggleSwitch("Auto-Enable While Recording / Playing", &engine->autoSafeMode, theme, anim);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
-        ImGui::TextWrapped("Force Safe Mode on whenever a macro is recording or playing back, even if the toggle above is off.");
-        ImGui::PopStyleColor();
-        Widgets::ModuleCardEnd();
-    }
+    Widgets::ModuleCard("Safe Mode", "Prevents stats and percentage gain",
+        &engine->protectedMode, theme, anim, "bind_safe_mode");
+    ImGui::Indent(14);
+    Widgets::ToggleSwitch("Auto-Enable While Recording / Playing", &engine->autoSafeMode, theme, anim);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(theme.textSecondary));
+    ImGui::TextWrapped("Force Safe Mode on whenever a macro is recording or playing back, even if the toggle above is off.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Unindent(14);
 
     if (Widgets::ModuleCardBegin("Show Trajectory", "Display predicted player path",
         &engine->pathPreview, theme, anim, "bind_trajectory")) {

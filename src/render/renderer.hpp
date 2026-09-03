@@ -150,7 +150,6 @@ public:
     int cadenceLogFrames = 0;
     int lastProgressPercent = -1;
     bool clockPrimed = false;
-    bool leadInFixEligible = false;
     double leadInSeconds = 0.0;
 
     float stopAfter = 3.f;
